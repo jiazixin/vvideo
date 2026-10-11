@@ -1,0 +1,23 @@
+[Unit]
+Description=VVideo read-only media service
+After=network.target
+
+[Service]
+Type=simple
+User=vvideo
+Group=vvideo
+WorkingDirectory=/opt/vvideo
+Environment=CONFIG_FILE=/opt/vvideo/configs/config.local.yaml
+ExecStart=/opt/vvideo/vvideo
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/vvideo/data /opt/vvideo/.cache
+
+[Install]
+WantedBy=multi-user.target

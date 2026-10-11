@@ -1,0 +1,145 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "bfb7703302cbef1420af0246a31b3d8c",
+    "entities": [
+      {
+        "tableName": "bookmarks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`connection` TEXT NOT NULL, `directory` INTEGER NOT NULL, `library` TEXT NOT NULL, `sort` TEXT NOT NULL, `direction` TEXT NOT NULL, `anchor` TEXT NOT NULL, `neighbor` TEXT NOT NULL, `fallback` TEXT NOT NULL, `pixelOffset` INTEGER NOT NULL, `width` INTEGER NOT NULL, `revision` INTEGER NOT NULL, `savedAt` INTEGER NOT NULL, `formatVersion` INTEGER NOT NULL, `name` TEXT NOT NULL DEFAULT '', `pathLabel` TEXT NOT NULL DEFAULT '', `visitedAt` INTEGER NOT NULL DEFAULT 0, `hiddenFromRecent` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`connection`, `directory`))",
+        "fields": [
+          {
+            "fieldPath": "connection",
+            "columnName": "connection",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "directory",
+            "columnName": "directory",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "library",
+            "columnName": "library",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sort",
+            "columnName": "sort",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "direction",
+            "columnName": "direction",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "anchor",
+            "columnName": "anchor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "neighbor",
+            "columnName": "neighbor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fallback",
+            "columnName": "fallback",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pixelOffset",
+            "columnName": "pixelOffset",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "savedAt",
+            "columnName": "savedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "formatVersion",
+            "columnName": "formatVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "pathLabel",
+            "columnName": "pathLabel",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "visitedAt",
+            "columnName": "visitedAt",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hiddenFromRecent",
+            "columnName": "hiddenFromRecent",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "connection",
+            "directory"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_bookmarks_connection_hiddenFromRecent_visitedAt",
+            "unique": false,
+            "columnNames": [
+              "connection",
+              "hiddenFromRecent",
+              "visitedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookmarks_connection_hiddenFromRecent_visitedAt` ON `${TABLE_NAME}` (`connection`, `hiddenFromRecent`, `visitedAt`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bfb7703302cbef1420af0246a31b3d8c')"
+    ]
+  }
+}

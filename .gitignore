@@ -1,0 +1,26 @@
+# Private server configuration and credentials
+/configs/*.local.yaml
+/configs/*.local.yml
+.env
+.env.*
+!.env.example
+
+# Server runtime state and rebuildable caches
+/data/
+/.cache/
+
+# Generated verification output and temporary read-only reference project
+/test-results/
+/video-rename/
+
+# Local build tools, verification output and Android state
+.DS_Store
+/scripts/__pycache__/
+/android/.gradle/
+/android/.kotlin/
+/android/.idea/
+/android/local.properties
+/android/**/build/
+/android/*.iml
+*.apk
+*.aab

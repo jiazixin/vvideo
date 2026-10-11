@@ -1,0 +1,26 @@
+# 服务端配置示例；已实现严格加载器。相对路径以本文件所在目录为基准。
+server:
+  listen: "0.0.0.0:8080"
+
+auth:
+  token: ""                     # 必填；也可用 VVIDEO_AUTH__TOKEN 注入
+
+storage: "../data/data.sqlite"   # SQLite 文件；默认文件名 data.sqlite，放本机磁盘
+
+media:
+  - path: "/mnt/media"
+
+ignore:
+  - path: "/mnt/media/@eaDir"
+  - path: "/mnt/media/#recycle"
+
+scan:
+  cron: "*/30 * * * *"           # 五段式：分 时 日 月 周；按服务端时区，每小时 00/30 分
+  parallel: 2                   # 全局文件属性读取并发，不是整个进程的系统线程上限
+
+cache:
+  path: "../.cache/thumbnails"   # 服务端缩略图目录，与安卓媒体缓存分开
+  max_size: "30GB"              # 服务端缩略图缓存上限，按可用磁盘空间调整
+  parallel: 2                   # 同时运行的抽帧任务数，包含前台和后台任务
+  threads: 2                    # 单个抽帧任务的解码线程数，不是进程总线程上限
+  percent: 10                   # 在视频时长的 10% 位置生成唯一一张封面
