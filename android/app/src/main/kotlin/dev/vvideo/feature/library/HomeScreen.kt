@@ -19,13 +19,19 @@ import dev.vvideo.ui.theme.LocalVV
 fun HomeScreen(state:LibraryUiState,onSettings:()->Unit,onOpen:(Long)->Unit,onRetry:()->Unit,onHideRecent:(Long)->Unit={},onConnection:()->Unit=onSettings) {
  val c=LocalVV.current
  var removed by remember{mutableStateOf<RecentFolder?>(null)}
+ val list=rememberLazyListState()
+ // A lazy list keeps its first visible key in place, so library rows arriving
+ // after the recent ones would land above an unscrolled viewport. The request
+ // is made before the changed rows are measured and holds for that pass only.
+ val shown=remember{object{var libraries=state.libraries}}
+ SideEffect{if(shown.libraries!=state.libraries){shown.libraries=state.libraries;if(!list.canScrollBackward)list.requestScrollToItem(0)}}
  removed?.let{recent->VVBottomSheet(recent.bookmark.name,{removed=null}){VVButton(stringResource(R.string.remove_from_recent),{onHideRecent(recent.bookmark.directory);removed=null},Modifier.fillMaxWidth().padding(horizontal=20.dp),kind=ButtonKind.Danger)}}
  Scaffold(containerColor=c.bgSurface,topBar={TopAppBar(expandedHeight=56.dp,title={Row(Modifier.clickable{if(state.errorStatus==401)onConnection() else onRetry()},verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
   if(state.busy)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=2.dp)
   Text(stringResource(when{state.busy&&state.libraries.isEmpty()->R.string.status_connecting;state.error&&state.errorStatus==401->R.string.status_bad_token;state.error&&state.errorStatus==0->R.string.status_waiting_network;else->R.string.home_title}),color=if(state.errorStatus==401)c.warn else c.textPrimary)
  }},actions={ActionIcon(R.drawable.ic_settings,R.string.settings,onSettings)},colors=TopAppBarDefaults.topAppBarColors(containerColor=c.bgSurface))}){padding->
   if(state.libraries.isEmpty()&&state.recent.isEmpty()&&!state.busy&&!state.error)EmptyState(stringResource(R.string.empty_roots),Modifier.padding(padding))
-  else LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+  else LazyColumn(Modifier.fillMaxSize().padding(padding),list) {
    items(state.libraries,key={it.id}){lib->
     LibraryRow(lib.id,lib.name,stringResource(if(lib.healthy)R.string.library_online else R.string.library_offline),pinned=true,healthy=lib.healthy,onClick={onOpen(lib.directoryId)})
    }

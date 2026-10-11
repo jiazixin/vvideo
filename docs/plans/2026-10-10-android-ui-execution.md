@@ -364,5 +364,34 @@ logcat 全程无 `FATAL EXCEPTION`。证据与脚本在被忽略的 `test-result
 - 保留页与恢复逻辑在 `LibraryViewModel` 内，工程没有协程测试依赖，JVM 测试只覆盖纯函数 `restoredPage` / `pendingDirectory`；其余靠上表的真机路径。
 - 仍未执行：冷启动“目标无法命名”分支、预测性返回手势、设备插桩测试、帧率/内存测量、真实 NAS / Wi-Fi。120 ms 仍是调优值。本次不涉及滚动路径，既有“流畅度未通过”结论不变。
 - 同目录刷新、排序、筛选在慢网络下仍没有进度提示（保留的产品取舍）。
-- 复测中发现一个既有问题，未在本次修改：冷启动停在首页时，“最近浏览”先渲染、媒体库行后插入到列表上方，首屏看不到媒体库行，需要下拉（`HomeScreen.kt` 自 HEAD 未变）。
+- 复测中发现一个既有问题，未在本次修改：冷启动停在首页时，“最近浏览”先渲染、媒体库行后插入到列表上方，首屏看不到媒体库行，需要下拉（`HomeScreen.kt` 自 HEAD 未变）。已在下一节“首页冷启动媒体库行”修复。
 - **OCR**：`ocr review` 仍为 5/5 文件 HTTP 401、退出码 1（输出在 `test-results/ocr/2026-10-11-overall-review.txt`）。按用户要求改用托管模式：`ocr delegate preview` 选出 8 个可审文件（3 个文档按扩展名、2 个测试按默认路径排除），`ocr delegate rule` 给出 Kotlin 系统规则，宿主代理逐文件审查，覆盖 8/8，无 critical / high / medium。保留的低级别项：组合期间修改普通持有对象（`shown`、`layers`、`ExitSnapshot`）依赖幂等；被打断的转场复用页面后，层级记账可能高于该页实际层级（推演的各路径顺序仍正确）；`PendingDirectory.kt` 的排版与同包紧凑风格不一致。审查者同时是合并与修复的实现者，不等同独立复审。
+
+## 首页冷启动媒体库行（2026-10-11）
+
+**问题**：冷启动停在首页（上次目录为 0）时，Room 中的“最近浏览”先于 `api.libraries()` 发布，带 key 的“最近浏览”标题成为首个可见项；媒体库行随后插入到它之前，`LazyColumn` 按首个可见 key 保持位置，媒体库行落在视口上方，需要下拉才能看到。
+
+**改动**（仅 `feature/library/HomeScreen.kt`，无新依赖）：首页列表改用显式 `rememberLazyListState()`；媒体库列表与上次组合不同时，如果列表仍在最顶端（`canScrollBackward` 为 false），在 `SideEffect` 中调用 `requestScrollToItem(0)`。该请求在本次组合应用后、变化后的行测量之前登记，只对下一次测量生效，因此没有“先错位再跳回”的一帧；用户已经滚动过的列表不处理，仍按首个可见 key 保持位置。
+
+**本机检查**（JDK 21，`./gradlew --offline :app:testDebugUnitTest :app:lintDebug :app:assembleProfile`，在 worktree `claude/competent-swartz-8858c9` 的 `android/` 下）：`BUILD SUCCESSFUL`；app JVM 27 项零失败零跳过；Lint 0 error / 41 warning，报告中没有 `HomeScreen.kt` 条目。前文记录的 66 warning 来自另一个检出，本次没有在同一检出上跑改动前的 Lint，所以不比较两个数字。profile 包 SHA-256 `02a6dc458e9fe7cd565bd6b80b91636b37c9136cc8e8b2a01446f6a03018ed63`，安装后从手机读回一致。
+
+**真机**（iQOO 12 Pro / V2329A、Android 15；本机合成服务经 ADB reverse；`uiautomator dump` 读取屏上文字；操作前确认没有其他 adb 客户端、应用上次安装时间不是近期，每次输入前检查前台为 VVideo；手机由用户解锁）。先用返回键回到首页使上次目录为 0，之后每轮 `am force-stop` 再 `am start`。
+
+| 场景 | 基线 `7d262566…` | 修复 `02a6dc45…` |
+| --- | --- | --- |
+| 直连冷启动 | 3/3 轮媒体库行在屏上（**未复现**） | 2/2 轮媒体库行在屏上 |
+| 经本机转发器对每个请求延迟 800 ms 后冷启动 | 3/3 轮首项为“最近浏览”标题（y=432），屏上没有 `media` /“在线”行，标题栏已是 `VVideo`（媒体库已返回） | 3/3 轮 `media` /“在线”行在最上方（y=444–597），“最近浏览”标题在其下（y=724） |
+| 延迟 4500 ms，媒体库返回前上滑“最近浏览” | 未测 | 上滑后 +2.2 s 截图标题栏仍为“连接中…”；媒体库返回后首项仍是 `large`（未被拉回顶部），屏上没有媒体库行；1 轮 |
+| 点媒体库行进入 `media` 再按返回（延迟 800 ms） | 未测 | 回到首页，`media` /“在线”行与“最近浏览”位置同冷启动；1 轮 |
+| 点标题栏重新连接（延迟 800 ms，列表在顶端） | 未测 | 重连后 `media` /“在线”行仍在最上方；1 轮 |
+
+logcat 最近 3000 行无 `FATAL EXCEPTION`。屏幕文字导出与截图在被忽略的 `test-results/home-top-2026-10-11/`；测完已恢复 `adb reverse tcp:19090 tcp:19092` 并停止转发器。手机上留下的是修复包 `02a6dc45…`。
+
+**限制与未验证**：
+
+- 该问题取决于时序：直连时基线 3 轮都没有复现，只有把服务端响应延迟后才稳定出现。上表的对照因此是“延迟 800 ms”条件下的对照，不代表真实 NAS / Wi-Fi 下的出现频率。
+- “已滚动不拉回”只做了 1 轮；截图取在上滑后的惯性阶段，与最终导出的行位置相差约 80 px，按惯性滚动解释，没有逐帧核对。延迟 6500 / 9000 ms 的两次尝试请求失败（“等待网络…”），不计入结果。
+- 没有逐帧录屏，“没有错位的一帧”来自 `SideEffect` 与测量的执行顺序，不是实测。
+- 用户只滚动了不足一行（首个可见项仍是媒体库行）时重新连接，媒体库行重新出现后可能在视口上方；按“已滚动不处理”的要求保留，未实测。
+- 没有新增自动化测试：改动只在 Composable 内，工程没有可在 JVM 上运行的 Compose 测试设施，本次也按要求把改动限制在 `HomeScreen.kt`。未运行 `connectedAndroidTest`、帧率或内存采集；改动不在滚动路径上，既有“流畅度未通过”结论不变。
+- **OCR**：按用户要求使用托管模式（`ocr review` 此前为 HTTP 401，本次未重试）。`ocr delegate preview` 工作区模式选出 1 个可审文件、0 个排除，`ocr delegate rule` 给出 Kotlin 系统规则，宿主代理审查 1/1，无 critical / high / medium。保留的低级别项：在 `SideEffect` 中修改普通持有对象 `shown`，与同包 `LibraryScreen.kt` 的做法一致；列表在顶端且媒体库变化时，`requestScrollToItem` 会取消正在进行的拖动。审查者同时是实现者，不等同独立复审。
