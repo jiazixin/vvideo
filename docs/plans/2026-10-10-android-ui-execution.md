@@ -395,3 +395,44 @@ logcat 最近 3000 行无 `FATAL EXCEPTION`。屏幕文字导出与截图在被�
 - 用户只滚动了不足一行（首个可见项仍是媒体库行）时重新连接，媒体库行重新出现后可能在视口上方；按“已滚动不处理”的要求保留，未实测。
 - 没有新增自动化测试：改动只在 Composable 内，工程没有可在 JVM 上运行的 Compose 测试设施，本次也按要求把改动限制在 `HomeScreen.kt`。未运行 `connectedAndroidTest`、帧率或内存采集；改动不在滚动路径上，既有“流畅度未通过”结论不变。
 - **OCR**：按用户要求使用托管模式（`ocr review` 此前为 HTTP 401，本次未重试）。`ocr delegate preview` 工作区模式选出 1 个可审文件、0 个排除，`ocr delegate rule` 给出 Kotlin 系统规则，宿主代理审查 1/1，无 critical / high / medium。保留的低级别项：在 `SideEffect` 中修改普通持有对象 `shown`，与同包 `LibraryScreen.kt` 的做法一致；列表在顶端且媒体库变化时，`requestScrollToItem` 会取消正在进行的拖动。审查者同时是实现者，不等同独立复审。
+
+## 查看器翻页：末尾视频与图片上下翻页（2026-10-11）
+
+**问题一（视频）**：直接点开目录里的最后一个视频（合成库 `media` 的 `nile-falls.webm`）后无法上下滑动；从它前一个视频进入则可以。服务端按“锚点所在十媒体组”起始返回视频页，对该视频只返回它自己 1 条（用同一请求核对：`anchored page items: ['nile-falls.webm']`，向前页 13 条，向后页 0 条）。查看器在停稳的页上同一轮先后上报“需要后一页”“需要前一页”，`PlayerViewModel.page()` 在一次请求进行中直接丢弃另一方向；后一页返回空、列表长度不变，上报不会重发，前一页永远不再请求。服务端每个非空页都带 `next` 游标，`endReached=window.next.isEmpty()` 因此从不为真，“已经是最后一个视频”提示实际不会出现。
+
+**问题二（图片）**：图片查看页只加载被点开的一张，没有翻页；[DESIGN](../DESIGN.md) 此前写明“不增加跨照片翻页”。按用户 2026-10-11 的要求改为可滑动切换，方向取与视频一致的上下滑动（用户未指定方向，这是实现时的取舍）。
+
+**改动**（无新依赖、无 API / 服务端变更）：
+
+- `data/library/PagingGate.kt`（新增）：同一时间只跑一个边缘请求；进行中被问到的相反方向保留到该请求结束后再发；空页关闭该方向，另一侧装入数据后重新打开。`PlayerViewModel` 用它替换原来的三个布尔量，并把“后一页为空”记为 `endReached`。
+- `PlayerViewModel`：图片与视频共用按 `kind` 取页的队列（图片 `kind=image`）；图片队列取不到（409 / 网络失败 / 该图已不在目录页内）时退回只打开这一张，与改动前一致；`leave()` 清空窗口。元信息窗口仍是三页上限。
+- `PlayerScreen.kt` 的 `PhotoScreen`：改为 `VerticalPager`。放大时停用翻页、单指平移；松手时缩放不足 1.1 倍回到原始大小（否则肉眼看不出放大却翻不了页，设备测试实际撞到 1.02 倍）；相邻页只预先合成缩略图，原图在该页成为当前页时才取，翻页停稳后释放非当前页原图。
+- 测试：`PagingGateTest`（JVM，6 项）；`DevicePlaybackTest.bothEdgesAskedAtOnceStillLoadPrevious`；`PhotoDeviceTest` 增加上下翻页、沿翻页方向的双指缩放、放大后单指拖动不翻页，并支持 `-e serverAddress`。
+
+**本机检查**（JDK 21，`android/` 下 `./gradlew --offline :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleProfile`）：`BUILD SUCCESSFUL`；JVM 36 项零失败；Lint 0 error / 66 warning，同一检出上改动前也是 66。profile 包 SHA-256 `18c1a343c47a6e816c3b2b98423bf395969584dac5494b2fda177596dc879dc5`；基线（`git archive HEAD` 另行构建）`9eb9bcd24e9392c4f3a30e7fd9fd0b5c8a72ec69424e6a59f77b27a50d7b3835`。
+
+**真机**（iQOO 12 Pro / V2329A、Android 15；本机合成服务经 `adb reverse tcp:19090 tcp:19092`；每次输入前检查前台为 VVideo；用 `uiautomator dump` 读标题）：
+
+| 场景 | 基线 `9eb9bcd2…` | 修复 `18c1a343…` |
+| --- | --- | --- |
+| 直接点开 `nile-falls.webm`，下滑、上滑 | 仍是 `nile-falls.webm`（用户原现场，1 轮） | 下滑到 `murchison-falls.webm`，再上滑回到 `nile-falls.webm`；继续上滑出现“已经是最后一个视频”（1 轮；此前两个中间构建各 1 轮，其中一轮继续下滑到 `12-h264-high-bitrate.mp4`） |
+| 点开图片后上下滑 | 无翻页（未操作，代码只加载一张） | `photo-00→01→02→01→00`，第一张再下滑仍是 `photo-00`（1 轮）；中间构建：直接点开最后一张 `photo-19` 上滑不动、下滑到 `18→17` |
+| 双击放大后单指滑动 / 再双击还原后滑动 | 未测 | 放大时仍是同一张，还原后翻到相邻一张（1 轮） |
+| 1,000 图目录连续翻页 | 未测 | 中间构建：前进 308 次、后退 225 次，在第 105 / 210 / 320 / 95 张处与服务端顺序逐一核对一致（跨过 100 条分页边界、三页窗口淘汰与回填） |
+| 翻页帧数据（adb 注入滑动，`dumpsys gfxinfo`） | 未测 | 10 次滑动 401 帧，jank 0，p99 7 ms；录屏 405 帧逐帧平均亮度最低 44.5 / 中位 50.7，没有整页空白帧 |
+
+设备插桩（`device` 变体，`-e serverAddress http://127.0.0.1:19090`，最终代码）：`PhotoDeviceTest`、`DevicePlaybackTest#bothEdgesAskedAtOnceStillLoadPrevious`（日志 `opened_items=1 total=14`）、`#realUiVideoTransitions`、`#rapidSwitchUsesOnePlayerAndCurrentVersion` 各 `OK (1 test)`。`#unsupportedVideoShowsErrorAndNextRecovers` 在取夹具目录时 `NoSuchElementException`（当前合成库没有它要的目录），未执行到被测行为。logcat 无 `FATAL EXCEPTION`。测完手机上是 profile 修复包 `18c1a343…`。
+
+**过程中由我造成并已恢复的状态变化**：
+
+- 第一次运行 `PhotoDeviceTest` 没有传地址，测试把应用保存的服务地址改成了 `validation.json` 里的旧地址 `127.0.0.1:19323`，首页显示“等待网络…”。已在应用的“修改连接”页把端口改回 `19090`（令牌未动，页面显示“已连接 · 1 个媒体库”），临时加的 `adb reverse tcp:19323` 已移除。地址改变时应用按设计清掉了“上次目录”，按连接保存的书签未受影响。
+- 插桩测试会在 `19090` 连接下把 `media`、`large` 两个合成目录以名称升序打开，这两个目录保存的排序和位置因此不是测试前的状态。
+- vivo 安装确认页由我按元素坐标勾选并继续（用户当次明确允许自行安装），核对过页面上的包名与大小。
+
+**限制与未验证**：
+
+- 帧数据来自 adb 注入的滑动和 `gfxinfo`，不是按设计文档性能计划做的 Perfetto 三轮采集；既有“流畅度未通过”结论不变。翻页后的一次 `dumpsys meminfo` 为 PSS 145 MB / Graphics 100 MB，只是单点读数，没有与基线对比，也没有长时间内存曲线。
+- 没有在慢网络或真实 NAS / Wi-Fi 下测；“前一页在后一页空响应之后补发”在真机上只经过本机回环验证，时序覆盖靠 `PagingGateTest`。
+- 图片队列取不到而退回单张时，本次打开期间不能翻页；没有在真机上制造 409 来验证这条路径。
+- 复测中发现一个既有问题，未在本次修改：`media` 相册滚到最底部时点开图片再返回，相册位置上移约 836 px（基线 `9eb9bcd2…` 同样出现，1 轮；中间位置返回则保持不变）。
+- **OCR**：按用户此前要求使用托管模式。`ocr delegate preview` 工作区模式选出 7 个可审文件、排除 6 个（4 个文档、2 个 JVM 测试），`ocr delegate rule` 给出 Kotlin 系统规则，宿主代理审查 7/7。审查中发现并已修复三项 medium：翻页上报协程读到过期列表（窗口淘汰后列表长度不变）、双指缩放期间每帧重组翻页器、访问过的相邻页长期持有原图。保留的低级别项：分页请求失败后 `error` 标志不自动清除（既有行为）。审查者同时是实现者，不等同独立复审。

@@ -33,7 +33,7 @@ class PhotoDeviceTest {
   val app=instrumentation.targetContext.applicationContext as VVideoApplication
   withTimeout(15000){app.ready.first{it}}
   val config=withContext(Dispatchers.IO){JSONObject(File(app.filesDir,"validation.json").readText())}
-  app.graph.settings.connect(config.getString("address"),config.getString("token"))
+  app.graph.settings.connect(InstrumentationRegistry.getArguments().getString("serverAddress")?:config.getString("address"),config.getString("token"))
   val connection=app.graph.settings.connection.first()
   val root=app.graph.api.libraries(connection).first().directoryId
   val directory=app.graph.api.children(connection,root).items.first{it.name=="large"}.id
@@ -82,6 +82,28 @@ class PhotoDeviceTest {
    val reduced=coloredPixels()
    Log.i("VVideoValidation","photo_zoom_close enlarged=$enlarged reduced=$reduced")
    assertTrue("pinch did not reduce rendered image: $enlarged -> $reduced",reduced<enlarged*.85)
+   // Paging follows the folder's image order. A vertical pinch travels along
+   // the paging axis and must still zoom; an enlarged photo pans under one
+   // finger instead of handing the drag to the pager.
+   val queue=app.graph.api.page(connection,directory,Sort("name","asc"),anchor=image.id,kind="image").items
+   val following=queue[queue.indexOfFirst{it.id==image.id}+1]
+   device.swipe(cx,cy+far,cx,cy-far,12)
+   assertNotNull("swipe up did not show the next photo",device.wait(Until.findObject(By.desc(following.name)),5000))
+   device.swipe(cx,cy-far,cx,cy+far,12)
+   assertNotNull("swipe down did not return to the photo",device.wait(Until.findObject(By.desc(image.name)),5000))
+   delay(500)
+   assertTrue(gesture.performTwoPointerGesture(Point(cx,cy-near),Point(cx,cy+near),Point(cx,cy-far),Point(cx,cy+far),100))
+   delay(500)
+   assertTrue("vertical pinch paged instead of zooming",device.hasObject(By.desc(image.name)))
+   val tall=coloredPixels()
+   assertTrue("vertical pinch did not enlarge rendered image: $reduced -> $tall",tall>reduced*1.5)
+   device.swipe(cx,cy+near,cx,cy-near,12);delay(500)
+   assertTrue("an enlarged photo paged under a one-finger drag",device.hasObject(By.desc(image.name)))
+   assertTrue(gesture.performTwoPointerGesture(Point(cx,cy-far),Point(cx,cy+far),Point(cx,cy-near),Point(cx,cy+near),100))
+   delay(500)
+   val restored=coloredPixels()
+   assertTrue("vertical pinch did not reduce rendered image: $tall -> $restored",restored<tall*.85)
+   Log.i("VVideoValidation","photo_paging next=${following.name} vertical_pinch_pixels=$tall restored_pixels=$restored")
    checkNotNull(device.wait(Until.findObject(By.desc("媒体详情")),3000)).click()
    checkNotNull(device.wait(Until.findObject(By.text("媒体详情")),3000)).click()
    assertTrue(device.wait(Until.hasObject(By.text(image.name)),3000))

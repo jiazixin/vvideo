@@ -142,29 +142,62 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
  }
 }
 fun Media.playback(c:Connection)=PlaybackItem(c.id,libraryId,id,version,"${c.address}/v1/media/$id/bytes?version=$version","${c.address}/v1/media/$id/index?version=$version",c.token,size,durationMs)
+// Photos page through the folder's image queue the way videos do. Zoom belongs
+// to the page in front: the pager stands still while it is enlarged, and
+// one-finger drags pan the photo instead.
 @Composable
-fun PhotoScreen(item:Media?,c:Connection,loader:ImageLoader,onBack:()->Unit,metadataError:Boolean=false,onRetry:()->Unit={},pathLabel:String=""){
- var scale by remember(item?.id){mutableFloatStateOf(1f)}
- var offset by remember(item?.id){mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)}
- var attempt by remember(item?.id,item?.version){mutableIntStateOf(0)}
- var failed by remember(item?.id,item?.version,attempt){mutableStateOf(false)}
- var loaded by remember(item?.id,item?.version,attempt){mutableStateOf(false)}
+fun PhotoScreen(state:PlayerUiState,c:Connection,loader:ImageLoader,onBack:()->Unit,onRetry:()->Unit,onSelected:(String)->Unit,onPage:(Boolean)->Unit,leaving:Boolean=false){
+ // Sized from the loaded queue so the first frame is already the tapped photo.
+ val pager=key(state.initialId,state.items.isEmpty()){rememberPagerState(initialPage=state.items.indexOfFirst{it.id==state.initialId}.coerceAtLeast(0),pageCount={state.items.size})}
+ // The laid-out key names the page in front even in the one composition where
+ // pages arrived ahead of it and its index has not been matched again yet.
+ val frontKey by remember(pager){derivedStateOf{pager.layoutInfo.visiblePagesInfo.firstOrNull{it.index==pager.currentPage}?.key}}
+ val item=state.items.firstOrNull{it.id==frontKey}?:state.items.getOrNull(pager.currentPage)
+ val scaleState=remember(item?.id){mutableFloatStateOf(1f)};var scale by scaleState
+ // Composition follows only the enlarged/full-view flip; the scale itself is
+ // read while drawing, so a pinch does not recompose the pager every frame.
+ val zoomed by remember(scaleState){derivedStateOf{scaleState.floatValue>1f}}
+ val latest by rememberUpdatedState(state)
+ var offset by remember(item?.id){mutableStateOf(Offset.Zero)}
  var controls by remember{mutableStateOf(true)};var details by remember{mutableStateOf(false)}
  var bulletin by remember{mutableStateOf<String?>(null)};val copied=stringResource(R.string.copied)
- val transform=rememberTransformableState{zoom,pan,_->scale=(scale*zoom).coerceIn(1f,4f);offset=if(scale==1f)androidx.compose.ui.geometry.Offset.Zero else offset+pan}
- if(details&&item!=null)MediaDetailsSheet(item,pathLabel,{details=false}){bulletin=copied}
+ val transform=rememberTransformableState{zoom,pan,_->scale=(scale*zoom).coerceIn(1f,4f);offset=if(scale==1f)Offset.Zero else offset+pan}
+ // A pinch released a hair above full view would keep the pager locked with
+ // nothing visibly enlarged, so it settles back to full view.
+ LaunchedEffect(transform.isTransformInProgress){if(!transform.isTransformInProgress&&scale<1.1f){scale=1f;offset=Offset.Zero}}
+ LaunchedEffect(pager,state.items.size,leaving){if(leaving)return@LaunchedEffect;snapshotFlow{pager.settledPage}.distinctUntilChanged().collect{index->latest.items.getOrNull(index)?.let{onSelected(it.id)};if(index>=latest.items.size-3)onPage(false);if(index<2&&latest.items.isNotEmpty())onPage(true)}}
+ if(details&&item!=null)MediaDetailsSheet(item,state.pathLabel,{details=false}){bulletin=copied}
  Box(Modifier.fillMaxSize().background(Color.Black)){
-  if(item!=null){val context=LocalContext.current
-   val request=remember(item.id,item.version,c.token,attempt){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/bytes?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()}
-   val thumb=remember(item.id,item.version,c.token){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()}
-   Box(Modifier.fillMaxSize().pointerInput(item.id){detectTapGestures(onTap={controls=!controls},onDoubleTap={point->if(scale>1f){scale=1f;offset=androidx.compose.ui.geometry.Offset.Zero}else{scale=2.5f;offset=androidx.compose.ui.geometry.Offset((size.width/2f-point.x)*1.5f,(size.height/2f-point.y)*1.5f)}})}.transformable(transform,canPan={scale>1f})){
-    val imageModifier=Modifier.fillMaxSize().graphicsLayer{scaleX=scale;scaleY=scale;translationX=offset.x;translationY=offset.y}
-    if(!loaded)AsyncImage(thumb,null,imageLoader=loader,contentScale=ContentScale.Fit,modifier=imageModifier)
-    AsyncImage(request,item.name,imageLoader=loader,contentScale=ContentScale.Fit,onSuccess={loaded=true},onError={failed=true},modifier=imageModifier)
-   }
+  // Neighbours are composed ahead with their thumbnail only, so a swipe never
+  // drags in an empty page. The original is fetched once a page comes in front
+  // and kept until the pager rests on another page: one original at rest, two
+  // while a swipe is under way.
+  val resting=!pager.isScrollInProgress
+  VerticalPager(state=pager,key={state.items[it].id},beyondViewportPageCount=1,userScrollEnabled=!zoomed,modifier=Modifier.fillMaxSize()){index->val photo=state.items[index];val front=photo.id==item?.id
+   PhotoPage(photo,c,loader,front,resting,if(front){{scaleX=scale;scaleY=scale;translationX=offset.x;translationY=offset.y}}else null,
+    Modifier.pointerInput(photo.id,front){detectTapGestures(onTap={controls=!controls},onDoubleTap={point->if(front){if(scale>1f){scale=1f;offset=Offset.Zero}else{scale=2.5f;offset=Offset((size.width/2f-point.x)*1.5f,(size.height/2f-point.y)*1.5f)}}})}.then(if(front)Modifier.transformable(transform,canPan={scale>1f})else Modifier))
   }
-  if(metadataError||failed)Column(Modifier.align(Alignment.Center).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(stringResource(R.string.photo_failed),color=Color.White);Button(onClick={if(metadataError)onRetry()else attempt++}){Text(stringResource(R.string.retry))}}
+  if(state.error&&state.items.isEmpty())Column(Modifier.align(Alignment.Center).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(stringResource(R.string.photo_failed),color=Color.White);Button(onClick=onRetry){Text(stringResource(R.string.retry))}}
   if(controls)PlayerChrome(item,null,onBack,{details=true},{bulletin=copied},Modifier.align(Alignment.TopCenter))
   dev.vvideo.ui.component.BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
+ }
+}
+@Composable
+private fun PhotoPage(item:Media,c:Connection,loader:ImageLoader,front:Boolean,resting:Boolean,zoom:(androidx.compose.ui.graphics.GraphicsLayerScope.()->Unit)?,modifier:Modifier=Modifier){
+ val image=if(zoom!=null)Modifier.fillMaxSize().graphicsLayer(zoom)else Modifier.fillMaxSize()
+ // A page being swiped away keeps its original until the pager rests, so it
+ // does not fall back to its thumbnail while still on screen.
+ var original by remember{mutableStateOf(front)}
+ var attempt by remember(item.version){mutableIntStateOf(0)}
+ var failed by remember(item.version,attempt){mutableStateOf(false)}
+ var loaded by remember(item.version,attempt){mutableStateOf(false)}
+ LaunchedEffect(front,resting){if(front)original=true else if(resting){original=false;loaded=false}}
+ val context=LocalContext.current
+ val request=remember(item.id,item.version,c.token,attempt){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/bytes?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()}
+ val thumb=remember(item.id,item.version,c.token){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()}
+ Box(modifier.fillMaxSize()){
+  if(!loaded||!original)AsyncImage(thumb,null,imageLoader=loader,contentScale=ContentScale.Fit,modifier=image)
+  if(original)AsyncImage(request,item.name,imageLoader=loader,contentScale=ContentScale.Fit,onSuccess={loaded=true},onError={failed=true},modifier=image)
+  if(failed)Column(Modifier.align(Alignment.Center).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(stringResource(R.string.photo_failed),color=Color.White);Button(onClick={attempt++}){Text(stringResource(R.string.retry))}}
  }
 }

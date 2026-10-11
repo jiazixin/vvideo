@@ -167,6 +167,23 @@ class DevicePlaybackTest {
    Log.i("VVideoValidation","ui_window_reverse_to_start=true")
   }
  }
+ // Opened on the last video, the anchored page can hold that video alone. The
+ // viewer then reports both edges in one pass and repeats neither, so the
+ // previous edge must survive the empty answer for the next one.
+ @Test fun bothEdgesAskedAtOnceStillLoadPrevious()=runBlocking<Unit> {
+  val c=connection();val graph=application.graph;val root=graph.api.libraries(c).first().directoryId
+  val videos=graph.api.page(c,root,Sort(),kind="video").items
+  org.junit.Assume.assumeTrue("needs a root holding one page of videos",videos.size in 2..99)
+  val vm=dev.vvideo.feature.player.PlayerViewModel(graph.api)
+  try {
+   withContext(Dispatchers.Main){vm.open(c,root,Sort(),videos.last().id)}
+   val opened=withTimeout(10000){vm.state.first{it.items.isNotEmpty()}}.items.size
+   withContext(Dispatchers.Main){vm.page(false);vm.page(true)}
+   withTimeout(10000){vm.state.first{it.items.firstOrNull()?.id==videos.first().id&&it.endReached}}
+   assertEquals(videos.map{it.id},vm.state.value.items.map{it.id})
+   Log.i("VVideoValidation","both_edges_previous_loaded=true opened_items=$opened total=${videos.size}")
+  }finally{withContext(Dispatchers.Main){vm.leave()}}
+ }
  @Test fun feedWindowCancellationAndReverse()=runBlocking<Unit> {
   val c=connection();val graph=application.graph;val root=graph.api.libraries(c).first().directoryId
   val feed=graph.api.children(c,root).items.first{it.name=="feed"};val firstPage=graph.api.page(c,feed.id,Sort("name","asc"),kind="video")

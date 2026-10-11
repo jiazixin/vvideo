@@ -9,6 +9,7 @@ class PageWindow {
  val next get()=pages.lastOrNull()?.next.orEmpty()
  val previous get()=pages.firstOrNull()?.previous.orEmpty()
  fun reset(page:MediaPage){pages.clear();pages.add(page)}
+ fun clear(){pages.clear()}
  fun append(page:MediaPage){pages.addLast(page);while(pages.size>3)pages.removeFirst()}
  fun prepend(page:MediaPage){pages.addFirst(page);while(pages.size>3)pages.removeLast()}
  val retainedPages get()=pages.size

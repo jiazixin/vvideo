@@ -94,7 +94,7 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
   // holds the page size while the replacement waits for its session, so the
   // transition does not animate through an empty layout.
   displayedRoute=="video"->Box(Modifier.fillMaxSize()){key(retainedWhileLeaving(selectionBeganMs,leaving)){PlayerRoute(player,connection,imageLoader,graph.cache::session,graph.cache::release,back,onInteraction,selectionBeganMs,leaving)}}
-  displayedRoute=="photo"->{val live by player.state.collectAsStateWithLifecycle();val state=retainedWhileLeaving(live,leaving);PhotoScreen(state.photo,connection,imageLoader,back,state.error,{player.open(connection,directory,Sort(field,direction),mediaId,true)},state.pathLabel)}
+  displayedRoute=="photo"->{val live by player.state.collectAsStateWithLifecycle();PhotoScreen(retainedWhileLeaving(live,leaving),connection,imageLoader,back,{player.open(connection,directory,Sort(field,direction),mediaId,true)},player::selected,player::page,leaving)}
   else->LibraryRoute(library,{c,item->"${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}"},connection,imageLoader,{library.flush();navigation.route="settings"},{item->selectionBeganMs=android.os.SystemClock.elapsedRealtime();library.flush();directory=item.directoryId;val sort=library.state.value.sort;field=sort.field;direction=sort.direction;mediaId=item.id;navigation.route=if(item.kind=="video")"video" else "photo"},onInteraction,{albumDetails=it},{library.flush();navigation.route="connection"})
  }
 }
