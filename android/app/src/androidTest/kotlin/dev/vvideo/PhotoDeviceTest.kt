@@ -28,18 +28,54 @@ import org.junit.runner.RunWith
 @UnstableApi
 @RunWith(AndroidJUnit4::class)
 class PhotoDeviceTest {
- @Test fun originalPhotoPinchAndReturn()=runBlocking<Unit> {
-  val instrumentation=InstrumentationRegistry.getInstrumentation()
-  val app=instrumentation.targetContext.applicationContext as VVideoApplication
+ private val instrumentation=InstrumentationRegistry.getInstrumentation()
+ private val app get()=instrumentation.targetContext.applicationContext as VVideoApplication
+ private suspend fun connect():dev.vvideo.data.settings.Connection{
   withTimeout(15000){app.ready.first{it}}
   val config=withContext(Dispatchers.IO){JSONObject(File(app.filesDir,"validation.json").readText())}
   app.graph.settings.connect(InstrumentationRegistry.getArguments().getString("serverAddress")?:config.getString("address"),config.getString("token"))
-  val connection=app.graph.settings.connection.first()
+  return app.graph.settings.connection.first()
+ }
+ private suspend fun launch():MainActivity{
+  withContext(Dispatchers.IO){instrumentation.uiAutomation.executeShellCommand("am start -n dev.vvideo/dev.vvideo.app.MainActivity").use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).use{it.readBytes()}}}
+  return withTimeout(10000){var found:MainActivity?=null;while(found==null){withContext(Dispatchers.Main){found=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()};if(found==null)delay(50)};checkNotNull(found)}
+ }
+ // An album item whose row split depends on the measured width used to appear
+ // with a provisional height, so a position restored at the end of the list
+ // was cut short once the viewer closed.
+ @Test fun albumEndPositionSurvivesViewer()=runBlocking<Unit> {
+  val connection=connect()
+  val root=app.graph.api.libraries(connection).first().directoryId
+  val media=app.graph.api.page(connection,root,Sort("name","asc")).items
+  org.junit.Assume.assumeTrue("needs a root that fits one page and ends with an image",media.size in 11..99&&media.last().kind=="image")
+  val last=media.last();val cell=By.desc(last.name+"，image")
+  val activity=launch()
+  val device=UiDevice.getInstance(instrumentation)
+  try {
+   delay(400)
+   lateinit var library:LibraryViewModel
+   withContext(Dispatchers.Main){library=ViewModelProvider(activity)[LibraryViewModel::class.java];library.open(root,Sort("name","asc"))}
+   withTimeout(10000){library.state.first{!it.busy&&it.directory?.id==root&&it.albums.isNotEmpty()}}
+   val cx=device.displayWidth/2;val h=device.displayHeight
+   repeat(12){if(!device.hasObject(cell)){device.swipe(cx,h*3/4,cx,h/4,20);delay(500)}}
+   repeat(2){device.swipe(cx,h*3/4,cx,h/4,20);delay(500)}
+   delay(1000)
+   val before=checkNotNull(device.findObject(cell)).visibleBounds
+   checkNotNull(device.findObject(cell)).click()
+   checkNotNull(device.wait(Until.findObject(By.desc(last.name)),10000))
+   delay(600);device.pressBack()
+   assertNotNull("album moved: its last cell left the screen after returning from the viewer",device.wait(Until.findObject(cell),5000));delay(1200)
+   val after=checkNotNull(device.findObject(cell)).visibleBounds
+   assertEquals("album moved after returning from the viewer",before,after)
+   Log.i("VVideoValidation","album_end_position_kept=true fixture=${last.name} bounds=$after")
+  }finally{withContext(Dispatchers.Main){activity.finish()}}
+ }
+ @Test fun originalPhotoPinchAndReturn()=runBlocking<Unit> {
+  val connection=connect()
   val root=app.graph.api.libraries(connection).first().directoryId
   val directory=app.graph.api.children(connection,root).items.first{it.name=="large"}.id
   val image=app.graph.api.page(connection,directory,Sort("name","asc"),kind="image").items.first{it.displayRatio in 1.4f..2f}
-  withContext(Dispatchers.IO){instrumentation.uiAutomation.executeShellCommand("am start -n dev.vvideo/dev.vvideo.app.MainActivity").use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).use{it.readBytes()}}}
-  val activity=withTimeout(10000){var found:MainActivity?=null;while(found==null){withContext(Dispatchers.Main){found=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()};if(found==null)delay(50)};checkNotNull(found)}
+  val activity=launch()
   val device=UiDevice.getInstance(instrumentation)
   try {
    delay(400)

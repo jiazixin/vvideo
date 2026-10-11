@@ -10,7 +10,6 @@ import dev.vvideo.data.library.PageWindow
 import dev.vvideo.data.library.local.BookmarkEntity
 import dev.vvideo.data.library.remote.RevisionChanged
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.feature.library.album.*
 import dev.vvideo.model.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -20,8 +19,8 @@ import android.util.Base64
 // Loads that finish sooner slide straight into loaded content; slower ones reveal
 // the destination with its placeholder. Tuning value, not a measured threshold.
 private const val REVEAL_DELAY_MS=120L
-// Geometry is prepared outside the UI thread and retained for only its window.
-data class Album(val items:List<Media>,val rows:List<AlbumRow>,val dateLabel:String?=null,val timeLabel:String?=null,val dayLabel:String?=null)
+// Row geometry depends on the measured width and is settled by the album item.
+data class Album(val items:List<Media>,val dateLabel:String?=null,val timeLabel:String?=null,val dayLabel:String?=null)
 data class RecentFolder(val bookmark:BookmarkEntity,val timeLabel:String)
 data class LibraryUiState(val recent:List<RecentFolder> = emptyList(),val kind:String="",val hasMedia:Boolean=false,val hasPrevious:Boolean=false,val pageBusy:Boolean=false,val libraries:List<Library> = emptyList(),val directory:Directory?=null,val children:List<Directory> = emptyList(),val childNext:String="",val childPrevious:String="",val childBusy:Boolean=false,val path:List<Directory> = emptyList(),val pathLabel:String="",val errorStatus:Int=0,val albums:List<Album> = emptyList(),val sort:Sort=Sort(),val busy:Boolean=false,val error:Boolean=false,val healthy:Boolean=true,val restoreAnchor:String="",val restoreKey:String="",val restoreOffset:Int=0,val restoreWidth:Int=0,val restoreSerial:Long=0,val anchorMissing:Boolean=false)
 class LibraryViewModel(private val api:LibraryApi,private val bookmarks:BookmarkDao,private val settings:SettingsRepository,private val persistScope:CoroutineScope,private val timeLabels:TimeLabels?=null):ViewModel() {
@@ -119,7 +118,7 @@ class LibraryViewModel(private val api:LibraryApi,private val bookmarks:Bookmark
   mutable.value=restoredPage(page.state,mutable.value)
   resume()
  }
- private suspend fun albums(sort:Sort=mutable.value.sort,items:List<Media> = window.items)=withContext(Dispatchers.Default){datedAlbums(items.chunked(10).map{Album(it,AlbumLayoutCalculator.calculate(it.map(Media::displayRatio)))},sort,timeLabels)}
+ private suspend fun albums(sort:Sort=mutable.value.sort,items:List<Media> = window.items)=withContext(Dispatchers.Default){datedAlbums(items.chunked(10).map{Album(it)},sort,timeLabels)}
  fun filter(kind:String){require(kind in setOf("","video","image"));val s=mutable.value; s.directory?.let{open(it.id,s.sort,kind=kind,fromStart=true)}}
  fun jumpToStart(){val s=mutable.value;s.directory?.let{open(it.id,s.sort,kind=s.kind,fromStart=true)}}
  // A published window is ready for paging even while open() persists its visit.

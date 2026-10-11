@@ -11,7 +11,7 @@ class PendingDirectoryTest {
  private val leaf=Directory(3,"lib",2,"folder-0001",1)
  private val recent=RecentFolder(BookmarkEntity("c",9,"lib",name="deep",pathLabel="media › wide"),"昨天")
  private val home=LibraryUiState(libraries=listOf(Library("lib","media",1,true)),recent=listOf(recent),restoreSerial=4)
- private val inWide=home.copy(directory=wide,path=listOf(root,wide),pathLabel="media",children=listOf(leaf),albums=listOf(Album(emptyList(),emptyList())),hasMedia=true,kind="video",error=true)
+ private val inWide=home.copy(directory=wide,path=listOf(root,wide),pathLabel="media",children=listOf(leaf),albums=listOf(Album(emptyList())),hasMedia=true,kind="video",error=true)
 
  @Test fun childExtendsThePathAndStartsEmpty(){
   val pending=checkNotNull(pendingDirectory(inWide,3))

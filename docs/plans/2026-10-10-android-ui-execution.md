@@ -436,3 +436,31 @@ logcat 最近 3000 行无 `FATAL EXCEPTION`。屏幕文字导出与截图在被�
 - 图片队列取不到而退回单张时，本次打开期间不能翻页；没有在真机上制造 409 来验证这条路径。
 - 复测中发现一个既有问题，未在本次修改：`media` 相册滚到最底部时点开图片再返回，相册位置上移约 836 px（基线 `9eb9bcd2…` 同样出现，1 轮；中间位置返回则保持不变）。
 - **OCR**：按用户此前要求使用托管模式。`ocr delegate preview` 工作区模式选出 7 个可审文件、排除 6 个（4 个文档、2 个 JVM 测试），`ocr delegate rule` 给出 Kotlin 系统规则，宿主代理审查 7/7。审查中发现并已修复三项 medium：翻页上报协程读到过期列表（窗口淘汰后列表长度不变）、双指缩放期间每帧重组翻页器、访问过的相邻页长期持有原图。保留的低级别项：分页请求失败后 `error` 标志不自动清除（既有行为）。审查者同时是实现者，不等同独立复审。
+
+## 相册末尾返回位置偏移（2026-10-11）
+
+**问题**：上一节记录的既有问题。`media` 相册（名称升序，34 项）滚到最底部，点开图片再返回，相册上移约 836 px；中间位置返回正常。
+
+**原因**（临时加日志在真机上取证，日志未提交）：返回时 `resume()` 给出的是正确的保存位置（`album:…` 偏移 850），`scrollToItem` 也按它执行，但那一帧最后一个相册项只有 290 px 高，随后才变成约 1108 px。`AlbumBubble` 用 `produceState` 先渲染 ViewModel 预算的行划分（不含屏宽和时长标签宽度，4 张图排成一行），再异步换成按实测宽度算出的划分（两行）。恢复发生在高度变化之前，列表“到底”的位置被算短，恢复被截断成“倒数第二个相册顶端对齐视口”。只有行划分受最小单元宽度约束影响的相册会变高，所以只在列表末尾附近、且末尾相册属于这种情况时出现。
+
+**改动**：`AlbumBubble` 在首次组合时用 `remember(album.items,width,minWidths)` 直接算出最终行划分，不再有临时布局；`Album.rows` 和 `LibraryViewModel` 里的预算只为那份临时布局服务，一并删除。计算规模上限是十项、每行至多四格，JVM 上临时计时约 1–4 µs / 次（未提交的计时用例，非真机数值）。
+
+**本机检查**（同上一节命令）：`BUILD SUCCESSFUL`；JVM 36 项零失败；Lint 0 error / 66 warning。下表的对照在 profile 包 `ee17a9babe4c…` 上完成；之后只改了 `AlbumBubble.kt` 的一处注释（Compose 按源码位置生成分组键，摘要因此变化），提交对应的包是 `6180fed304ddcdcb7210c7d1edb74e29bbda9e22df0de588ef40d96096a334f7`。
+
+**真机**（条件同上一节）：
+
+| 场景 | 基线 `18c1a343…` | 修复 `ee17a9ba…` |
+| --- | --- | --- |
+| `media` 相册到底，点开 `photo-19.jpg` 再返回 | `photo-15.jpg` 行从 y=1579 变为 y=2415（本节 2 轮，上一节 2 轮） | 返回前后各单元位置逐一相同（2 轮）；点开 `photo-17.jpg`、在查看器内翻一张后返回，位置相同（1 轮） |
+| 到底后 `am force-stop` 再启动 | 未测 | 冷启动恢复到同一位置（1 轮） |
+| `PhotoDeviceTest#albumEndPositionSurvivesViewer`（新增，`device` 变体） | 失败：`album moved: its last cell left the screen after returning from the viewer` | 通过，返回前后末项边界同为 `Rect(461, 2445 - 1408, 3080)` |
+| `large` 相册 12 次下滑 + 12 次上滑（adb 注入，`dumpsys gfxinfo`，预热 1 轮后 3 轮，基线/修复交替各做 2 组） | jank 0.51 / 0.32 / 0.56 % 与 0.51 / 0.36 / 0.55 %，p99 20–27 ms | jank 0.41 / 0.63 / 0.77 % 与 0.36 / 0.41 / 0.55 %，p99 19–25 ms |
+
+修复后的 `device` 变体上另跑：`PhotoDeviceTest`（2 项）、`DevicePlaybackTest#realUiBidirectionalWindowAndRestoration`、`#publishedWindowCanPageWhileVisitPersists` 均 `OK`；logcat 无 `FATAL EXCEPTION`。提交对应的 `6180fed3…` 上复核：冷启动恢复到底部位置、到底点开 `photo-19.jpg` 返回位置相同、中间位置点开返回位置相同，各 1 轮。测完手机上是这个包。
+
+**限制与未验证**：
+
+- 滚动帧数据两组互有高低、区间重叠，每轮约 2200 帧里 7–17 帧，不足以说明有差异，也不足以证明完全没有；它不是性能计划要求的 Perfetto 采集，既有“流畅度未通过”结论不变。
+- 只在合成库 `media` 一个目录上复现和验证；筛选、排序切换后的末尾位置没有单独测。
+- 设备上应用自身的 `Log.i` 不出现在 logcat（`Log.e` 可见），取证日志因此用了 error 级别，已全部移除。
+- **OCR**：托管模式，`ocr delegate preview` 选出 3 个可审文件、排除 2 个 JVM 测试，Kotlin 系统规则，宿主代理审查 3/3，无 critical / high / medium。保留的低级别项：`key(album.items)` 在几何改为同步计算后作用有限，按不扩大改动保留。审查者同时是实现者，不等同独立复审。

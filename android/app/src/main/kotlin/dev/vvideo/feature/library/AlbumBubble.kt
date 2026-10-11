@@ -41,8 +41,8 @@ import kotlinx.coroutines.flow.sample
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AlbumBubble(album:Album,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,onMedia:(Media)->Unit,onDetails:(Media)->Unit={}){
- // A filter may retain the first item key while shrinking a group. Do not
- // render previous asynchronous geometry against the new item list.
+ // A filter may retain the first item key while shrinking a group; everything
+ // below restarts with the new item list.
  key(album.items){
  val density=LocalDensity.current
  val measurer=rememberTextMeasurer()
@@ -56,7 +56,11 @@ fun AlbumBubble(album:Album,loader:ImageLoader,connection:Connection,thumbnail:(
  }}
  BoxWithConstraints(Modifier.fillMaxWidth().padding(start=8.dp,end=8.dp,bottom=6.dp)){
   val width=maxWidth
-  val rows by produceState(album.rows,album.items,width,density.fontScale){value=withContext(Dispatchers.Default){AlbumLayoutCalculator.calculate(album.items.map(Media::displayRatio),width.value,minWidths)}}
+  // Settled in the item's first composition: the row split depends on the
+  // measured width and label widths, and a provisional split replaced a frame
+  // later changes the item's height after the list has been positioned, which
+  // cuts short a restored position near the end. Ten items, four cells a row.
+  val rows=remember(album.items,width,minWidths){AlbumLayoutCalculator.calculate(album.items.map(Media::displayRatio),width.value,minWidths)}
   Column(Modifier.clip(RoundedCornerShape(16.dp)),verticalArrangement=Arrangement.spacedBy(2.dp)){
    for(row in rows)Row(Modifier.fillMaxWidth().height(width*row.heightRatio),horizontalArrangement=Arrangement.spacedBy(2.dp)){
     row.indices.forEachIndexed{position,index->val item=album.items[index]
