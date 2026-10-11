@@ -47,7 +47,7 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
  Scaffold(containerColor=c.bgPage,topBar={Column(Modifier.background(c.bgSurface)){
   TopAppBar(expandedHeight=56.dp,title={Row(Modifier.clickable{sheet="info"},verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
    LetterAvatar(d.id.toString(),d.name,40.dp)
-   Column{Text(d.name,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis);Text(if(state.path.size<=1)stringResource(R.string.libraries) else state.path.dropLast(1).takeLast(2).joinToString(" › "){it.name},style=MaterialTheme.typography.bodySmall,color=c.textSecondary,maxLines=1,overflow=TextOverflow.Ellipsis)}
+   Column{Text(d.name,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis);Text(state.pathLabel.ifEmpty{stringResource(R.string.libraries)},style=MaterialTheme.typography.bodySmall,color=c.textSecondary,maxLines=1,overflow=TextOverflow.Ellipsis)}
   }},navigationIcon={ActionIcon(R.drawable.ic_back,R.string.back,onBack)},actions={Box{
    ActionIcon(R.drawable.ic_more,R.string.sort,{menu=true})
    DropdownMenu(menu,{menu=false},Modifier.width(236.dp),shape=RoundedCornerShape(10.dp),containerColor=c.bgRaised){
@@ -72,8 +72,11 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
    }
    if(state.childBusy||state.pageBusy)item("paging"){Box(Modifier.fillMaxWidth().padding(8.dp),contentAlignment=Alignment.Center){CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)}}
   }
-  if(state.busy)Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}
-  else if(state.albums.isEmpty()&&state.children.isEmpty())EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)
+  // The placeholder belongs to a page without content of its own; a reload
+  // keeps what is already shown, and a failed load is not an empty folder.
+  val blank=state.albums.isEmpty()&&state.children.isEmpty()
+  if(state.busy&&blank)Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}
+  else if(blank&&!state.error)EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)
   androidx.compose.animation.AnimatedVisibility(floating&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=8.dp),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))){firstAlbum?.dayLabel?.let{DatePill(it)}}
   if(showFab)SmallFloatingActionButton(onClick=jump,Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(R.string.jump_to_start))}
   BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))

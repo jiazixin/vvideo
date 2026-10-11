@@ -64,6 +64,11 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  val settingsBack={navigation.route="settings"}
  var predictive by remember{mutableFloatStateOf(0f)}
  val animations=dev.vvideo.ui.theme.animationsEnabled()
+ // Draw order of the two pages in a transition, relative to the page left:
+ // only a page slid back to lies beneath the one leaving it. A viewer and the
+ // page behind it both enter on top, so a tap during the viewer's exit reaches
+ // the page returned to instead of the leaving player.
+ val layers=remember{mutableMapOf<String,Float>()}
  PredictiveBackHandler(route!="library"&&connection.configured){events->
   try{events.collect{predictive=it.progress};if(route=="storage"||route=="connection")navigation.route="settings" else back()}catch(_:CancellationException){}finally{predictive=0f}
  }
@@ -73,16 +78,23 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
   val viewer=targetState in setOf("video","photo")||initialState in setOf("video","photo")
   val returning=targetState=="library"||initialState in setOf("storage","connection")&&targetState=="settings"
   val ms=if(!animations)0 else if(viewer){if(returning)200 else 180} else if(returning)220 else 260
-  if(viewer&&returning)fadeIn(tween(ms)) togetherWith (fadeOut(tween(ms))+scaleOut(tween(ms),targetScale=.92f))
+  val layer=if(initialState==targetState)layers[targetState]?:0f else (layers[initialState]?:0f)+if(returning&&!viewer)-1f else 1f
+  layers[targetState]=layer
+  (if(viewer&&returning)fadeIn(tween(ms)) togetherWith (fadeOut(tween(ms))+scaleOut(tween(ms),targetScale=.92f))
   else if(viewer)(fadeIn(tween(ms))+scaleIn(tween(ms),initialScale=.92f)) togetherWith fadeOut(tween(ms))
   else (slideInHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)-it/4 else it}+fadeIn(tween(ms),initialAlpha=if(returning).85f else 1f)) togetherWith (slideOutHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)it else -it/4}+fadeOut(tween(ms),targetAlpha=if(returning)1f else .85f))
- },label="route"){displayedRoute->when {
+  ).apply{targetContentZIndex=layer}
+ },label="route"){displayedRoute->val leaving=displayedRoute!=route;when {
   !connection.configured->ConnectionForm(settings,connection,{navigation.route="library"})
   displayedRoute=="connection"->ConnectionForm(settings,connection,settingsBack)
   displayedRoute=="storage"->StorageScreen(settings,connection,settingsBack)
   displayedRoute=="settings"->SettingsRoute(settings,connection,{navigation.route="library"},{navigation.route="storage"},{navigation.route="connection"})
-  displayedRoute=="video"->PlayerRoute(player,connection,imageLoader,graph.cache::session,graph.cache::release,back,onInteraction,selectionBeganMs)
-  displayedRoute=="photo"->{val state by player.state.collectAsStateWithLifecycle();PhotoScreen(state.photo,connection,imageLoader,back,state.error,{player.open(connection,directory,Sort(field,direction),mediaId,true)},state.pathLabel)}
+  // One PlayerRoute per selection: reopening during the exit must not
+  // inherit the leaving page's Surface, pager or paused session. The Box
+  // holds the page size while the replacement waits for its session, so the
+  // transition does not animate through an empty layout.
+  displayedRoute=="video"->Box(Modifier.fillMaxSize()){key(retainedWhileLeaving(selectionBeganMs,leaving)){PlayerRoute(player,connection,imageLoader,graph.cache::session,graph.cache::release,back,onInteraction,selectionBeganMs,leaving)}}
+  displayedRoute=="photo"->{val live by player.state.collectAsStateWithLifecycle();val state=retainedWhileLeaving(live,leaving);PhotoScreen(state.photo,connection,imageLoader,back,state.error,{player.open(connection,directory,Sort(field,direction),mediaId,true)},state.pathLabel)}
   else->LibraryRoute(library,{c,item->"${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}"},connection,imageLoader,{library.flush();navigation.route="settings"},{item->selectionBeganMs=android.os.SystemClock.elapsedRealtime();library.flush();directory=item.directoryId;val sort=library.state.value.sort;field=sort.field;direction=sort.direction;mediaId=item.id;navigation.route=if(item.kind=="video")"video" else "photo"},onInteraction,{albumDetails=it},{library.flush();navigation.route="connection"})
  }
 }

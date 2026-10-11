@@ -52,6 +52,13 @@ fun LibraryRoute(vm:LibraryViewModel,thumbnail:(Connection,Media)->String,c:Conn
  val width=with(LocalDensity.current){LocalConfiguration.current.screenWidthDp.dp.roundToPx()}
  val current by rememberUpdatedState(state)
  var restoring by remember{mutableStateOf(false)}
+ // Draw order of the two pages in a transition: a page entered by going back
+ // lies beneath the one it replaces. Only the latest pair is retained.
+ val layers=remember{mutableMapOf<Long?,Float>()}
+ // Direction of the latest directory change, taken while the page being left is
+ // still known; the transition itself is driven by the directory id alone.
+ val shown=remember{object{var id:Long?=null;var parentId:Long?=null;var returning=false}}
+ state.directory.let{d->if(d?.id!=shown.id){shown.returning=d==null||shown.parentId==d.id;shown.id=d?.id};shown.parentId=d?.parentId}
  LaunchedEffect(c.id,c.token,width){vm.connect(c);vm.resume()}
  DisposableEffect(owner){val observer=LifecycleEventObserver{_,event->if(event==Lifecycle.Event.ON_STOP)vm.flush()};owner.lifecycle.addObserver(observer);onDispose{vm.flush();onInteraction(false);owner.lifecycle.removeObserver(observer)}}
  LaunchedEffect(state.restoreSerial,list){
@@ -75,16 +82,25 @@ fun LibraryRoute(vm:LibraryViewModel,thumbnail:(Connection,Media)->String,c:Conn
   }
  }}
  Box(Modifier.fillMaxSize().background(Color.Black)){
-  AnimatedContent(state,contentKey={it.directory?.id},modifier=Modifier.graphicsLayer{translationX=size.width*predictive},transitionSpec={
-   val returning=targetState.directory==null||initialState.directory?.parentId==targetState.directory?.id
+  // AnimatedContent discards the page being left when its target changes during
+  // the transition, so the target is the directory id and never the whole state.
+  AnimatedContent(state.directory?.id,modifier=Modifier.graphicsLayer{translationX=size.width*predictive},transitionSpec={
+   val returning=shown.returning
    val ms=if(!animations)0 else if(returning)220 else 260
-   (slideInHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)-it/4 else it}+fadeIn(tween(ms),initialAlpha=if(returning).85f else 1f)) togetherWith
-    (slideOutHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)it else -it/4}+fadeOut(tween(ms),targetAlpha=if(returning)1f else .85f))
-  },label="directory"){screen->
-   // The outgoing page retains its own list for the bounded transition; only
-   // the current page's list participates in viewport persistence/pagination.
-   val screenList=remember(screen.directory?.id){list}
-   LibraryScreen(screen,loader,c,thumbnail,screenList,onSettings,vm::back,vm::openDirectory,vm::sort,vm::moreChildren,{screen.directory?.let{vm.open(it.id,refresh=true,kind=screen.kind)}?:vm.connect(c.copy(lastDirectory=0),refresh=true)},onMedia,vm::filter,vm::jumpToStart,vm::hideRecent,onDetails,onConnection)
+   val from=initialState;val to=targetState
+   val layer=if(from==to)layers[to]?:0f else (layers[from]?:0f)+if(returning)-1f else 1f
+   if(from!=to){layers.keys.retainAll(setOf(from));layers[to]=layer}
+   ((slideInHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)-it/4 else it}+fadeIn(tween(ms),initialAlpha=if(returning).85f else 1f)) togetherWith
+    (slideOutHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)it else -it/4}+fadeOut(tween(ms),targetAlpha=if(returning)1f else .85f))).apply{targetContentZIndex=layer}
+  },label="directory"){id->
+   // The current page follows live state and the list that restoration,
+   // pagination and viewport persistence observe; a page being left keeps
+   // the last state and list it showed for the bounded transition. A page
+   // returned to before it was disposed takes the current list again.
+   val page=remember{object{var latest=state;var shownList=list}}
+   if(state.directory?.id==id){page.latest=state;page.shownList=list}
+   val screen=page.latest
+   LibraryScreen(screen,loader,c,thumbnail,page.shownList,onSettings,vm::back,vm::openDirectory,vm::sort,vm::moreChildren,{screen.directory?.let{vm.open(it.id,refresh=true,kind=screen.kind)}?:vm.connect(c.copy(lastDirectory=0),refresh=true)},onMedia,vm::filter,vm::jumpToStart,vm::hideRecent,onDetails,onConnection)
   }
  }
 

@@ -51,8 +51,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 @UnstableApi
 @Composable
-fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspend(String)->PlaybackSession,release:suspend(PlaybackSession)->Unit,onBack:()->Unit,onInteraction:(Boolean)->Unit,initialSelectionMs:Long=0L){
- val state by vm.state.collectAsStateWithLifecycle()
+fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspend(String)->PlaybackSession,release:suspend(PlaybackSession)->Unit,onBack:()->Unit,onInteraction:(Boolean)->Unit,initialSelectionMs:Long=0L,leaving:Boolean=false){
+ val live by vm.state.collectAsStateWithLifecycle()
+ val state by rememberUpdatedState(retainedWhileLeaving(live,leaving))
  var session by remember{mutableStateOf<PlaybackSession?>(null)}
  val pager=rememberPagerState(pageCount={state.items.size})
  val owner=LocalLifecycleOwner.current
@@ -74,8 +75,9 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
  val activity=androidx.activity.compose.LocalActivity.current
  val orientation=androidx.compose.ui.platform.LocalConfiguration.current.orientation
  val isLandscape=orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE
- val originalOrientation=remember(activity){activity?.requestedOrientation?:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED}
- DisposableEffect(activity){onDispose{activity?.requestedOrientation=originalOrientation}}
+ // Read in the effect, after a route this one replaces has restored its own
+ // request; composition would still see that route's landscape lock.
+ DisposableEffect(activity){val originalOrientation=activity?.requestedOrientation?:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;onDispose{activity?.requestedOrientation=originalOrientation}}
  androidx.activity.compose.BackHandler(isLandscape){activity?.requestedOrientation=android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT}
  var holding by remember{mutableStateOf(false)}
  var seekSeconds by remember{mutableIntStateOf(0)}
@@ -87,14 +89,17 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
  val accessibility=LocalAccessibilityManager.current
  val active=session
  if(active!=null){val playback by active.state.collectAsStateWithLifecycle()
-  DisposableEffect(active){val listener=object:Player.Listener{override fun onIsPlayingChanged(value:Boolean){playing=value}};active.player.addListener(listener);onDispose{active.player.removeListener(listener)}}
+  // A leaving page keeps its last frame and controls: it pauses at once so no
+  // sound outlives the tap, stops tracking the player, and sends no further
+  // commands to the session or ViewModel. Release still follows disposal.
+  DisposableEffect(active,leaving){if(leaving)return@DisposableEffect onDispose{};playing=active.player.isPlaying;val listener=object:Player.Listener{override fun onIsPlayingChanged(value:Boolean){playing=value}};active.player.addListener(listener);onDispose{active.player.removeListener(listener)}}
   LaunchedEffect(playing,playback.error,dragging,detailsOpen,menuOpen,controlFocused,pager.settledPage,interactionSerial,controlsVisible){
    if(!playing||playback.error||dragging||detailsOpen||menuOpen||controlFocused)controlsVisible=true
    else if(controlsVisible){delay(accessibility?.calculateRecommendedTimeoutMillis(3000,containsIcons=true,containsText=true,containsControls=true)?:3000);controlsVisible=false}
   }
-  LaunchedEffect(active,pager,foreground,state.items.getOrNull(pager.settledPage)?.version){snapshotFlow{pager.settledPage to pager.isScrollInProgress}.distinctUntilChanged().collect{(index,moving)->onInteraction(moving);if(moving||!foreground)active.pause()else latestItems.getOrNull(index)?.let{vm.selected(it.id);active.select(it.playback(c),if(it.id==state.initialId&&active.state.value.id.isEmpty()&&initialSelectionMs>0)initialSelectionMs else android.os.SystemClock.elapsedRealtime())}}}
-  LaunchedEffect(active,playback.firstFrame,playback.buffering,pager.settledPage,state.items){if(playback.firstFrame&&!playback.buffering&&!pager.isScrollInProgress&&foreground)active.preload(state.items.getOrNull(pager.settledPage+1)?.playback(c))}
-  LaunchedEffect(pager,state.items.size){snapshotFlow{pager.settledPage}.distinctUntilChanged().collect{index->if(index>=state.items.size-3)vm.page(false);if(index<2&&state.items.isNotEmpty())vm.page(true)}}
+  LaunchedEffect(active,pager,foreground,leaving,state.items.getOrNull(pager.settledPage)?.version){if(leaving){active.pause();return@LaunchedEffect};snapshotFlow{pager.settledPage to pager.isScrollInProgress}.distinctUntilChanged().collect{(index,moving)->onInteraction(moving);if(moving||!foreground)active.pause()else latestItems.getOrNull(index)?.let{vm.selected(it.id);active.select(it.playback(c),if(it.id==state.initialId&&active.state.value.id.isEmpty()&&initialSelectionMs>0)initialSelectionMs else android.os.SystemClock.elapsedRealtime())}}}
+  LaunchedEffect(active,playback.firstFrame,playback.buffering,pager.settledPage,state.items,leaving){if(playback.firstFrame&&!playback.buffering&&!pager.isScrollInProgress&&foreground&&!leaving)active.preload(state.items.getOrNull(pager.settledPage+1)?.playback(c))}
+  LaunchedEffect(pager,state.items.size,leaving){if(leaving)return@LaunchedEffect;snapshotFlow{pager.settledPage}.distinctUntilChanged().collect{index->if(index>=state.items.size-3)vm.page(false);if(index<2&&state.items.isNotEmpty())vm.page(true)}}
   LaunchedEffect(playback.id){active.player.setPlaybackSpeed(1f);seekSeconds=0}
   LaunchedEffect(seekAt){if(seekSeconds>0){delay(600);seekSeconds=0}}
   val edgeFeedback=remember(pager,state.endReached,lastVideo){object:NestedScrollConnection{
@@ -125,7 +130,7 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
    }
    androidx.compose.animation.AnimatedVisibility(controlsVisible,Modifier.align(Alignment.TopCenter),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(150))){PlayerChrome(currentItem,active.player,onBack,{detailsOpen=true},{bulletin=copied},onMenuChanged={menuOpen=it})}
    Box(Modifier.align(Alignment.BottomCenter).then(if(controlsVisible)Modifier.background(BottomViewerGradient).padding(top=40.dp)else Modifier).navigationBarsPadding()){
-    SeekBar(active.player,playback.id,!pager.isScrollInProgress&&playback.firstFrame&&!playback.error,controlsVisible,currentItem?.displayRatio?.let{it>1f}==true,{activity?.requestedOrientation=if(isLandscape)android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE},Modifier.onFocusChanged{controlFocused=it.hasFocus}){dragging=it;interactionSerial++}
+    SeekBar(active.player,playback.id,!pager.isScrollInProgress&&playback.firstFrame&&!playback.error,controlsVisible,currentItem?.displayRatio?.let{it>1f}==true,{activity?.requestedOrientation=if(isLandscape)android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE},Modifier.onFocusChanged{controlFocused=it.hasFocus},leaving){dragging=it;interactionSerial++}
    }
    if(!playing&&playback.firstFrame&&!playback.error&&!playback.buffering&&!pager.isScrollInProgress)dev.vvideo.ui.component.ActionIcon(R.drawable.ic_play,R.string.play,{active.player.play()},Modifier.align(Alignment.Center).size(64.dp).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),Color.White)
    if(holding)Text(stringResource(R.string.speed_hold),Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=72.dp).background(Color.Black.copy(alpha=.5f),androidx.compose.foundation.shape.CircleShape).padding(12.dp),color=Color.White)

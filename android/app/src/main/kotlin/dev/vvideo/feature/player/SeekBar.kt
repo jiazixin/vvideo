@@ -21,11 +21,12 @@ import dev.vvideo.ui.component.*
 import kotlinx.coroutines.delay
 
 @Composable
-fun SeekBar(player:Player,mediaId:String,enabled:Boolean,visible:Boolean,landscape:Boolean,onLandscape:()->Unit,modifier:Modifier=Modifier,onDragging:(Boolean)->Unit){
+fun SeekBar(player:Player,mediaId:String,enabled:Boolean,visible:Boolean,landscape:Boolean,onLandscape:()->Unit,modifier:Modifier=Modifier,frozen:Boolean=false,onDragging:(Boolean)->Unit){
  var position by remember(mediaId){mutableLongStateOf(0)};var duration by remember(mediaId){mutableLongStateOf(0)};var buffered by remember(mediaId){mutableLongStateOf(0)}
  var playing by remember(player){mutableStateOf(player.isPlaying)};var speed by remember(player){mutableFloatStateOf(player.playbackParameters.speed)}
  var dragging by remember(mediaId){mutableStateOf(false)};var target by remember(mediaId){mutableFloatStateOf(0f)}
- DisposableEffect(player){val listener=object:Player.Listener{override fun onIsPlayingChanged(value:Boolean){playing=value};override fun onPlaybackParametersChanged(value:androidx.media3.common.PlaybackParameters){speed=value.speed}};player.addListener(listener);onDispose{player.removeListener(listener)}}
+ // A frozen bar keeps the play state it last showed while its page leaves.
+ DisposableEffect(player,frozen){if(frozen)return@DisposableEffect onDispose{};playing=player.isPlaying;speed=player.playbackParameters.speed;val listener=object:Player.Listener{override fun onIsPlayingChanged(value:Boolean){playing=value};override fun onPlaybackParametersChanged(value:androidx.media3.common.PlaybackParameters){speed=value.speed}};player.addListener(listener);onDispose{player.removeListener(listener)}}
  // Progress reads stay in this subtree, never the page or pager.
  LaunchedEffect(player,mediaId){while(true){duration=player.duration.coerceAtLeast(0);position=player.currentPosition.coerceAtLeast(0);buffered=player.bufferedPosition.coerceAtLeast(0);delay(250)}}
  DisposableEffect(mediaId){onDispose{onDragging(false)}}
