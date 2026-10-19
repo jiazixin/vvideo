@@ -7,7 +7,7 @@
 1. 用仓库 `deploy/vvideo.service` 适配已核实的 `ops` 账户及 `/home/ops/vvideo-runtime` 路径。配置仍位于私有 `configs/test.local.yaml`，令牌不进入 unit；数据库和封面分别位于 `data/`、`.cache/`，源媒体为用户指定的 `~/vvideo`，位于运行根外，只读访问。
 2. 将配置监听由回环改为 **NAS 的一个已核实内网 IPv4:8080**，不监听全部接口。安装为 `/etc/systemd/system/vvideo.service`，设为开机自启，并停止同数据库的临时服务，避免两个写者。
 3. 在 `public` 区只允许本次手机的当前 IPv4 `/32` 访问 TCP 8080，分别写入 runtime 与 permanent。不开整个网段；手机 DHCP 地址变化后需明确更新规则。
-4. Android 内网构建的 `lanHttpHost` 只匹配该 NAS IPv4。设置页改用该内网 URL；完成不依赖 USB/SSH 的连接、Range 和真机播放验证后才记录成功。
+4. Android 已允许任意主机的 HTTP，无需按 NAS 地址单独构建。设置页改用该内网 URL；完成不依赖 USB/SSH 的连接、Range 和真机播放验证后才记录成功。
 
 该内网 HTTP 方案使用 Bearer 令牌，不加密局域网链路。限定监听和 `/32` 防火墙减少可达范围，但不能抵御同网链路窃听；需要链路保密时应使用可信 HTTPS。公网部署不在本版范围。
 

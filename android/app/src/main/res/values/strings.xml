@@ -37,7 +37,7 @@
  <string name="position_restored">已恢复浏览位置</string>
  <string name="anchor_missing">原媒体已不可用，已定位到相邻位置。</string>
  <string name="library_unhealthy">媒体目录离线或扫描失败，当前显示保留的索引。</string>
- <string name="connection_hint">HTTPS 地址可直接使用；HTTP 只允许本版本构建时指定的内网服务器。</string>
+ <string name="connection_hint">支持 HTTP 和 HTTPS 地址，例如 http://192.168.1.10:8080。</string>
  <string name="memory_note">磁盘配额与播放内存预算独立，不会预先占满空间。</string>
  <string name="media_details">媒体详情</string>
  <string name="close">关闭</string>

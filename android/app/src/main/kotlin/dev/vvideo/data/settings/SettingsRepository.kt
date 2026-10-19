@@ -3,7 +3,6 @@ package dev.vvideo.data.settings
 import android.content.Context
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
-import dev.vvideo.R
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.map
 
@@ -24,10 +23,10 @@ class SettingsRepository(private val context: Context) {
  private val recent = longPreferencesKey("recent")
  val connection = context.settings.data.map { Connection(it[address].orEmpty(), it[token].orEmpty(), it[budget] ?: 5_000_000_000L, it[recent] ?: 0L) }
  fun candidate(url:String,credential:String):Connection {
-  val canonical=ConnectionPolicy.canonical(url,context.getString(R.string.trusted_lan_http_host));require(credential.isNotBlank());return Connection(canonical,credential)
+  val canonical=ConnectionPolicy.canonical(url);require(credential.isNotBlank());return Connection(canonical,credential)
  }
  suspend fun connect(url: String, credential: String) {
-  val canonical = ConnectionPolicy.canonical(url,context.getString(R.string.trusted_lan_http_host))
+  val canonical = ConnectionPolicy.canonical(url)
   require(credential.isNotBlank())
   context.settings.edit { if (it[address] != canonical) it.remove(recent); it[address] = canonical; it[token] = credential }
  }

@@ -49,7 +49,7 @@ android/gradlew -p android :app:assembleProfile :benchmark:assembleProfile
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-设置中填写服务根 URL 与令牌。远端允许 HTTPS；HTTP 限于 loopback，以及构建时明确指定的**一个 RFC1918 私有 IPv4 服务地址**。构建内网版本时，在每条 Gradle 构建命令加上 `-PlanHttpHost=<服务端私有IPv4>`。其他远端 HTTP 仍被拒绝，没有全局明文开关。不传该参数时，直接内网访问需要可信 HTTPS。
+设置中填写服务根 URL 与令牌。任意主机均可使用 HTTP 或 HTTPS，例如 `http://192.168.1.10:8080`，构建时无需额外参数。HTTP 不加密链路，同一网络内可以读取令牌和媒体内容。
 
 提供的测试机上，用户指定的 `~/vvideo` 是媒体根；运行文件、SQLite 和缓存独立放在 `~/vvideo-runtime`。本次真机测试通过 SSH 隧道和 ADB reverse 连接。开机服务及防火墙属于部署操作，尚未在提供的机器上完成。
 ```sh

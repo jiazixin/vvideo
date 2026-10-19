@@ -49,7 +49,7 @@ android/gradlew -p android :app:assembleProfile :benchmark:assembleProfile
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Enter the server root URL and token in Settings. HTTPS is accepted for remote hosts. HTTP is scoped to loopback and, when explicitly selected at build time, **one RFC1918 IPv4 server address**. For a private LAN build, add `-PlanHttpHost=<server-private-IPv4>` to each Gradle build command. Other remote HTTP hosts remain blocked; there is no global cleartext exception. Without that property, direct LAN access needs trusted HTTPS.
+Enter the server root URL and token in Settings. Both HTTP and HTTPS are accepted for any host, for example `http://192.168.1.10:8080`; no special build property is needed. HTTP does not encrypt the link, so the token and media bytes are readable by anyone on the same network.
 
 On the supplied test machine, the requested `~/vvideo` is the media root; runtime files, SQLite and caches are separate in `~/vvideo-runtime`. The recorded device tests use an SSH tunnel plus ADB reverse. Persistent service activation and firewall changes are separate deployment actions and have not been completed on the supplied machine.
 ```sh
