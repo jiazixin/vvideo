@@ -207,9 +207,13 @@ func (a *App) thumbnail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if item.Status == "discovered" || item.Status == "unsupported" {
+	switch item.Status {
+	case "discovered": // metadata is still being probed
 		w.Header().Set("Retry-After", "2")
-		writeJSON(w, http.StatusNotFound, errorBody("thumbnail_pending_or_unsupported"))
+		writeJSON(w, http.StatusNotFound, errorBody("thumbnail_pending"))
+		return
+	case "unsupported", "failed": // permanent for this version
+		writeJSON(w, http.StatusNotFound, errorBody("thumbnail_unavailable"))
 		return
 	}
 	f, release, err := a.Thumbnails.Open(item)

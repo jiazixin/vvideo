@@ -176,3 +176,29 @@ func TestHTTPErrorsAreJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestDirtyDirectoriesTakeTurns(t *testing.T) {
+	index, scan, root := setup(t)
+	for _, name := range []string{"a", "b"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scan.Run(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	var order []int64
+	after := int64(0)
+	for range 4 {
+		id, err := index.DirtyDirectory(t.Context(), after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		order = append(order, id)
+		after = id
+	}
+	// Three stale directories (root, a, b) are visited in turn and then wrap.
+	if order[0] == order[1] || order[1] == order[2] || order[3] != order[0] {
+		t.Fatalf("directories do not take turns: %v", order)
+	}
+}

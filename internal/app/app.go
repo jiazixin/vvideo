@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,6 +32,10 @@ const (
 	// groupSettle is how long a directory revision must stay unchanged before
 	// its album anchors are rebuilt, so bursts of probe results coalesce.
 	groupSettle = 700 * time.Millisecond
+	groupRetry  = time.Minute
+	// sortPublishInterval batches capture-time reorders from probes, so a
+	// large import changes each directory's revision at most this often.
+	sortPublishInterval = 20 * time.Second
 )
 
 type App struct {
@@ -136,6 +141,7 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	})
 	a.wg.Go(func() { a.groupLoop(ctx) })
+	a.wg.Go(func() { a.sortLoop(ctx) })
 	prober := &probe.Worker{Queue: a.Queue, Parameters: a.Thumbnails.Parameters, Now: time.Now, Rescan: func() { a.Trigger(false) }}
 	for range probeWorkers {
 		a.wg.Go(func() { a.Queue.Worker(ctx, "probe", a.Priority, timed(&a.probeNS, prober.Run)) })
@@ -172,10 +178,9 @@ func (a *App) scanLoop(ctx context.Context) {
 	}
 }
 
-// groupLoop rebuilds ten-item album anchors for directories whose revision
-// changed, while no media is playing.
-func (a *App) groupLoop(ctx context.Context) {
-	tick := time.NewTicker(groupSettle)
+// sortLoop publishes capture times found by probes while no media is playing.
+func (a *App) sortLoop(ctx context.Context) {
+	tick := time.NewTicker(sortPublishInterval)
 	defer tick.Stop()
 	for {
 		select {
@@ -186,18 +191,54 @@ func (a *App) groupLoop(ctx context.Context) {
 		if !a.Priority.Ready() {
 			continue
 		}
-		err := a.rebuildDirtyGroups(ctx)
-		if err != nil && ctx.Err() == nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, library.ErrConflict) {
-			slog.Warn("album_groups_failed", "error", err.Error())
+		if _, err := a.Index.PublishProbedTimes(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("sort_publish_failed", "error", err.Error())
 		}
 	}
 }
 
-func (a *App) rebuildDirtyGroups(ctx context.Context) error {
-	id, err := a.Index.DirtyDirectory(ctx)
-	if err != nil {
-		return err
+// groupLoop rebuilds ten-item album anchors for directories whose revision
+// changed, while no media is playing. Directories take turns, and one that
+// fails waits groupRetry so it can neither starve the others nor flood the log.
+func (a *App) groupLoop(ctx context.Context) {
+	tick := time.NewTicker(groupSettle)
+	defer tick.Stop()
+	var after int64
+	retryAt := map[int64]time.Time{}
+	var lastQueryWarning time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if !a.Priority.Ready() {
+			continue
+		}
+		id, err := a.Index.DirtyDirectory(ctx, after)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil && time.Since(lastQueryWarning) >= groupRetry {
+				lastQueryWarning = time.Now()
+				slog.Warn("album_groups_failed", "error", err.Error())
+			}
+			continue
+		}
+		after = id
+		now := time.Now()
+		maps.DeleteFunc(retryAt, func(_ int64, at time.Time) bool { return !now.Before(at) })
+		if _, waiting := retryAt[id]; waiting {
+			continue
+		}
+		err = a.rebuildGroups(ctx, id)
+		if err != nil && ctx.Err() == nil && !errors.Is(err, library.ErrConflict) {
+			retryAt[id] = now.Add(groupRetry)
+			slog.Warn("album_groups_failed", "directory_id", id, "error", err.Error())
+		}
 	}
+}
+
+// rebuildGroups waits for the directory revision to settle, then rebuilds.
+func (a *App) rebuildGroups(ctx context.Context, id int64) error {
 	before, err := a.Index.Directory(ctx, id)
 	if err != nil {
 		return err

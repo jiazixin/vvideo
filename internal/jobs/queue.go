@@ -16,6 +16,8 @@ const (
 	retryDelay  = 30 * time.Second
 	leaseTime   = 2 * time.Minute
 	idlePoll    = 200 * time.Millisecond
+	// maxClaimBackoff caps the retry delay while claiming keeps failing.
+	maxClaimBackoff = 30 * time.Second
 )
 
 type Job struct {
@@ -61,6 +63,10 @@ func (q *Queue) Claim(ctx context.Context, kind string, foregroundOnly bool) (Jo
 	}
 	return j, err
 }
+
+// Finish records a running job's outcome. "retry" requeues it after
+// retryDelay until MaxAttempts, then fails it. A failed job also marks its
+// media version failed so clients stop waiting for metadata or a cover.
 func (q *Queue) Finish(ctx context.Context, j Job, state, code string) error {
 	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		due := q.Now().Add(retryDelay).UnixMilli()
@@ -70,10 +76,27 @@ func (q *Queue) Finish(ctx context.Context, j Job, state, code string) error {
 				state = "failed"
 			}
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state=?,error=?,due=?,lease=0 WHERE id=? AND state='running'", state, code, due, j.ID)
+		result, err := tx.ExecContext(ctx, "UPDATE jobs SET state=?,error=?,due=?,lease=0 WHERE id=? AND state='running'", state, code, due, j.ID)
+		if err != nil || state != "failed" {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE versions SET status='failed',error=? WHERE media_id=? AND version=? AND status!='ready'", code, j.MediaID, j.Version)
 		return err
 	})
 }
+
+// Release returns a job interrupted by shutdown to the queue without counting
+// the attempt against it.
+func (q *Queue) Release(ctx context.Context, j Job) error {
+	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',attempts=max(0,attempts-1),lease=0 WHERE id=? AND state='running'", j.ID)
+		return err
+	})
+}
+
 func (q *Queue) Delay(ctx context.Context, j Job, fingerprint string) error {
 	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',due=?,first_observed=?,fingerprint=?,attempts=0,lease=0 WHERE id=?", q.Now().Add(60*time.Second).UnixMilli(), q.Now().UnixMilli(), fingerprint, j.ID)
@@ -94,46 +117,60 @@ func (q *Queue) EnqueueThumbnail(ctx context.Context, e library.Entry, parameter
 // Worker claims and runs jobs of one kind until ctx is cancelled. Probes run
 // only while no media is playing; covers then run only for foreground requests.
 func (q *Queue) Worker(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) {
+	wait := idlePoll
 	for ctx.Err() == nil {
-		if q.runNext(ctx, kind, priority, run) {
+		claimed, err := q.runNext(ctx, kind, priority, run)
+		if claimed {
+			wait = idlePoll
 			continue
+		}
+		if err != nil && ctx.Err() == nil {
+			// A failing database is retried with backoff, logged once per step.
+			wait = min(wait*2, maxClaimBackoff)
+			slog.Warn("job_claim_failed", "kind", kind, "retry_in", wait.String(), "error", err.Error())
+		} else if err == nil {
+			wait = idlePoll
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(idlePoll):
+		case <-time.After(wait):
 		}
 	}
 }
 
-// runNext reports whether it claimed a job.
-func (q *Queue) runNext(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) bool {
+// runNext reports whether it claimed a job, or the claim error other than
+// "nothing to do".
+func (q *Queue) runNext(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) (bool, error) {
 	background := priority.Ready()
 	if kind == "probe" && !background {
-		return false
+		return false, nil
 	}
 	j, err := q.Claim(ctx, kind, !background)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-			slog.Warn("job_claim_failed", "kind", kind, "error", err.Error())
-		}
-		return false
+		return false, err
 	}
 	if e, err := q.Index.Media(ctx, j.MediaID); err != nil || e.Version != j.Version {
 		q.Finish(ctx, j, "stale", "version_unavailable")
-		return true
+		return true, nil
 	}
-	err = run(ctx, j)
-	if err == nil {
-		return true
-	}
-	state := "retry"
-	if errors.Is(err, library.ErrConflict) {
-		state = "stale"
-	} else if j.Attempts >= MaxAttempts && ctx.Err() == nil {
-		slog.Warn("job_failed", "kind", kind, "media_id", j.MediaID, "attempts", j.Attempts, "error", err.Error())
+	if err = run(ctx, j); err == nil {
+		return true, nil
 	}
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	q.Finish(finishCtx, j, state, "tool_or_source_failure")
-	return true
+	switch {
+	case ctx.Err() != nil:
+		q.Release(finishCtx, j)
+	case errors.Is(err, library.ErrConflict):
+		q.Finish(finishCtx, j, "stale", "version_changed")
+	default:
+		if j.Attempts >= MaxAttempts {
+			slog.Warn("job_failed", "kind", kind, "media_id", j.MediaID, "attempts", j.Attempts, "error", err.Error())
+		}
+		q.Finish(finishCtx, j, "retry", kind+"_failed")
+	}
+	return true, nil
 }

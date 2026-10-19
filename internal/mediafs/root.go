@@ -92,7 +92,9 @@ func (r *Root) OpenFile(relative string) (*os.File, error) {
 		}
 		fd = next
 	}
-	return os.NewFile(uintptr(fd), filepath.Join(r.Path, relative)), nil
+	// Name the file by its root-relative path: it appears in error messages,
+	// which must not carry full media paths into logs.
+	return os.NewFile(uintptr(fd), relative), nil
 }
 func (r *Root) ValidateDirectory(relative string, original fs.FileInfo) error {
 	if err := r.Validate(); err != nil {

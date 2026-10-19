@@ -194,6 +194,10 @@ func TestDurableTaskDueRetryAndObsoleteVersion(t *testing.T) {
 	if state != "failed" || attempts != 3 {
 		t.Fatalf("%s/%d", state, attempts)
 	}
+	var status string
+	if e = i.Store.Reader.QueryRow("SELECT status FROM versions WHERE media_id=? AND version=?", j.MediaID, j.Version).Scan(&status); e != nil || status != "failed" {
+		t.Fatal("exhausted job left its version waiting", status, e)
+	}
 	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("second version"), 0600)
 	if e = s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
@@ -429,9 +433,23 @@ func TestProbePublicationInterleavingAndLateOldResult(t *testing.T) {
 		t.Fatal(e)
 	}
 	s.Fault = nil
+	before, e := i.Directory(t.Context(), 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 1 {
+		t.Fatal("probed capture time was not published once", moved, e)
+	}
+	after, e := i.Directory(t.Context(), 1)
+	if e != nil || after.Revision != before.Revision+1 {
+		t.Fatal("reorder did not change the directory revision exactly once", before.Revision, after.Revision, e)
+	}
 	current, e := i.Media(t.Context(), j.MediaID)
 	if e != nil || current.EffectiveTime != 123456 || current.Width != 1920 {
 		t.Fatal("publication overwrote probe result", e, current)
+	}
+	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 0 {
+		t.Fatal("published capture times were applied twice", moved, e)
 	}
 	// The old tool finishes after a rescan published a replacement. Neither its
 	// metadata nor thumbnail intent may be attached to that replacement version.
@@ -685,5 +703,75 @@ func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
 	}
 	if _, err = q.Claim(t.Context(), "probe", false); err != nil {
 		t.Fatal("published job remained unavailable", err)
+	}
+}
+
+func TestShutdownInterruptedJobKeepsItsAttempts(t *testing.T) {
+	i, s, root := setup(t)
+	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("first"), 0600)
+	if e := s.Run(t.Context(), false); e != nil {
+		t.Fatal(e)
+	}
+	later := time.Now().Add(2 * time.Minute)
+	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return later }}
+	for round := range 5 {
+		ctx, cancel := context.WithCancel(t.Context())
+		ran := false
+		q.Worker(ctx, "probe", jobs.NewPriority(), func(ctx context.Context, j jobs.Job) error {
+			ran = true
+			cancel() // shutdown arrives while the tool runs
+			return ctx.Err()
+		})
+		cancel()
+		if !ran {
+			t.Fatalf("round %d: job was not claimed", round)
+		}
+	}
+	var state string
+	var attempts int
+	if e := i.Store.Reader.QueryRow("SELECT state,attempts FROM jobs WHERE kind='probe'").Scan(&state, &attempts); e != nil {
+		t.Fatal(e)
+	}
+	if state != "queued" || attempts != 0 {
+		t.Fatalf("interrupted job became %s with %d attempts", state, attempts)
+	}
+}
+
+func TestManyProbesChangeDirectoryRevisionOnce(t *testing.T) {
+	i, s, root := setup(t)
+	for n := range 20 {
+		os.WriteFile(filepath.Join(root, fmt.Sprintf("v%02d.mp4", n)), []byte{byte(n)}, 0600)
+	}
+	if e := s.Run(t.Context(), false); e != nil {
+		t.Fatal(e)
+	}
+	later := time.Now().Add(2 * time.Minute)
+	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return later }}
+	worker := probe.Worker{Queue: q, Now: q.Now, Parameters: probe.Parameters(10), Tool: func(_ context.Context, _ *os.File, e library.Entry) (probe.Result, error) {
+		return probe.Result{Width: 2, Height: 2, DurationMS: 1000, EffectiveTime: e.Mtime - int64(time.Hour), CapturedSource: "fixture"}, nil
+	}}
+	before, e := i.Directory(t.Context(), 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for range 20 {
+		j, e := q.Claim(t.Context(), "probe", false)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = worker.Run(t.Context(), j); e != nil {
+			t.Fatal(e)
+		}
+	}
+	unpublished, e := i.Directory(t.Context(), 1)
+	if e != nil || unpublished.Revision != before.Revision {
+		t.Fatal("probe results changed the revision before publication", e)
+	}
+	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 20 {
+		t.Fatal(moved, e)
+	}
+	after, e := i.Directory(t.Context(), 1)
+	if e != nil || after.Revision != before.Revision+1 {
+		t.Fatalf("revision moved %d times for one batch", after.Revision-before.Revision)
 	}
 }

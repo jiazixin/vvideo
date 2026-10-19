@@ -86,8 +86,11 @@ func serve(configFile string) error {
 	server := &http.Server{
 		Handler:           a.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		// Media streams extend their own write deadline after every write, so
+		// this bounds stalled API responses without limiting long playback.
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 16 << 10,
 	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()

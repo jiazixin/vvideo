@@ -204,13 +204,14 @@ func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE versions SET width=?,height=?,rotation=?,duration_ms=?,captured_raw=?,captured_source=?,effective_time=?,status='probe_ready' WHERE media_id=? AND version=?`, r.Width, r.Height, r.Rotation, r.DurationMS, r.CapturedRaw, r.CapturedSource, r.EffectiveTime, e.ID, e.Version); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE entries SET effective_time=? WHERE media_id=? AND version=?", r.EffectiveTime, e.ID, e.Version); err != nil {
-			return err
+		// A changed capture time reorders the directory. Leave it for
+		// Index.PublishProbedTimes, which applies many results per revision
+		// change so clients are not forced to relocate after every probe.
+		state := "done"
+		if r.EffectiveTime != e.EffectiveTime {
+			state = "probed"
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE directories SET revision=revision+1 WHERE id=?", e.DirectoryID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE jobs SET state='done',lease=0 WHERE id=?", j.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE jobs SET state=?,lease=0 WHERE id=?", state, j.ID); err != nil {
 			return err
 		}
 		if e.Kind == "video" && r.DurationMS <= 0 {

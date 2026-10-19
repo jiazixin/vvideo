@@ -284,9 +284,24 @@ func (i *Index) Publish(ctx context.Context, d Directory, gen int64, identity st
 	})
 }
 
+// staleMemberships is true for a directory row d that still has unpublished
+// or superseded memberships. Each branch is a primary-key range probe.
+const staleMemberships = `(EXISTS(SELECT 1 FROM entries WHERE directory_id=d.id AND generation<d.generation)
+ OR EXISTS(SELECT 1 FROM entries WHERE directory_id=d.id AND generation>d.generation)
+ OR EXISTS(SELECT 1 FROM builds WHERE directory_id=d.id))`
+
 // Cleanup removes only unpublished/old memberships in bounded, revalidated
-// transactions. Version/history records remain available for diagnosis.
+// transactions. Version/history records remain available for diagnosis. A
+// read-only check first keeps unchanged directories from costing commits.
 func (i *Index) Cleanup(ctx context.Context, id int64) error {
+	var stale bool
+	err := i.Store.Reader.QueryRowContext(ctx, "SELECT "+staleMemberships+" FROM directories d WHERE d.id=?", id).Scan(&stale)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil || !stale {
+		return err
+	}
 	for {
 		n := int64(0)
 		err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
@@ -309,10 +324,13 @@ func (i *Index) Cleanup(ctx context.Context, id int64) error {
 		return err
 	})
 }
+
+// Recover finishes work interrupted by a crash: it cleans directories with
+// stale memberships and requeues running jobs.
 func (i *Index) Recover(ctx context.Context) error {
 	var after int64
 	for {
-		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id FROM directories WHERE id>? ORDER BY id LIMIT 128", after)
+		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT 128", after)
 		if err != nil {
 			return err
 		}

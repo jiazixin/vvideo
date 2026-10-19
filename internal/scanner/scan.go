@@ -104,7 +104,7 @@ func (s *Scanner) scanRoot(ctx context.Context, st *stage, l library.Library, fo
 	}()
 	root, err := mediafs.Open(l.Root)
 	if err != nil {
-		return err
+		return fmt.Errorf("media root unavailable (offline, unmounted or not readable): %w", err)
 	}
 	defer root.Close()
 	if l.Identity != "" && !root.Matches(l.Identity) {
@@ -315,11 +315,15 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 			s.Metrics.Changed.Add(changed)
 		} else {
 			s.Metrics.Unchanged.Add(1)
-			if err = s.Index.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, "UPDATE directories SET observed_round=?,state='visible',missing_streak=0 WHERE id=?", round, d.ID)
-				return err
-			}); err != nil {
-				return err
+			// Index.Child already marked subdirectories observed in this round;
+			// only the library root needs its own write.
+			if d.ParentID == 0 {
+				if err = s.Index.Store.Write(ctx, 0, func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, "UPDATE directories SET observed_round=?,state='visible',missing_streak=0 WHERE id=?", round, d.ID)
+					return err
+				}); err != nil {
+					return err
+				}
 			}
 		}
 		if _, err = st.db.ExecContext(ctx, `INSERT INTO walk(parent,name,relative,identity) SELECT ?,name,CASE WHEN ?='.' THEN name ELSE ?||'/'||name END,fingerprint FROM observation WHERE pass=2 AND directory=1`, d.ID, d.Relative, d.Relative); err != nil {
@@ -389,18 +393,18 @@ func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round 
 	}
 	var after int64
 	for {
-		rows, err := s.Index.Store.Reader.QueryContext(ctx, "SELECT id,relative FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT 128", l.ID, after)
+		rows, err := s.Index.Store.Reader.QueryContext(ctx, "SELECT id,relative,observed_round,state,missing_streak FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT 128", l.ID, after)
 		if err != nil {
 			return err
 		}
 		type item struct {
-			id  int64
-			rel string
+			id, seen, streak int64
+			rel, state       string
 		}
 		batch := []item{}
 		for rows.Next() {
 			var x item
-			if err = rows.Scan(&x.id, &x.rel); err != nil {
+			if err = rows.Scan(&x.id, &x.rel, &x.seen, &x.state, &x.streak); err != nil {
 				rows.Close()
 				return err
 			}
@@ -417,23 +421,32 @@ func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round 
 		for _, x := range batch {
 			after = x.id
 			ignore := s.Config.IsIgnored(filepath.Join(l.Root, x.rel))
-			if err = s.Index.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-				if ignore {
-					_, err := tx.ExecContext(ctx, "UPDATE directories SET state='ignored',missing_streak=0 WHERE id=?", x.id)
+			// Only this scan writes these columns, so the reader's view decides
+			// whether a commit is needed; observed directories cost none.
+			settled := x.seen == round || x.seen == -round || x.state == "missing"
+			if ignore {
+				settled = x.state == "ignored" && x.streak == 0
+			}
+			if !settled {
+				err := s.Index.Store.Write(ctx, 0, func(tx *sql.Tx) error {
+					if ignore {
+						_, err := tx.ExecContext(ctx, "UPDATE directories SET state='ignored',missing_streak=0 WHERE id=?", x.id)
+						return err
+					}
+					var seen int64
+					var state string
+					if err := tx.QueryRowContext(ctx, "SELECT observed_round,state FROM directories WHERE id=?", x.id).Scan(&seen, &state); err != nil {
+						return err
+					}
+					if seen != round && state != "missing" {
+						_, err := tx.ExecContext(ctx, `UPDATE directories SET missing_streak=CASE WHEN observed_round=-? THEN missing_streak WHEN missing_epoch!=? THEN 1 ELSE min(2,missing_streak+1) END,state=CASE WHEN missing_epoch=? AND missing_streak>=1 AND observed_round!=-? THEN 'missing' ELSE state END,missing_epoch=?,observed_round=-? WHERE id=?`, round, epoch, epoch, round, epoch, round, x.id)
+						return err
+					}
+					return nil
+				})
+				if err != nil {
 					return err
 				}
-				var seen int64
-				var state string
-				if err := tx.QueryRowContext(ctx, "SELECT observed_round,state FROM directories WHERE id=?", x.id).Scan(&seen, &state); err != nil {
-					return err
-				}
-				if seen != round && state != "missing" {
-					_, err := tx.ExecContext(ctx, `UPDATE directories SET missing_streak=CASE WHEN observed_round=-? THEN missing_streak WHEN missing_epoch!=? THEN 1 ELSE min(2,missing_streak+1) END,state=CASE WHEN missing_epoch=? AND missing_streak>=1 AND observed_round!=-? THEN 'missing' ELSE state END,missing_epoch=?,observed_round=-? WHERE id=?`, round, epoch, epoch, round, epoch, round, x.id)
-					return err
-				}
-				return nil
-			}); err != nil {
-				return err
 			}
 			cursor := ""
 			for {

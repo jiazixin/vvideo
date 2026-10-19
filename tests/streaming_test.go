@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 	"vvideo/internal/jobs"
 	"vvideo/internal/streaming"
 )
@@ -215,5 +217,47 @@ func TestInFlightPreservedMtimeOverwriteAborts(t *testing.T) {
 	}()
 	if !aborted || response.Body.Len() == 0 || response.Body.Len() >= len(original) || !bytes.Equal(response.Body.Bytes(), original[:response.Body.Len()]) {
 		t.Fatal("preserved-mtime in-flight overwrite mixed or completed stale bytes", aborted, response.Body.Len())
+	}
+}
+
+// A real server write timeout must bound API responses but not media streams,
+// which extend their deadline after every write.
+func TestStreamOutlivesServerWriteTimeout(t *testing.T) {
+	i, scan, root := setup(t)
+	data := bytes.Repeat([]byte("0123456789abcdef"), 1<<19) // 8 MiB
+	if err := os.WriteFile(filepath.Join(root, "long.mp4"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := scan.Run(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	e := first(t, i)
+	mux := http.NewServeMux()
+	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	server := httptest.NewUnstartedServer(mux)
+	server.Config.WriteTimeout = 200 * time.Millisecond
+	server.Start()
+	defer server.Close()
+	response, err := http.Get(server.URL + "/media/" + e.ID + "?version=" + e.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	started := time.Now()
+	var received int
+	buffer := make([]byte, 256<<10)
+	for {
+		n, err := response.Body.Read(buffer)
+		received += n
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream cut after %d bytes and %s: %v", received, time.Since(started), err)
+		}
+		time.Sleep(15 * time.Millisecond) // a slow client
+	}
+	if received != len(data) || time.Since(started) < 300*time.Millisecond {
+		t.Fatalf("received %d of %d bytes in %s", received, len(data), time.Since(started))
 	}
 }
