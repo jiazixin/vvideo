@@ -26,15 +26,18 @@ func EncodeCursor(c Cursor) string {
 }
 func DecodeCursor(s string) (Cursor, error) {
 	var c Cursor
+	errCursor := fmt.Errorf("%w: malformed cursor", ErrInvalid)
 	if len(s) > 4096 {
-		return c, errors.New("invalid cursor")
+		return c, errCursor
 	}
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return c, errors.New("invalid cursor")
+		return c, errCursor
 	}
-	err = json.Unmarshal(b, &c, json.RejectUnknownMembers(true))
-	return c, err
+	if err = json.Unmarshal(b, &c, json.RejectUnknownMembers(true)); err != nil {
+		return c, errCursor
+	}
+	return c, nil
 }
 
 type ListOptions struct {
@@ -63,16 +66,16 @@ func (o *ListOptions) normalize() error {
 		o.Limit = 100
 	}
 	if o.Limit < 1 || o.Limit > 200 {
-		return errors.New("limit must be 1..200")
+		return fmt.Errorf("%w: limit must be 1..200", ErrInvalid)
 	}
 	if o.Sort != "capture" && o.Sort != "mtime" && o.Sort != "name" {
-		return errors.New("invalid sort")
+		return fmt.Errorf("%w: sort must be capture, mtime or name", ErrInvalid)
 	}
 	if o.Direction != "asc" && o.Direction != "desc" {
-		return errors.New("invalid direction")
+		return fmt.Errorf("%w: direction must be asc or desc", ErrInvalid)
 	}
 	if o.Kind != "" && o.Kind != "video" && o.Kind != "image" {
-		return errors.New("invalid kind")
+		return fmt.Errorf("%w: kind must be video or image", ErrInvalid)
 	}
 	return nil
 }
@@ -207,25 +210,26 @@ type ChildrenPage struct {
 	Previous string      `json:"previous"`
 }
 
-func (i *Index) Children(ctx context.Context, parent int64, cursor string, backwards ...bool) (ChildrenPage, error) {
+// Children pages subdirectories by name and ID. previous returns the page
+// before cursor, still in ascending order.
+func (i *Index) Children(ctx context.Context, parent int64, cursor string, previous bool) (ChildrenPage, error) {
 	p := ChildrenPage{Items: []Directory{}}
 	if err := i.Visible(ctx, parent); err != nil {
 		return p, err
 	}
-	previous := len(backwards) > 0 && backwards[0]
 	if previous && cursor == "" {
-		return p, errors.New("previous requires child cursor")
+		return p, fmt.Errorf("%w: previous requires a cursor", ErrInvalid)
 	}
 	name, id := "", int64(0)
 	if cursor != "" {
 		c, err := DecodeCursor(cursor)
 		if err != nil || c.DirectoryID != parent {
-			return p, errors.New("invalid child cursor")
+			return p, fmt.Errorf("%w: malformed child cursor", ErrInvalid)
 		}
 		name = c.Key
 		_, err = fmt.Sscan(c.ID, &id)
 		if err != nil {
-			return p, errors.New("invalid child cursor")
+			return p, fmt.Errorf("%w: malformed child cursor", ErrInvalid)
 		}
 	}
 	comparison, order := ">", "ASC"

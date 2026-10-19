@@ -7,8 +7,7 @@ Type=simple
 User=vvideo
 Group=vvideo
 WorkingDirectory=/opt/vvideo
-Environment=CONFIG_FILE=/opt/vvideo/configs/config.local.yaml
-ExecStart=/opt/vvideo/vvideo
+ExecStart=/opt/vvideo/vvideo --config /opt/vvideo/configs/config.local.yaml
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=35

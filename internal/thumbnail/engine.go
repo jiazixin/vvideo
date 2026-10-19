@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"vvideo/internal/config"
@@ -19,6 +19,33 @@ import (
 	"vvideo/internal/mediafs"
 	"vvideo/internal/probe"
 )
+
+// Encoder is the FFmpeg encoder that writes cover images.
+const Encoder = "libwebp"
+
+// CheckEncoder verifies that the ffmpeg on PATH can write covers, so a build
+// without libwebp fails at startup instead of failing every cover job.
+func CheckEncoder(ctx context.Context) error {
+	path, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var stderr probe.Diagnostics
+	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-encoders")
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return stderr.Wrap(path+" -encoders", err)
+	}
+	for line := range strings.Lines(string(out)) {
+		if f := strings.Fields(line); len(f) >= 2 && f[1] == Encoder {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s has no %s encoder, which video covers require; install an FFmpeg build with libwebp (check: ffmpeg -hide_banner -encoders | grep %s)", path, Encoder, Encoder)
+}
 
 type Engine struct {
 	Config     config.Config
@@ -185,22 +212,18 @@ func (e *Engine) Run(ctx context.Context, j jobs.Job) error {
 	defer os.Remove(temp)
 	timeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	path := "/proc/self/fd/3"
-	if runtime.GOOS == "darwin" {
-		path = "/dev/fd/3"
-	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", strconv.Itoa(e.Config.Cache.Threads)}
 	if item.Kind == "video" {
 		seconds := float64(item.DurationMS) / 1000 * e.Config.Cache.Percent / 100
 		args = append(args, "-ss", strconv.FormatFloat(seconds, 'f', 3, 64))
 	}
-	args = append(args, "-i", path, "-map", "0:v:0", "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-vf", "scale=w='min(640,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease", "-c:v", "libwebp", "-threads:v", "1", "-quality", "80", "-y", temp)
+	args = append(args, "-i", probe.ExtraFilePath(), "-map", "0:v:0", "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-vf", "scale=w='min(640,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease", "-c:v", Encoder, "-threads:v", "1", "-quality", "80", "-y", temp)
 	cmd := exec.CommandContext(timeout, "ffmpeg", args...)
 	cmd.ExtraFiles = []*os.File{f}
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	var stderr probe.Diagnostics
+	cmd.Stderr = &stderr
 	if err = cmd.Run(); err != nil {
-		return errors.New("ffmpeg thumbnail failed")
+		return stderr.Wrap("ffmpeg", err)
 	}
 	if err = validate(); err != nil {
 		return library.ErrConflict

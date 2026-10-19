@@ -18,7 +18,7 @@ func TestMountProbeUsesPinnedDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	before, _, err := mountIdentities(path, file)
+	before, err := mountIdentity(path, file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestMountProbeUsesPinnedDescriptor(t *testing.T) {
 	}
 	// The named root is gone. Health observation must still refer to the pinned
 	// descriptor; publication separately validates the current named root.
-	pinned, _, err := mountIdentities(path, file)
+	pinned, err := mountIdentity(path, file)
 	if err != nil || pinned != before {
 		t.Fatal("health lookup followed the disappeared pathname", pinned, err)
 	}

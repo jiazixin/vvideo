@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"uuid"
+	"vvideo/internal/config"
 	"vvideo/internal/library"
 )
 
@@ -22,7 +23,7 @@ type stage struct {
 }
 
 func newStage(ctx context.Context, storage string) (*stage, error) {
-	dir := filepath.Join(filepath.Dir(storage), ".scan-tmp", fmt.Sprintf("%x", sha256.Sum256([]byte(storage))))
+	dir := filepath.Join(config.StageDir(storage), fmt.Sprintf("%x", sha256.Sum256([]byte(storage))))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}

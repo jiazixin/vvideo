@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 	"uuid"
 
@@ -12,8 +13,15 @@ import (
 	"vvideo/internal/storage"
 )
 
-var ErrConflict = errors.New("directory revision changed; relocate by anchor")
-var ErrUnavailable = errors.New("media or directory unavailable")
+var (
+	ErrConflict    = errors.New("directory revision changed; relocate by anchor")
+	ErrUnavailable = errors.New("media or directory unavailable")
+	// ErrInvalid marks malformed client input such as a bad cursor or sort.
+	ErrInvalid = errors.New("invalid request")
+)
+
+// maxDepth bounds ancestor walks so a corrupted parent chain cannot loop.
+const maxDepth = 1024
 
 type Library struct {
 	ID          string `json:"id"`
@@ -105,7 +113,7 @@ func (i *Index) Directory(ctx context.Context, id int64) (Directory, error) {
 }
 func (i *Index) Visible(ctx context.Context, id int64) error {
 	for depth := 0; id != 0; depth++ {
-		if depth >= 1024 {
+		if depth >= maxDepth {
 			return ErrUnavailable
 		}
 		d, err := i.Directory(ctx, id)
@@ -128,6 +136,29 @@ func (i *Index) Visible(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// Path returns the directories from the library root down to id, after
+// checking that the whole chain is visible.
+func (i *Index) Path(ctx context.Context, id int64) ([]Directory, error) {
+	if err := i.Visible(ctx, id); err != nil {
+		return nil, err
+	}
+	path := []Directory{}
+	for id != 0 {
+		if len(path) >= maxDepth {
+			return nil, ErrUnavailable
+		}
+		d, err := i.Directory(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		path = append(path, d)
+		id = d.ParentID
+	}
+	slices.Reverse(path)
+	return path, nil
+}
+
 func (i *Index) Child(ctx context.Context, parent Directory, relative, name, identity string, round int64) (Directory, error) {
 	var id int64
 	err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {

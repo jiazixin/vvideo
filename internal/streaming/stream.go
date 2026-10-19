@@ -3,6 +3,7 @@ package streaming
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"mime"
@@ -15,6 +16,11 @@ import (
 	"vvideo/internal/mediafs"
 )
 
+// maxStreams bounds concurrent original-byte responses, including prefetch.
+const maxStreams = 8
+
+// Handler serves original media bytes with Range support. It rejects bytes
+// whose file version no longer matches the published index.
 type Handler struct {
 	Index    *library.Index
 	Priority *jobs.Priority
@@ -22,7 +28,7 @@ type Handler struct {
 }
 
 func New(index *library.Index, p *jobs.Priority) *Handler {
-	return &Handler{Index: index, Priority: p, slots: make(chan struct{}, 8)}
+	return &Handler{Index: index, Priority: p, slots: make(chan struct{}, maxStreams)}
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
@@ -30,32 +36,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-h.slots }()
 	default:
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "media_busy", http.StatusServiceUnavailable)
+		fail(w, http.StatusServiceUnavailable, "media_busy")
 		return
 	}
 	end := h.Priority.Begin()
 	defer end()
 	e, err := h.Index.Media(r.Context(), r.PathValue("id"))
 	if err != nil {
-		http.Error(w, "media_unavailable", 404)
+		fail(w, http.StatusNotFound, "unavailable")
 		return
 	}
 	requested := r.URL.Query().Get("version")
 	if requested == "" {
-		http.Error(w, "version_required", 400)
+		fail(w, http.StatusBadRequest, "version_required")
 		return
 	}
 	if requested != e.Version {
-		http.Error(w, "media_version_changed", 409)
+		fail(w, http.StatusConflict, "revision_changed")
 		return
 	}
 	f, _, err := h.Index.OpenMedia(r.Context(), e)
 	if err != nil {
-		code := 404
 		if errors.Is(err, library.ErrConflict) {
-			code = 409
+			fail(w, http.StatusConflict, "revision_changed")
+		} else {
+			fail(w, http.StatusNotFound, "unavailable")
 		}
-		http.Error(w, "media_unavailable_or_changed", code)
 		return
 	}
 	defer f.Close()
@@ -70,6 +76,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if reader.changed {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// fail writes the same JSON error shape as the rest of the API.
+func fail(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.MarshalWrite(w, map[string]string{"error": code})
 }
 
 type versionReader struct {

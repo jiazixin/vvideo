@@ -21,16 +21,16 @@ func TestExplicitFileAndEmptyOverride(t *testing.T) {
 	for _, v := range []string{"", "missing.yaml"} {
 		t.Run("file"+v, func(t *testing.T) {
 			d, e := envFor(t)
-			if _, err := Load(d, append(e, "CONFIG_FILE="+v)); err == nil {
+			if _, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+v)}); err == nil {
 				t.Fatal("explicit invalid file accepted")
 			}
 		})
 	}
 	d, e := envFor(t)
-	if _, err := Load(d, append(e, "VVIDEO_AUTH__TOKEN=")); err == nil {
+	if _, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_AUTH__TOKEN=")}); err == nil {
 		t.Fatal("empty token accepted")
 	}
-	c, err := Load(d, e)
+	c, err := Load(Source{WorkDir: d, Env: e})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,12 @@ func TestStrictYAML(t *testing.T) {
 			if err := os.WriteFile(p, []byte(input), 0600); err != nil {
 				t.Fatal(err)
 			}
-			_, err := Load(d, append(e, "CONFIG_FILE="+p))
+			_, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p)})
 			if err == nil {
 				t.Fatal("invalid YAML accepted")
 			}
-			if strings.Contains(err.Error(), "supersecret") {
+			// The temporary path embeds the subtest name, so only the message is checked.
+			if strings.Contains(strings.ReplaceAll(err.Error(), p, ""), "supersecret") {
 				t.Fatal("credential leaked")
 			}
 		})
@@ -65,7 +66,7 @@ func TestOversizedConfigurationRejected(t *testing.T) {
 	if err := os.WriteFile(p, []byte(input), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(d, append(e, "CONFIG_FILE="+p)); err == nil {
+	if _, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p)}); err == nil {
 		t.Fatal("oversized configuration accepted")
 	}
 }
@@ -94,14 +95,14 @@ func TestOriginsAndEnvironment(t *testing.T) {
 	p := filepath.Join(d, "configs", "instance.yaml")
 	os.MkdirAll(filepath.Dir(p), 0700)
 	os.WriteFile(p, []byte("storage: ../db/index.sqlite\ncache: {path: ../thumbs, percent: 0}\nscan: {cron: ''}\n"), 0600)
-	c, err := Load(d, append(e, "CONFIG_FILE=configs/instance.yaml"))
+	c, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE=configs/instance.yaml")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Storage != filepath.Join(d, "db/index.sqlite") || c.Cache.Path != filepath.Join(d, "thumbs") || c.Cache.Percent != 0 || c.Scan.Cron != "" {
 		t.Fatal("file origins or zero values lost")
 	}
-	c, err = Load(d, append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env.sqlite", "VVIDEO_IGNORE=[]"))
+	c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env.sqlite", "VVIDEO_IGNORE=[]")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,27 +114,107 @@ func TestInvalidValuesAndBoundaries(t *testing.T) {
 	for _, v := range []string{"VVIDEO_SCAN__PARALLEL=0", "VVIDEO_SCAN__PARALLEL=-1", "VVIDEO_SCAN__PARALLEL=1.5", "VVIDEO_SCAN__PARALLEL=999999999999999999999", "VVIDEO_CACHE__THREADS=0", "VVIDEO_CACHE__PERCENT=100", "VVIDEO_CACHE__PERCENT=NaN", "VVIDEO_CACHE__PERCENT=[10]", "VVIDEO_CACHE__MAX_SIZE=0GB", "VVIDEO_CACHE__MAX_SIZE=99999999999999999GiB", "VVIDEO_CACHE__PATH=", "VVIDEO_SCAN__CRON=* * * * * *", "VVIDEO_SCAN__CRON=CRON_TZ=Not/AZone * * * * *", "VVIDEO_MEDIA=[]", "VVIDEO_MEDIA=[{\"path\":\"x\",\"other\":1}]", "VVIDEO_MEDIA={}", "VVIDEO_OLD=1"} {
 		t.Run(v, func(t *testing.T) {
 			d, e := envFor(t)
-			if _, err := Load(d, append(e, v)); err == nil {
+			if _, err := Load(Source{WorkDir: d, Env: append(e, v)}); err == nil {
 				t.Fatal("invalid value accepted")
 			}
 		})
 	}
 	d, e := envFor(t)
 	for _, v := range []string{`VVIDEO_STORAGE=media/db.sqlite`, `VVIDEO_CACHE__PATH=media/thumbs`, `VVIDEO_MEDIA=[{"path":"media"},{"path":"media/child"}]`, `VVIDEO_IGNORE=[{"path":"media2"}]`, `VVIDEO_IGNORE=[{"path":"media"}]`} {
-		if _, err := Load(d, append(e, v)); err == nil {
+		if _, err := Load(Source{WorkDir: d, Env: append(e, v)}); err == nil {
 			t.Errorf("boundary accepted: %s", v)
 		}
 	}
 	os.MkdirAll(filepath.Join(d, "media"), 0700)
 	os.Symlink(filepath.Join(d, "media"), filepath.Join(d, "link"))
-	if _, err := Load(d, append(e, "VVIDEO_STORAGE=link/db.sqlite")); err == nil {
+	if _, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_STORAGE=link/db.sqlite")}); err == nil {
 		t.Fatal("symlink write overlap accepted")
 	}
-	c, err := Load(d, append(e, `VVIDEO_IGNORE=[{"path":"media/absent"}]`))
+	c, err := Load(Source{WorkDir: d, Env: append(e, `VVIDEO_IGNORE=[{"path":"media/absent"}]`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !c.IsIgnored(filepath.Join(d, "media/absent/file.mp4")) || c.IsIgnored(filepath.Join(d, "media/absent2/file.mp4")) {
 		t.Fatal("ignore component boundary wrong")
+	}
+}
+
+func TestFileSelectionPrecedence(t *testing.T) {
+	d, err := Canonical(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(d, "configs")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, token := range map[string]string{"config.local.yaml": "default-token", "environment.yaml": "environment-token", "selected.yaml": "selected-token"} {
+		data := "auth: {token: " + token + "}\nmedia: [{path: ../media}]\nstorage: ../db/index.sqlite\n"
+		if err = os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, file string
+		env        []string
+		token      string
+	}{
+		{name: "default", token: "default-token"},
+		{name: "environment", env: []string{"CONFIG_FILE=configs/environment.yaml"}, token: "environment-token"},
+		{name: "relative flag", file: "configs/selected.yaml", token: "selected-token"},
+		{name: "absolute flag", file: filepath.Join(dir, "selected.yaml"), token: "selected-token"},
+		{name: "flag beats environment", file: "configs/selected.yaml", env: []string{"CONFIG_FILE=configs/environment.yaml"}, token: "selected-token"},
+		{name: "flag beats invalid environment", file: "configs/selected.yaml", env: []string{"CONFIG_FILE="}, token: "selected-token"},
+		{name: "field variable beats file", file: "configs/selected.yaml", env: []string{"VVIDEO_AUTH__TOKEN=field-token"}, token: "field-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(Source{WorkDir: d, Env: tc.env, File: tc.file})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Auth.Token != tc.token {
+				t.Fatal("wrong configuration precedence")
+			}
+			if c.Storage != filepath.Join(d, "db/index.sqlite") || c.Media[0].Path != filepath.Join(d, "media") {
+				t.Fatal("file paths did not resolve against the selected file's directory")
+			}
+		})
+	}
+	if _, err = Load(Source{WorkDir: d, File: "configs/missing.yaml"}); err == nil {
+		t.Fatal("missing explicit file accepted")
+	}
+}
+
+func TestErrorsNameTheProblem(t *testing.T) {
+	d, e := envFor(t)
+	bad := filepath.Join(d, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("auth: {token: supersecret}\ncache: {colour: blue}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		src  Source
+		want []string
+	}{
+		{"missing file", Source{WorkDir: d, Env: e, File: "nope.yaml"}, []string{"nope.yaml", "no such file"}},
+		{"unknown field", Source{WorkDir: d, Env: e, File: bad}, []string{bad, "line 2", `"cache.colour"`}},
+		{"unknown variable", Source{WorkDir: d, Env: append(e, "VVIDEO_CACHE__COLOUR=blue")}, []string{"VVIDEO_CACHE__COLOUR"}},
+		{"no file and no token", Source{WorkDir: d}, []string{"auth.token", DefaultFile, "--config"}},
+		{"bad worker count", Source{WorkDir: d, Env: append(e, "VVIDEO_SCAN__PARALLEL=0")}, []string{"scan.parallel"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(tc.src)
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "supersecret") {
+				t.Fatal("credential leaked")
+			}
+		})
 	}
 }

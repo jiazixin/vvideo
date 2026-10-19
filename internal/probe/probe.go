@@ -24,6 +24,8 @@ type Result struct {
 	DurationMS, EffectiveTime   int64
 	CapturedRaw, CapturedSource string
 }
+
+// boundedBuffer rejects tool output beyond Limit, failing the command.
 type boundedBuffer struct {
 	bytes.Buffer
 	Limit int
@@ -35,21 +37,51 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+
+// Diagnostics keeps the start of a tool's stderr for error messages. It never
+// fails a write, so verbose diagnostics cannot turn success into failure.
+type Diagnostics struct {
+	buf bytes.Buffer
+}
+
+const diagnosticsLimit = 2048
+
+func (d *Diagnostics) Write(p []byte) (int, error) {
+	if room := diagnosticsLimit - d.buf.Len(); room > 0 {
+		d.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// Wrap annotates a tool failure with its captured stderr, if any.
+func (d *Diagnostics) Wrap(tool string, err error) error {
+	if text := strings.TrimSpace(d.buf.String()); text != "" {
+		return fmt.Errorf("%s: %w: %s", tool, err, text)
+	}
+	return fmt.Errorf("%s: %w", tool, err)
+}
+
+// ExtraFilePath names, inside a child process, the first descriptor passed via
+// exec.Cmd.ExtraFiles. Tools read media through it so the source path is never
+// reopened by name.
+func ExtraFilePath() string {
+	if runtime.GOOS == "darwin" {
+		return "/dev/fd/3"
+	}
+	return "/proc/self/fd/3"
+}
+
 func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	path := "/proc/self/fd/3"
-	if runtime.GOOS == "darwin" {
-		path = "/dev/fd/3"
-	}
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:format_tags=creation_time:stream=codec_type,width,height,duration:stream_tags=creation_time:stream_side_data=rotation", "-of", "json", path)
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:format_tags=creation_time:stream=codec_type,width,height,duration:stream_tags=creation_time:stream_side_data=rotation", "-of", "json", ExtraFilePath())
 	cmd.ExtraFiles = []*os.File{f}
 	out := &boundedBuffer{Limit: 1 << 20}
-	stderr := &boundedBuffer{Limit: 4096}
+	var stderr Diagnostics
 	cmd.Stdout = out
-	cmd.Stderr = stderr
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return Result{}, errors.New("ffprobe failed")
+		return Result{}, stderr.Wrap("ffprobe", err)
 	}
 	var data struct {
 		Streams []struct {
@@ -72,7 +104,7 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 		} `json:"format"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &data); err != nil {
-		return Result{}, errors.New("ffprobe response invalid")
+		return Result{}, fmt.Errorf("ffprobe: invalid JSON output: %w", err)
 	}
 	r := Result{Width: 1, Height: 1, EffectiveTime: e.Mtime, CapturedSource: "mtime"}
 	r.CapturedRaw = data.Format.Tags.CreationTime
@@ -97,7 +129,7 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 		r.DurationMS = int64(duration * 1000)
 	}
 	if r.CapturedRaw != "" {
-		if t, err := time.Parse(time.RFC3339Nano, r.CapturedRaw); err == nil && t.Year() >= 1970 && t.Year() <= 2100 {
+		if t, err := time.Parse(time.RFC3339Nano, r.CapturedRaw); err == nil && plausible(t) {
 			r.EffectiveTime = t.UnixNano()
 			r.CapturedSource = "container_creation_time"
 		}
@@ -109,14 +141,7 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 		raw, offset, rotation := Exif(f)
 		if raw != "" {
 			r.CapturedRaw = raw
-			r.CapturedSource = "mtime"
-			r.EffectiveTime = e.Mtime
-			if offset != "" {
-				if t, err := time.Parse("2006:01:02 15:04:05-07:00", raw+offset); err == nil && t.Year() >= 1970 && t.Year() <= 2100 {
-					r.EffectiveTime = t.UnixNano()
-					r.CapturedSource = "exif_datetime_original"
-				}
-			}
+			r.EffectiveTime, r.CapturedSource = CapturedTime(raw, offset, e.Mtime)
 		}
 		if rotation != 0 {
 			r.Rotation = rotation
@@ -200,15 +225,18 @@ func Parameters(percent float64) string {
 	return fmt.Sprintf("percent=%s;width=640;quality=80;format=webp", strconv.FormatFloat(percent, 'g', -1, 64))
 }
 
-// Parse only explicit timezone information; never infer a timezone from a server
-// or phone setting. Format this helper is intentionally testable without ffprobe.
+// CapturedTime parses an EXIF original time only with its explicit offset; it
+// never infers a timezone from a server or phone setting. Missing, unparsable or
+// implausible times fall back to the file modification time.
 func CapturedTime(raw, offset string, mtime int64) (int64, string) {
 	if strings.TrimSpace(offset) == "" {
 		return mtime, "mtime"
 	}
 	t, err := time.Parse("2006:01:02 15:04:05-07:00", raw+offset)
-	if err != nil {
+	if err != nil || !plausible(t) {
 		return mtime, "mtime"
 	}
 	return t.UnixNano(), "exif_datetime_original"
 }
+
+func plausible(t time.Time) bool { return t.Year() >= 1970 && t.Year() <= 2100 }

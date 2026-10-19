@@ -6,7 +6,7 @@
 
 VVideo 用 Linux/NAS 上的 Go 服务索引已有目录媒体库，以原生 Kotlin 安卓客户端浏览和播放。源媒体只读，播放使用原字节，第一版不转码。
 
-**当前状态：已实现，验收尚未全部通过。** 2026-10-10 重设计的 30 分钟合成工作负载内存门槛通过，但最终三轮暖滚动均超过 1% 帧截止时间超限目标；历史 APK 测量不能证明新版性能。真实完整媒体库及 NAS、所有编码兼容性、配套服务端部署仍未验证。当前工作区没有 Git 仓库，依赖 Git 的 OCR 审查无法执行。详见 [验证记录](docs/ACCEPTANCE.md)。
+**当前状态：已实现，验收尚未全部通过。** 2026-10-10 重设计的 30 分钟合成工作负载内存门槛通过，但最终三轮暖滚动均超过 1% 帧截止时间超限目标；历史 APK 测量不能证明新版性能。真实完整媒体库及 NAS、所有编码兼容性、配套服务端部署仍未验证。详见 [验证记录](docs/ACCEPTANCE.md)。
 
 ## 已实现范围
 
@@ -22,18 +22,32 @@ VVideo 用 Linux/NAS 上的 Go 服务索引已有目录媒体库，以原生 Kot
 
 ## 构建与启动服务端
 
-使用与 [go.mod](go.mod) 一致的 **Go 1.27.1**，PATH 中需有 `ffmpeg` 与 `ffprobe`，其构建须支持实际输入和 WebP 输出。SQLite 放服务端本地磁盘，不能放 SMB/NFS；媒体可在挂载盘。
+使用与 [go.mod](go.mod) 一致的 **Go 1.27.1**，PATH 中需有 `ffmpeg` 与 `ffprobe`。FFmpeg 须支持实际输入，并包含封面所用的 `libwebp` 编码器，可用 `ffmpeg -hide_banner -encoders | grep libwebp` 检查（Debian/Ubuntu 的 `ffmpeg` 包包含；当前 Homebrew 的 `ffmpeg` 不包含）。SQLite 放服务端本地磁盘，不能放 SMB/NFS；媒体可在挂载盘。
 
 ```sh
 go mod download
 go test ./...
 go vet ./...
-go build -trimpath -o .cache/bin/vvideo ./cmd/vvideo
+go build -trimpath -o bin/vvideo ./cmd/vvideo
 cp configs/config.example.yaml configs/config.local.yaml
 # 修改媒体/排除路径，设置私有的非空令牌。
 chmod 600 configs/config.local.yaml
-CONFIG_FILE=configs/config.local.yaml .cache/bin/vvideo
+bin/vvideo --config configs/config.local.yaml
 ```
+
+发布构建用 `-ldflags "-X main.version=v1.0.0"` 写入版本号；否则 `--version` 显示 Go 根据 Git 生成的版本。
+
+```text
+Usage:
+  vvideo [options]
+
+Options:
+  -c, --config <file>   Configuration file (default: ./configs/config.local.yaml)
+  -v, --version         Print version information and exit
+  -h, --help            Print this help and exit
+```
+
+退出码：正常结束、`--help`、`--version` 为 0；命令行参数错误为 2（输出到 stderr）；服务无法启动或运行失败为 1。启动后日志为 stdout 上的 JSON 行。启动失败只记录一条 `service_failed`，其 `error` 写明具体原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 缺少 `libwebp`、配置文件及行号、数据库已被另一进程锁定、端口已被占用。
 
 示例相对路径以 `configs/` 为基准。保护私有配置，将源媒体以只读方式挂载。服务写入数据库/暂存与封面缓存；SIGTERM 取消任务，HTTP 优雅退出最多等待 30 秒。数据库所有权锁拒绝第二个进程同时使用该库。
 
@@ -65,7 +79,8 @@ adb reverse tcp:19323 tcp:19323
 
 支持字段见 [configs/config.example.yaml](configs/config.example.yaml)。除非空 `auth.token` 与至少一个 `media[].path` 外均有默认值。
 
-- 优先级：环境 > 选定 YAML > 默认。`CONFIG_FILE` 选择文件，未设置只查工作目录下 `configs/config.local.yaml`；显式空/缺失/不可读/无效选择直接失败。默认文件不存在时可由完整环境配置提供必填项。
+- 文件选择：`-c`/`--config`（也支持 `--config=<文件>`，重复时取最后一个）> `CONFIG_FILE` > 工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式选择的文件为空、缺失、不可读或无效时直接失败；只有隐式默认文件可以不存在，此时须由环境变量提供必填项。
+- 配置项优先级：`VVIDEO_*` 环境变量 > 选定 YAML > 默认值，与文件的选择方式无关。
 - 文件内路径相对配置目录，环境/默认路径相对工作目录。默认 `data/data.sqlite`、`.cache/thumbnails`。媒体根不能重叠，可写数据库/缓存不得进入原件树。`ignore` 指定精确文件或目录子树，不支持通配符。
 - 环境变量为 `VVIDEO_` 加大写字段路径，以 `__` 分隔，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA`/`VVIDEO_IGNORE` 以 JSON `[{"path":"..."}]` 整体替换列表。未知/旧字段、重复键、别名、标签、类型错误及必填空值失败；不加载 `.env` 或插值 YAML 变量。
 - `scan.cron` 为五段 cron，默认 `*/30 * * * *`，可带 `CRON_TZ=...`。空值只关闭周期扫描，仍保留启动扫描；正在运行时不积压 cron 触发。并发/线程是正整数，防御性上限 1024，不是进程总线程限制。

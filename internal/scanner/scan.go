@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"vvideo/internal/storage"
 )
 
+// Scanner walks media roots and publishes per-directory index generations.
+// Only one Run is active at a time.
 type Scanner struct {
 	Config   config.Config
 	Index    *library.Index
@@ -50,17 +53,22 @@ func (s *Scanner) Run(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
+	started, before := time.Now(), s.Metrics.snapshot()
 	var failures []error
 	for _, l := range libs {
 		if err = s.scanRoot(ctx, stage, l, force); err != nil {
-			failures = append(failures, errors.New("a library scan failed; old index retained"))
+			failures = append(failures, fmt.Errorf("library %q (%s): %w", l.Name, l.ID, err))
 			s.Metrics.Errors.Add(1)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 	}
-	slog.Info("scan_complete", "files", s.Metrics.Files.Load(), "directories", s.Metrics.Directories.Load(), "errors", s.Metrics.Errors.Load(), "peak_attributes", s.Metrics.Peak.Load())
+	run := s.Metrics.snapshot().since(before)
+	slog.Info("scan_complete", "libraries", len(libs), "failed_libraries", len(failures),
+		"directories", run.directories, "unchanged_directories", run.unchanged,
+		"observed_entries", run.observed, "changed_entries", run.changed,
+		"duration_ms", time.Since(started).Milliseconds())
 	return errors.Join(failures...)
 }
 func (s *Scanner) scanRoot(ctx context.Context, st *stage, l library.Library, force bool) (result error) {

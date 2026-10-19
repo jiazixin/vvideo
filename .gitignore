@@ -5,6 +5,9 @@
 .env.*
 !.env.example
 
+# Local Go builds
+/bin/
+
 # Server runtime state and rebuildable caches
 /data/
 /.cache/

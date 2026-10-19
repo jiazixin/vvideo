@@ -1,66 +1,118 @@
+// Command vvideo is the VVideo media server.
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
 	"vvideo/internal/app"
 	"vvideo/internal/config"
 )
 
+const (
+	exitOK      = 0
+	exitFailure = 1
+	exitUsage   = 2
+
+	shutdownTimeout = 30 * time.Second
+)
+
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	if err := run(); err != nil {
-		slog.Error("service_failed", "reason", err.Error())
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
-func run() error {
+
+// run handles command-line usage with plain text; once the service starts,
+// everything is logged as JSON on stdout.
+func run(args []string, stdout, stderr io.Writer) int {
+	o, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "vvideo: %v\nRun 'vvideo --help' for usage.\n", err)
+		return exitUsage
+	}
+	switch {
+	case o.help:
+		fmt.Fprint(stdout, usage)
+		return exitOK
+	case o.version:
+		fmt.Fprintln(stdout, versionString())
+		return exitOK
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(stdout, nil)))
+	if err := serve(o.configFile); err != nil {
+		slog.Error("service_failed", "error", err.Error())
+		return exitFailure
+	}
+	slog.Info("service_stopped")
+	return exitOK
+}
+
+func serve(configFile string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	c, err := config.Load(cwd, os.Environ())
+	c, err := config.Load(config.Source{WorkDir: cwd, Env: os.Environ(), File: configFile})
 	if err != nil {
-		return err
+		return fmt.Errorf("config: %w", err)
 	}
+	slog.Info("service_starting", "version", versionString())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(ctx, c)
 	if err != nil {
-		return errors.New("service initialization failed")
+		return err
+	}
+	// Bind before starting background work so a busy port fails fast.
+	listener, err := net.Listen("tcp", c.Server.Listen)
+	if err != nil {
+		a.Close()
+		return err
 	}
 	if err = a.Start(ctx); err != nil {
+		listener.Close()
 		stop()
 		a.Close()
 		return err
 	}
-	server := &http.Server{Addr: c.Server.Listen, Handler: a.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	done := make(chan error, 1)
-	go func() { slog.Info("service_listening", "listen", c.Server.Listen); done <- server.ListenAndServe() }()
-	select {
-	case err = <-done:
-		stop()
-	case <-ctx.Done():
+	server := &http.Server{
+		Handler:           a.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	slog.Info("service_listening", "listen", listener.Addr().String())
+	select {
+	case err = <-served:
+	case <-ctx.Done():
+		slog.Info("service_stopping")
+	}
+	stop()
+	return errors.Join(err, shutdown(server, a))
+}
+
+// shutdown drains HTTP requests and background work within shutdownTimeout.
+func shutdown(server *http.Server, a *app.App) error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	server.Shutdown(shutdown)
+	server.Shutdown(ctx)
 	closed := make(chan error, 1)
 	go func() { closed <- a.Close() }()
 	select {
-	case closeErr := <-closed:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return closeErr
-	case <-shutdown.Done():
+	case err := <-closed:
+		return err
+	case <-ctx.Done():
 		server.Close()
-		return errors.New("graceful shutdown exceeded 30 seconds")
+		return fmt.Errorf("graceful shutdown exceeded %s", shutdownTimeout)
 	}
 }

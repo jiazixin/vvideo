@@ -12,9 +12,23 @@ type Attributes struct {
 	Size, Mtime             int64
 	Directory               bool
 }
+
+// Metrics are cumulative since process start; /v1/status exposes them.
 type Metrics struct {
 	Pages, Files, Directories, Unchanged, Changed, Errors, Retries, StatNS, ReadDirNS, StageNS, CompareNS, CleanupNS, BuildNS, PublishNS atomic.Int64
 	Current, Peak                                                                                                                        atomic.Int64
+}
+
+// runCounts is a point-in-time copy of the counters a scan summary reports.
+// observed counts entries read in both observation passes.
+type runCounts struct{ directories, unchanged, observed, changed int64 }
+
+func (m *Metrics) snapshot() runCounts {
+	return runCounts{m.Directories.Load(), m.Unchanged.Load(), m.Files.Load(), m.Changed.Load()}
+}
+
+func (c runCounts) since(before runCounts) runCounts {
+	return runCounts{c.directories - before.directories, c.unchanged - before.unchanged, c.observed - before.observed, c.changed - before.changed}
 }
 
 func (m *Metrics) enter() {

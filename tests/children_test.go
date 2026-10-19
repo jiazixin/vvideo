@@ -56,7 +56,7 @@ func TestChildrenBidirectionalWindow(t *testing.T) {
 				rows.Close()
 			}
 
-			page, err := index.Children(t.Context(), parent, "")
+			page, err := index.Children(t.Context(), parent, "", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +71,7 @@ func TestChildrenBidirectionalWindow(t *testing.T) {
 				if page.Next == "" {
 					break
 				}
-				page, err = index.Children(t.Context(), parent, page.Next)
+				page, err = index.Children(t.Context(), parent, page.Next, false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -134,5 +134,45 @@ func TestDirectoryMetadataHTTP(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestHTTPErrorsAreJSON(t *testing.T) {
+	index, scan, _ := setup(t)
+	libs, err := index.Libraries(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &app.App{Config: scan.Config, Index: index, Stream: streaming.New(index, jobs.NewPriority())}
+	handler := server.Handler()
+	root := libs[0].DirectoryID
+	for _, tc := range []struct {
+		path, token string
+		status      int
+		code        string
+	}{
+		{"/v1/libraries", "wrong", 401, "unauthorized"},
+		{"/v1/directories/abc/path", "fixture", 400, "invalid_request"},
+		{fmt.Sprintf("/v1/directories/%d/media?sort=size", root), "fixture", 400, "invalid_request"},
+		{fmt.Sprintf("/v1/directories/%d/media?limit=many", root), "fixture", 400, "invalid_request"},
+		{fmt.Sprintf("/v1/directories/%d/media?cursor=%%21", root), "fixture", 400, "invalid_request"},
+		{fmt.Sprintf("/v1/directories/%d/children?previous=true", root), "fixture", 400, "invalid_request"},
+		{"/v1/directories/999999/children", "fixture", 404, "unavailable"},
+		{"/v1/media/absent", "fixture", 404, "unavailable"},
+		{"/v1/media/absent/bytes?version=x", "fixture", 404, "unavailable"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			r := httptest.NewRequest("GET", tc.path, nil)
+			r.Header.Set("Authorization", "Bearer "+tc.token)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("non-JSON error body %q", w.Body.String())
+			}
+			if w.Code != tc.status || body["error"] != tc.code || w.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("got %d %v %q, want %d %s", w.Code, body, w.Header().Get("Content-Type"), tc.status, tc.code)
+			}
+		})
 	}
 }

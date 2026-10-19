@@ -15,8 +15,8 @@ import (
 )
 
 type Root struct {
-	Path, Identity, LegacyIdentity string
-	file                           *os.File
+	Path, Identity string
+	file           *os.File
 }
 
 func Fingerprint(info fs.FileInfo) string {
@@ -29,13 +29,6 @@ func Fingerprint(info fs.FileInfo) string {
 	changed := changeTime(stat)
 	return fmt.Sprintf("f2:%d:%d:%d:%d:%d:%d", stat.Dev, stat.Ino, info.Size(), info.ModTime().UnixNano(), changed.Sec, changed.Nsec)
 }
-func identity(info fs.FileInfo) string {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return info.Name()
-	}
-	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
-}
 func Open(path string) (*Root, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -47,7 +40,7 @@ func Open(path string) (*Root, error) {
 		f.Close()
 		return nil, err
 	}
-	mount, legacy, err := mountIdentities(path, f)
+	mount, err := mountIdentity(path, f)
 	if err != nil {
 		f.Close()
 		return nil, err
@@ -56,13 +49,12 @@ func Open(path string) (*Root, error) {
 	if stat, ok := i.Sys().(*syscall.Stat_t); ok {
 		inode = fmt.Sprint(stat.Ino)
 	}
-	return &Root{Path: path, Identity: "v2:" + inode + ":" + mount, LegacyIdentity: identity(i) + ":" + legacy, file: f}, nil
+	return &Root{Path: path, Identity: "v2:" + inode + ":" + mount, file: f}, nil
 }
 
-// Matches permits a legacy identity only when the entire original mount
-// observation still matches. A mismatching observation is never automatically adopted.
+// Matches reports whether a persisted identity names this root.
 func (r *Root) Matches(identity string) bool {
-	return identity == r.Identity || identity == r.LegacyIdentity
+	return identity == r.Identity
 }
 func (r *Root) Close() error { return r.file.Close() }
 func (r *Root) Validate() error {

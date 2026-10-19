@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,9 +21,20 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// DefaultFile is the configuration file used, relative to the working
+// directory, when neither --config nor CONFIG_FILE selects one.
+const DefaultFile = "configs/config.local.yaml"
+
+const (
+	maxFileSize = 1 << 20
+	maxWorkers  = 1024
+	maxDepth    = 8
+)
+
 type Path struct {
 	Path string `yaml:"path" json:"path"`
 }
+
 type Config struct {
 	Server        struct{ Listen string }
 	Auth          struct{ Token string }
@@ -39,273 +52,429 @@ type Config struct {
 	}
 }
 
-var fields = map[string]string{
-	"server.listen": "string", "auth.token": "string", "storage": "string",
-	"media": "paths", "ignore": "paths", "scan.cron": "string", "scan.parallel": "int",
-	"cache.path": "string", "cache.max_size": "string", "cache.parallel": "int", "cache.threads": "int", "cache.percent": "number",
+// Source describes where configuration is read from. Tests pass an explicit
+// working directory and environment so they never touch process-wide state.
+type Source struct {
+	WorkDir string
+	Env     []string
+	// File is the --config value. When non-empty it takes precedence over
+	// CONFIG_FILE and DefaultFile.
+	File string
 }
 
-// Load takes an explicit working directory and environment so tests never read
-// credentials or change process-wide configuration. Errors never include values.
-func Load(cwd string, env []string) (Config, error) {
-	var c Config
-	abs, err := filepath.Abs(cwd)
+type fieldKind int
+
+const (
+	stringField fieldKind = iota
+	intField
+	numberField
+	pathListField
+)
+
+var fields = map[string]fieldKind{
+	"server.listen":  stringField,
+	"auth.token":     stringField,
+	"storage":        stringField,
+	"media":          pathListField,
+	"ignore":         pathListField,
+	"scan.cron":      stringField,
+	"scan.parallel":  intField,
+	"cache.path":     stringField,
+	"cache.max_size": stringField,
+	"cache.parallel": intField,
+	"cache.threads":  intField,
+	"cache.percent":  numberField,
+}
+
+var sections = []string{"server", "auth", "scan", "cache"}
+
+var defaults = map[string]string{
+	"server.listen":  "0.0.0.0:8080",
+	"storage":        "data/data.sqlite",
+	"ignore":         "[]",
+	"scan.cron":      "*/30 * * * *",
+	"scan.parallel":  "2",
+	"cache.path":     ".cache/thumbnails",
+	"cache.max_size": "30GB",
+	"cache.parallel": "2",
+	"cache.threads":  "2",
+	"cache.percent":  "10",
+}
+
+var errRequired = errors.New("required setting missing")
+
+// settings holds raw values by dotted field name. bases records the directory
+// that relative paths in each value resolve against; absent means the working
+// directory.
+type settings struct {
+	values map[string]string
+	bases  map[string]string
+}
+
+// Load applies defaults, then the selected YAML file, then VVIDEO_* variables.
+// Errors name the file, field or variable involved but never echo values that
+// may be secret.
+func Load(src Source) (Config, error) {
+	cwd, err := filepath.Abs(src.WorkDir)
 	if err != nil {
-		return c, err
+		return Config{}, err
 	}
-	cwd = abs
-	vals := map[string]string{"server.listen": "0.0.0.0:8080", "storage": "data/data.sqlite", "scan.cron": "*/30 * * * *", "scan.parallel": "2", "cache.path": ".cache/thumbnails", "cache.max_size": "30GB", "cache.parallel": "2", "cache.threads": "2", "cache.percent": "10", "ignore": "[]"}
-	origins := map[string]string{}
-	e := map[string]string{}
+	env := environment(src.Env)
+	file, explicit, err := selectFile(cwd, src.File, env)
+	if err != nil {
+		return Config{}, err
+	}
+	s := settings{values: maps.Clone(defaults), bases: map[string]string{}}
+	loaded, err := s.readFile(file, explicit)
+	if err != nil {
+		return Config{}, err
+	}
+	if err = s.applyEnvironment(env, cwd); err != nil {
+		return Config{}, err
+	}
+	c, err := s.build(cwd)
+	if err != nil && !loaded && errors.Is(err, errRequired) {
+		return Config{}, fmt.Errorf("%w (no configuration file at %s; pass --config <file> or set VVIDEO_* variables)", err, file)
+	}
+	return c, err
+}
+
+func environment(env []string) map[string]string {
+	out := make(map[string]string, len(env))
 	for _, item := range env {
-		k, v, ok := strings.Cut(item, "=")
-		if ok {
-			e[k] = v
+		if k, v, ok := strings.Cut(item, "="); ok {
+			out[k] = v
 		}
 	}
-	p, explicit := e["CONFIG_FILE"]
-	if explicit && p == "" {
-		return c, errors.New("CONFIG_FILE must not be empty")
+	return out
+}
+
+// selectFile returns the absolute configuration path and whether it was chosen
+// explicitly. Only the implicit default may be absent.
+func selectFile(cwd, flagFile string, env map[string]string) (string, bool, error) {
+	path, explicit := flagFile, flagFile != ""
+	if !explicit {
+		var set bool
+		path, set = env["CONFIG_FILE"]
+		if set && strings.TrimSpace(path) == "" {
+			return "", false, errors.New("CONFIG_FILE is set but empty")
+		}
+		explicit = set
 	}
 	if !explicit {
-		p = "configs/config.local.yaml"
+		path = DefaultFile
 	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(cwd, p)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cwd, path)
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		if explicit || !errors.Is(err, os.ErrNotExist) {
-			return c, errors.New("configuration file cannot be read")
-		}
-	} else {
-		defer f.Close()
-		data, readErr := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-		if readErr != nil {
-			return c, errors.New("configuration file cannot be read")
-		}
-		if len(data) > 1<<20 {
-			return c, errors.New("configuration exceeds 1 MiB")
-		}
-		dec := yaml.NewDecoder(bytes.NewReader(data))
-		var doc yaml.Node
-		if err = dec.Decode(&doc); err != nil {
-			return c, errors.New("configuration is not a YAML mapping document")
-		}
-		var extra yaml.Node
-		if err = dec.Decode(&extra); !errors.Is(err, io.EOF) {
-			return c, errors.New("configuration must contain one YAML document")
-		}
-		if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-			return c, errors.New("configuration must be a mapping")
-		}
-		if err = readMap(doc.Content[0], "", vals, origins, filepath.Dir(p), 0); err != nil {
-			return c, err
-		}
-	}
-	for k, v := range e {
-		if !strings.HasPrefix(k, "VVIDEO_") {
-			continue
-		}
-		name := strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(k, "VVIDEO_"), "__", "."))
-		if _, ok := fields[name]; !ok {
-			return c, errors.New("unknown VVIDEO configuration variable")
-		}
-		vals[name] = v
-		origins[name] = cwd
-	}
-	pathValue := func(k string) (string, error) {
-		v := vals[k]
-		if strings.TrimSpace(v) == "" {
-			return "", fmt.Errorf("%s must not be empty", k)
-		}
-		base := origins[k]
-		if base == "" {
-			base = cwd
-		}
-		if !filepath.IsAbs(v) {
-			v = filepath.Join(base, v)
-		}
-		return Canonical(v)
-	}
-	c.Server.Listen = vals["server.listen"]
-	_, port, err := net.SplitHostPort(c.Server.Listen)
-	if err != nil {
-		return c, errors.New("server.listen must be host:port")
-	}
-	pn, err := strconv.Atoi(port)
-	if err != nil || pn < 1 || pn > 65535 {
-		return c, errors.New("invalid server.listen port")
-	}
-	c.Auth.Token = vals["auth.token"]
-	if strings.TrimSpace(c.Auth.Token) == "" {
-		return c, errors.New("auth.token is required")
-	}
-	if c.Storage, err = pathValue("storage"); err != nil {
-		return c, err
-	}
-	if c.Cache.Path, err = pathValue("cache.path"); err != nil {
-		return c, err
-	}
-	for k, target := range map[string]*int{"scan.parallel": &c.Scan.Parallel, "cache.parallel": &c.Cache.Parallel, "cache.threads": &c.Cache.Threads} {
-		*target, err = strconv.Atoi(vals[k])
-		if err != nil || *target <= 0 || *target > 1024 {
-			return c, fmt.Errorf("%s must be a positive integer no greater than 1024", k)
-		}
-	}
-	c.Cache.Percent, err = strconv.ParseFloat(vals["cache.percent"], 64)
-	if err != nil || math.IsNaN(c.Cache.Percent) || math.IsInf(c.Cache.Percent, 0) || c.Cache.Percent < 0 || c.Cache.Percent >= 100 {
-		return c, errors.New("cache.percent must be finite in [0,100)")
-	}
-	c.Cache.MaxSize, err = ParseSize(vals["cache.max_size"])
-	if err != nil {
-		return c, err
-	}
-	c.Scan.Cron = vals["scan.cron"]
-	if c.Scan.Cron != "" {
-		if _, err = ParseCron(c.Scan.Cron); err != nil {
-			return c, errors.New("scan.cron must be a valid five-field cron with an optional CRON_TZ timezone")
-		}
-	}
-	for k, target := range map[string]*[]Path{"media": &c.Media, "ignore": &c.Ignore} {
-		if err = json.Unmarshal([]byte(vals[k]), target, json.RejectUnknownMembers(true)); err != nil {
-			return c, fmt.Errorf("%s must be a JSON array of path objects", k)
-		}
-		if !strings.HasPrefix(strings.TrimSpace(vals[k]), "[") {
-			return c, fmt.Errorf("%s must be an array", k)
-		}
-		for i := range *target {
-			orig := (*target)[i].Path
-			if strings.TrimSpace(orig) == "" {
-				return c, fmt.Errorf("%s path must not be empty", k)
-			}
-			base := origins[k]
-			if base == "" {
-				base = cwd
-			}
-			if !filepath.IsAbs(orig) {
-				orig = filepath.Join(base, orig)
-			}
-			(*target)[i].Path, err = Canonical(orig)
-			if err != nil {
-				return c, fmt.Errorf("%s path cannot be resolved", k)
-			}
-		}
-	}
-	if len(c.Media) == 0 {
-		return c, errors.New("media must contain at least one root")
-	}
-	if Contains(c.Cache.Path, c.Storage) || Contains(c.Storage, c.Cache.Path) {
-		return c, errors.New("storage and cache paths must be separate")
-	}
-	stage := filepath.Join(filepath.Dir(c.Storage), ".scan-tmp")
-	for i, r := range c.Media {
-		for _, s := range c.Media[:i] {
-			if Contains(r.Path, s.Path) || Contains(s.Path, r.Path) {
-				return c, errors.New("media roots must not overlap")
-			}
-		}
-		for _, w := range []string{c.Storage, c.Cache.Path, stage} {
-			if Contains(r.Path, w) || Contains(w, r.Path) {
-				return c, errors.New("writable paths must not overlap media roots")
-			}
-		}
-	}
-	for _, x := range c.Ignore {
-		valid := false
-		for _, r := range c.Media {
-			if x.Path != r.Path && Contains(r.Path, x.Path) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return c, errors.New("ignore path must be strictly inside a media root")
-		}
-	}
-	return c, nil
+	return path, explicit, nil
 }
 
-func readMap(n *yaml.Node, prefix string, vals, origins map[string]string, base string, depth int) error {
-	if depth > 8 || n.Kind != yaml.MappingNode || n.Tag != "!!map" {
-		return fmt.Errorf("invalid mapping at line %d", n.Line)
+func (s *settings) readFile(path string, explicit bool) (bool, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) && !explicit {
+		return false, nil
+	}
+	if err != nil {
+		return false, err // *fs.PathError names the file
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
+	if err != nil {
+		return false, err
+	}
+	if len(data) > maxFileSize {
+		return false, fmt.Errorf("%s: file exceeds 1 MiB", path)
+	}
+	if err = s.readYAML(data, filepath.Dir(path)); err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	return true, nil
+}
+
+func (s *settings) readYAML(data []byte, base string) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var doc yaml.Node
+	if err := dec.Decode(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return errors.New("file is empty")
+		}
+		return err
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("must contain exactly one YAML document")
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return errors.New("top level must be a mapping")
+	}
+	return s.readMap(doc.Content[0], "", base, 0)
+}
+
+func (s *settings) readMap(n *yaml.Node, prefix, base string, depth int) error {
+	if depth > maxDepth || n.Kind != yaml.MappingNode || n.Tag != "!!map" {
+		return fmt.Errorf("line %d: %s must be a mapping", n.Line, prefix)
 	}
 	seen := map[string]bool{}
 	for i := 0; i < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
-		if k.Tag != "!!str" || seen[k.Value] || k.Value == "<<" {
-			return fmt.Errorf("invalid or duplicate key at line %d", k.Line)
+		if k.Tag != "!!str" || k.Value == "<<" {
+			return fmt.Errorf("line %d: invalid key", k.Line)
+		}
+		if seen[k.Value] {
+			return fmt.Errorf("line %d: duplicate key %q", k.Line, k.Value)
 		}
 		seen[k.Value] = true
 		name := k.Value
 		if prefix != "" {
 			name = prefix + "." + name
 		}
+		if v.Kind == yaml.AliasNode || v.Anchor != "" {
+			return fmt.Errorf("line %d: %s: aliases and anchors are not allowed", v.Line, name)
+		}
 		kind, ok := fields[name]
 		if !ok {
-			if prefix == "" && (name == "server" || name == "auth" || name == "scan" || name == "cache") {
-				if err := readMap(v, name, vals, origins, base, depth+1); err != nil {
+			if prefix == "" && slices.Contains(sections, name) {
+				if err := s.readMap(v, name, base, depth+1); err != nil {
 					return err
 				}
 				continue
 			}
-			return fmt.Errorf("unknown configuration field at line %d", k.Line)
+			return fmt.Errorf("line %d: unknown field %q", k.Line, name)
 		}
-		if v.Kind == yaml.AliasNode || v.Anchor != "" {
-			return fmt.Errorf("aliases and anchors are not allowed at line %d", v.Line)
+		value, err := scalar(name, kind, v)
+		if err != nil {
+			return err
 		}
-		switch kind {
-		case "paths":
-			if v.Kind != yaml.SequenceNode || v.Tag != "!!seq" {
-				return fmt.Errorf("%s must be a list at line %d", name, v.Line)
-			}
-			paths := []Path{}
-			for _, o := range v.Content {
-				if o.Kind != yaml.MappingNode || o.Tag != "!!map" || o.Anchor != "" || len(o.Content) != 2 || o.Content[0].Value != "path" || o.Content[0].Tag != "!!str" || o.Content[1].Kind != yaml.ScalarNode || o.Content[1].Tag != "!!str" {
-					return fmt.Errorf("invalid %s path object at line %d", name, o.Line)
-				}
-				paths = append(paths, Path{Path: o.Content[1].Value})
-			}
-			b, err := json.Marshal(paths)
-			if err != nil {
-				return err
-			}
-			vals[name] = string(b)
-		default:
-			tag := "!!str"
-			if kind == "int" {
-				tag = "!!int"
-			}
-			valid := v.Kind == yaml.ScalarNode && v.Tag == tag
-			if kind == "number" {
-				valid = v.Kind == yaml.ScalarNode && (v.Tag == "!!int" || v.Tag == "!!float")
-			}
-			if !valid {
-				return fmt.Errorf("invalid %s type at line %d", name, v.Line)
-			}
-			vals[name] = v.Value
-		}
-		origins[name] = base
+		s.values[name] = value
+		s.bases[name] = base
 	}
 	return nil
 }
 
+// scalar converts one YAML value to the raw string form shared with the
+// environment. Path lists are normalized to their JSON environment form.
+func scalar(name string, kind fieldKind, v *yaml.Node) (string, error) {
+	switch kind {
+	case pathListField:
+		if v.Kind != yaml.SequenceNode || v.Tag != "!!seq" {
+			return "", fmt.Errorf("line %d: %s must be a list of {path: ...} objects", v.Line, name)
+		}
+		paths := []Path{}
+		for _, o := range v.Content {
+			if o.Kind != yaml.MappingNode || o.Tag != "!!map" || o.Anchor != "" || len(o.Content) != 2 ||
+				o.Content[0].Value != "path" || o.Content[0].Tag != "!!str" ||
+				o.Content[1].Kind != yaml.ScalarNode || o.Content[1].Tag != "!!str" {
+				return "", fmt.Errorf("line %d: %s entries must be {path: <string>}", o.Line, name)
+			}
+			paths = append(paths, Path{Path: o.Content[1].Value})
+		}
+		b, err := json.Marshal(paths)
+		return string(b), err
+	case intField:
+		if v.Kind != yaml.ScalarNode || v.Tag != "!!int" {
+			return "", fmt.Errorf("line %d: %s must be an integer", v.Line, name)
+		}
+	case numberField:
+		if v.Kind != yaml.ScalarNode || (v.Tag != "!!int" && v.Tag != "!!float") {
+			return "", fmt.Errorf("line %d: %s must be a number", v.Line, name)
+		}
+	default:
+		if v.Kind != yaml.ScalarNode || v.Tag != "!!str" {
+			return "", fmt.Errorf("line %d: %s must be a string", v.Line, name)
+		}
+	}
+	return v.Value, nil
+}
+
+func (s *settings) applyEnvironment(env map[string]string, cwd string) error {
+	for k, v := range env {
+		rest, ok := strings.CutPrefix(k, "VVIDEO_")
+		if !ok {
+			continue
+		}
+		name := strings.ToLower(strings.ReplaceAll(rest, "__", "."))
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("unknown environment variable %s", k)
+		}
+		s.values[name] = v
+		s.bases[name] = cwd
+	}
+	return nil
+}
+
+func (s *settings) base(name, cwd string) string {
+	if b := s.bases[name]; b != "" {
+		return b
+	}
+	return cwd
+}
+
+func (s *settings) path(name, cwd string) (string, error) {
+	v := s.values[name]
+	if strings.TrimSpace(v) == "" {
+		return "", fmt.Errorf("%s must not be empty", name)
+	}
+	if !filepath.IsAbs(v) {
+		v = filepath.Join(s.base(name, cwd), v)
+	}
+	p, err := Canonical(v)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", name, err)
+	}
+	return p, nil
+}
+
+func (s *settings) pathList(name, cwd string) ([]Path, error) {
+	raw := s.values[name]
+	var list []Path
+	if !strings.HasPrefix(strings.TrimSpace(raw), "[") {
+		return nil, fmt.Errorf("%s must be a JSON array of {\"path\": ...} objects", name)
+	}
+	if err := json.Unmarshal([]byte(raw), &list, json.RejectUnknownMembers(true)); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON array of {\"path\": ...} objects", name)
+	}
+	for i := range list {
+		p := list[i].Path
+		if strings.TrimSpace(p) == "" {
+			return nil, fmt.Errorf("%s[%d].path must not be empty", name, i)
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(s.base(name, cwd), p)
+		}
+		resolved, err := Canonical(p)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d].path: %w", name, i, err)
+		}
+		list[i].Path = resolved
+	}
+	return list, nil
+}
+
+func (s *settings) worker(name string) (int, error) {
+	n, err := strconv.Atoi(s.values[name])
+	if err != nil || n <= 0 || n > maxWorkers {
+		return 0, fmt.Errorf("%s must be an integer from 1 to %d", name, maxWorkers)
+	}
+	return n, nil
+}
+
+func (s *settings) build(cwd string) (Config, error) {
+	var c Config
+	var err error
+	c.Server.Listen = s.values["server.listen"]
+	if err = validateListen(c.Server.Listen); err != nil {
+		return c, err
+	}
+	c.Auth.Token = s.values["auth.token"]
+	if strings.TrimSpace(c.Auth.Token) == "" {
+		return c, fmt.Errorf("auth.token: %w", errRequired)
+	}
+	if c.Storage, err = s.path("storage", cwd); err != nil {
+		return c, err
+	}
+	if c.Cache.Path, err = s.path("cache.path", cwd); err != nil {
+		return c, err
+	}
+	if c.Scan.Parallel, err = s.worker("scan.parallel"); err != nil {
+		return c, err
+	}
+	if c.Cache.Parallel, err = s.worker("cache.parallel"); err != nil {
+		return c, err
+	}
+	if c.Cache.Threads, err = s.worker("cache.threads"); err != nil {
+		return c, err
+	}
+	c.Cache.Percent, err = strconv.ParseFloat(s.values["cache.percent"], 64)
+	if err != nil || math.IsNaN(c.Cache.Percent) || math.IsInf(c.Cache.Percent, 0) || c.Cache.Percent < 0 || c.Cache.Percent >= 100 {
+		return c, errors.New("cache.percent must be a number in [0, 100)")
+	}
+	if c.Cache.MaxSize, err = ParseSize(s.values["cache.max_size"]); err != nil {
+		return c, err
+	}
+	c.Scan.Cron = s.values["scan.cron"]
+	if c.Scan.Cron != "" {
+		if _, err = ParseCron(c.Scan.Cron); err != nil {
+			return c, fmt.Errorf("scan.cron must be a five-field cron expression with an optional CRON_TZ= prefix: %w", err)
+		}
+	}
+	if c.Media, err = s.pathList("media", cwd); err != nil {
+		return c, err
+	}
+	if len(c.Media) == 0 {
+		return c, fmt.Errorf("media: %w (at least one root)", errRequired)
+	}
+	if c.Ignore, err = s.pathList("ignore", cwd); err != nil {
+		return c, err
+	}
+	return c, c.validatePaths()
+}
+
+func validateListen(listen string) error {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("server.listen %q must be host:port", listen)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("server.listen %q has an invalid port", listen)
+	}
+	return nil
+}
+
+// validatePaths keeps writable state out of the read-only media trees.
+func (c Config) validatePaths() error {
+	if Contains(c.Cache.Path, c.Storage) || Contains(c.Storage, c.Cache.Path) {
+		return fmt.Errorf("storage %s and cache.path %s must not contain each other", c.Storage, c.Cache.Path)
+	}
+	writable := map[string]string{"storage": c.Storage, "cache.path": c.Cache.Path, "scan staging directory": StageDir(c.Storage)}
+	for i, root := range c.Media {
+		for _, other := range c.Media[:i] {
+			if Contains(root.Path, other.Path) || Contains(other.Path, root.Path) {
+				return fmt.Errorf("media roots %s and %s overlap", other.Path, root.Path)
+			}
+		}
+		for name, path := range writable {
+			if Contains(root.Path, path) || Contains(path, root.Path) {
+				return fmt.Errorf("%s %s overlaps media root %s; writable data must stay outside media", name, path, root.Path)
+			}
+		}
+	}
+	for _, ignored := range c.Ignore {
+		inside := slices.ContainsFunc(c.Media, func(root Path) bool {
+			return ignored.Path != root.Path && Contains(root.Path, ignored.Path)
+		})
+		if !inside {
+			return fmt.Errorf("ignore path %s must be strictly inside a media root", ignored.Path)
+		}
+	}
+	return nil
+}
+
+// StageDir is the disposable scan staging directory beside the database.
+func StageDir(storage string) string {
+	return filepath.Join(filepath.Dir(storage), ".scan-tmp")
+}
+
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// ParseCron accepts five-field expressions with an optional CRON_TZ= prefix.
 func ParseCron(s string) (cron.Schedule, error) {
-	return cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(s)
+	return cronParser.Parse(s)
 }
 
 var capacity = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)(MB|GB|MiB|GiB)$`)
 
+var units = map[string]float64{"MB": 1e6, "GB": 1e9, "MiB": 1 << 20, "GiB": 1 << 30}
+
 func ParseSize(s string) (int64, error) {
 	m := capacity.FindStringSubmatch(s)
 	if m == nil {
-		return 0, errors.New("cache.max_size must use MB, GB, MiB or GiB")
+		return 0, fmt.Errorf("cache.max_size %q must be a number followed by MB, GB, MiB or GiB", s)
 	}
 	v, err := strconv.ParseFloat(m[1], 64)
-	mult := map[string]float64{"MB": 1e6, "GB": 1e9, "MiB": 1 << 20, "GiB": 1 << 30}[m[2]]
-	v *= mult
+	v *= units[m[2]]
 	if err != nil || math.IsInf(v, 0) || v < 1 || v >= math.MaxInt64 {
-		return 0, errors.New("cache.max_size is outside the supported positive range")
+		return 0, fmt.Errorf("cache.max_size %q is outside the supported positive range", s)
 	}
 	return int64(v), nil
 }
@@ -337,20 +506,18 @@ func Canonical(path string) (string, error) {
 		suffix = append(suffix, filepath.Base(p))
 		p = parent
 	}
-	for i := len(suffix) - 1; i >= 0; i-- {
-		p = filepath.Join(p, suffix[i])
+	for _, part := range slices.Backward(suffix) {
+		p = filepath.Join(p, part)
 	}
 	return filepath.Clean(p), nil
 }
+
+// Contains reports whether path is root or lies inside it.
 func Contains(root, path string) bool {
 	r, err := filepath.Rel(root, path)
 	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) && !filepath.IsAbs(r)
 }
+
 func (c Config) IsIgnored(path string) bool {
-	for _, p := range c.Ignore {
-		if Contains(p.Path, path) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.Ignore, func(p Path) bool { return Contains(p.Path, path) })
 }

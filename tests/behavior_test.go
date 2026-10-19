@@ -37,7 +37,7 @@ func setup(t *testing.T) (*library.Index, *scanner.Scanner, string) {
 	if e = os.Mkdir(root, 0700); e != nil {
 		t.Fatal(e)
 	}
-	c, e := config.Load(base, []string{"VVIDEO_AUTH__TOKEN=fixture", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)})
+	c, e := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=fixture", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -368,7 +368,7 @@ func TestDirectoryAbsenceInterruptedByFailedRoot(t *testing.T) {
 		t.Fatal(e)
 	}
 	ls, _ := i.Libraries(t.Context())
-	children, e := i.Children(t.Context(), ls[0].DirectoryID, "")
+	children, e := i.Children(t.Context(), ls[0].DirectoryID, "", false)
 	if e != nil || len(children.Items) != 1 {
 		t.Fatal(e)
 	}

@@ -8,10 +8,10 @@ import (
 	"os"
 )
 
-func mountIdentities(path string, file *os.File) (stable, legacy string, err error) {
+func mountIdentity(path string, file *os.File) (string, error) {
 	f, err := os.Open("/proc/self/mountinfo")
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	defer f.Close()
 	var observed unix.Statx_t
@@ -21,12 +21,11 @@ func mountIdentities(path string, file *os.File) (stable, legacy string, err err
 	}
 	record, err := selectMount(f, path, mountID)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	var st unix.Statfs_t
 	if err = unix.Fstatfs(int(file.Fd()), &st); err != nil || st.Blocks == 0 || st.Fsid.Val == [2]int32{} {
-		return "", "", errors.New("filesystem health cannot be established")
+		return "", errors.New("filesystem health cannot be established")
 	}
-	stable, legacy = mountIdentitiesFor(record, int64(st.Type), st.Fsid.Val)
-	return stable, legacy, nil
+	return mountIdentityFor(record, int64(st.Type), st.Fsid.Val), nil
 }

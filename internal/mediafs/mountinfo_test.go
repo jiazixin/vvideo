@@ -16,10 +16,9 @@ func TestMountIdentitySurvivesEphemeralNumbersAndOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stable, legacy := mountIdentitiesFor(a, 0x6969, [2]int32{12, 34})
-	next, old := mountIdentitiesFor(b, 0x6969, [2]int32{12, 34})
-	if stable != next || legacy == old {
-		t.Fatal("ephemeral mount fields polluted persistent identity or legacy proof")
+	stable := mountIdentityFor(a, 0x6969, [2]int32{12, 34})
+	if next := mountIdentityFor(b, 0x6969, [2]int32{12, 34}); stable != next {
+		t.Fatal("ephemeral mount fields polluted persistent identity")
 	}
 	for _, line := range []string{
 		strings.Replace(remounted, "nas:/share", "other:/share", 1),
@@ -29,7 +28,7 @@ func TestMountIdentitySurvivesEphemeralNumbersAndOptions(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		changed, _ := mountIdentitiesFor(record, 0x6969, [2]int32{12, 34})
+		changed := mountIdentityFor(record, 0x6969, [2]int32{12, 34})
 		if changed == stable {
 			t.Fatal("changed filesystem source accepted")
 		}
@@ -39,11 +38,11 @@ func TestMountIdentitySurvivesEphemeralNumbersAndOptions(t *testing.T) {
 	bound := b
 	bound.root = "/library/subtree"
 	bound.point = "/home"
-	same, _ := mountIdentitiesFor(bound, 0x6969, [2]int32{12, 34})
+	same := mountIdentityFor(bound, 0x6969, [2]int32{12, 34})
 	if same != stable {
 		t.Fatal("namespace layout changed physical volume identity")
 	}
-	changed, _ := mountIdentitiesFor(b, 0x6969, [2]int32{12, 35})
+	changed := mountIdentityFor(b, 0x6969, [2]int32{12, 35})
 	if changed == stable {
 		t.Fatal("changed filesystem ID accepted")
 	}

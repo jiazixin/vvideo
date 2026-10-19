@@ -4,9 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 	"vvideo/internal/library"
 	"vvideo/internal/storage"
+)
+
+const (
+	// MaxAttempts is how many times a failing job runs before it is marked failed.
+	MaxAttempts = 3
+	retryDelay  = 30 * time.Second
+	leaseTime   = 2 * time.Minute
+	idlePoll    = 200 * time.Millisecond
 )
 
 type Job struct {
@@ -44,7 +53,7 @@ func (q *Queue) Claim(ctx context.Context, kind string, foregroundOnly bool) (Jo
 		if !eligible {
 			return sql.ErrNoRows
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='running',lease=?,attempts=attempts+1 WHERE id=?", q.Now().Add(2*time.Minute).UnixMilli(), j.ID)
+		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='running',lease=?,attempts=attempts+1 WHERE id=?", q.Now().Add(leaseTime).UnixMilli(), j.ID)
 		return err
 	})
 	if err == nil {
@@ -54,10 +63,10 @@ func (q *Queue) Claim(ctx context.Context, kind string, foregroundOnly bool) (Jo
 }
 func (q *Queue) Finish(ctx context.Context, j Job, state, code string) error {
 	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-		due := q.Now().Add(30 * time.Second).UnixMilli()
+		due := q.Now().Add(retryDelay).UnixMilli()
 		if state == "retry" {
 			state = "queued"
-			if j.Attempts >= 3 {
+			if j.Attempts >= MaxAttempts {
 				state = "failed"
 			}
 		}
@@ -81,36 +90,50 @@ func (q *Queue) EnqueueThumbnail(ctx context.Context, e library.Entry, parameter
 		return err
 	})
 }
+
+// Worker claims and runs jobs of one kind until ctx is cancelled. Probes run
+// only while no media is playing; covers then run only for foreground requests.
 func (q *Queue) Worker(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		if kind != "probe" || priority.Ready() {
-			j, err := q.Claim(ctx, kind, !priority.Ready())
-			if err == nil {
-				e, err := q.Index.Media(ctx, j.MediaID)
-				if err != nil || e.Version != j.Version {
-					q.Finish(ctx, j, "stale", "version_unavailable")
-				} else if err = run(ctx, j); err != nil {
-					state := "retry"
-					if errors.Is(err, library.ErrConflict) {
-						state = "stale"
-					}
-					finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					q.Finish(finishCtx, j, state, "tool_or_source_failure")
-					cancel()
-				}
-				continue
-			}
-			if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-				time.Sleep(200 * time.Millisecond)
-			}
+	for ctx.Err() == nil {
+		if q.runNext(ctx, kind, priority, run) {
+			continue
 		}
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(idlePoll):
 		}
 	}
+}
+
+// runNext reports whether it claimed a job.
+func (q *Queue) runNext(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) bool {
+	background := priority.Ready()
+	if kind == "probe" && !background {
+		return false
+	}
+	j, err := q.Claim(ctx, kind, !background)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
+			slog.Warn("job_claim_failed", "kind", kind, "error", err.Error())
+		}
+		return false
+	}
+	if e, err := q.Index.Media(ctx, j.MediaID); err != nil || e.Version != j.Version {
+		q.Finish(ctx, j, "stale", "version_unavailable")
+		return true
+	}
+	err = run(ctx, j)
+	if err == nil {
+		return true
+	}
+	state := "retry"
+	if errors.Is(err, library.ErrConflict) {
+		state = "stale"
+	} else if j.Attempts >= MaxAttempts && ctx.Err() == nil {
+		slog.Warn("job_failed", "kind", kind, "media_id", j.MediaID, "attempts", j.Attempts, "error", err.Error())
+	}
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	q.Finish(finishCtx, j, state, "tool_or_source_failure")
+	return true
 }

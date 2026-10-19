@@ -20,7 +20,7 @@ import (
 // verifies crash recovery rather than merely returning an injected Go error.
 func TestScanProcessCrashRecovery(t *testing.T) {
 	if base := os.Getenv("VV_CRASH_BASE"); base != "" {
-		c, err := config.Load(base, []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, filepath.Join(base, "media"))})
+		c, err := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, filepath.Join(base, "media"))}})
 		if err != nil {
 			t.Fatal(err)
 		}

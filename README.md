@@ -6,7 +6,7 @@ English | [简体中文](README.zh-CN.md)
 
 VVideo indexes an existing folder-organized media library with a Go service on Linux/NAS and browses it with a native Kotlin Android app. Originals are read-only; playback uses their original bytes without transcoding.
 
-**Status: implemented; acceptance remains partial.** The 2026-10-10 redesign passed its 30-minute synthetic workload memory gates, but all three final warm-scroll frame rounds exceeded the 1% deadline-overrun target. Earlier APK measurements do not establish its performance. Full-library/NAS testing, universal codec support and matching-server deployment remain unverified. Git-based OCR is unavailable because this workspace has no Git repository. See [verification records](docs/ACCEPTANCE.md).
+**Status: implemented; acceptance remains partial.** The 2026-10-10 redesign passed its 30-minute synthetic workload memory gates, but all three final warm-scroll frame rounds exceeded the 1% deadline-overrun target. Earlier APK measurements do not establish its performance. Full-library/NAS testing, universal codec support and matching-server deployment remain unverified. See [verification records](docs/ACCEPTANCE.md).
 
 ## Implemented scope
 
@@ -22,18 +22,32 @@ The user's estimated 130,000 videos and 380,000 images are not verified filesyst
 
 ## Build and run the server
 
-Use Go **1.27.1**, matching [go.mod](go.mod), with `ffmpeg` and `ffprobe` on PATH. Install an FFmpeg build supporting your inputs and WebP output. Store the SQLite database on the server's local filesystem, not SMB/NFS; media may reside on a mount.
+Use Go **1.27.1**, matching [go.mod](go.mod), with `ffmpeg` and `ffprobe` on PATH. The FFmpeg build must support your inputs and include the `libwebp` encoder used for covers; check with `ffmpeg -hide_banner -encoders | grep libwebp` (Debian/Ubuntu's `ffmpeg` package has it; current Homebrew `ffmpeg` does not). Store the SQLite database on the server's local filesystem, not SMB/NFS; media may reside on a mount.
 
 ```sh
 go mod download
 go test ./...
 go vet ./...
-go build -trimpath -o .cache/bin/vvideo ./cmd/vvideo
+go build -trimpath -o bin/vvideo ./cmd/vvideo
 cp configs/config.example.yaml configs/config.local.yaml
 # Edit the media/ignore paths and set a private nonempty token.
 chmod 600 configs/config.local.yaml
-CONFIG_FILE=configs/config.local.yaml .cache/bin/vvideo
+bin/vvideo --config configs/config.local.yaml
 ```
+
+For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git.
+
+```text
+Usage:
+  vvideo [options]
+
+Options:
+  -c, --config <file>   Configuration file (default: ./configs/config.local.yaml)
+  -v, --version         Print version information and exit
+  -h, --help            Print this help and exit
+```
+
+Exit status is 0 on success, `--help` or `--version`; 2 for a command-line error (printed to stderr); 1 when the service cannot start or fails. Once started, logs are JSON lines on stdout. A failed start logs one `service_failed` event whose `error` names the cause, such as a missing `ffmpeg`/`ffprobe`, an FFmpeg without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use.
 
 The example paths are relative to `configs/`. Keep configuration private and mount originals read-only. The service writes only its database/staging and cover cache. SIGTERM cancels work and permits up to 30 seconds for graceful HTTP shutdown. A storage ownership lock rejects a second process using the same database.
 
@@ -65,7 +79,8 @@ These ports are the development setup, not hidden application defaults. Phone di
 
 [configs/config.example.yaml](configs/config.example.yaml) contains the supported fields. All but nonempty `auth.token` and at least one `media[].path` have defaults.
 
-- Precedence: environment > selected YAML > defaults. `CONFIG_FILE` selects a file; unset checks only `configs/config.local.yaml` in the working directory. An explicitly empty/missing/unreadable/invalid selection fails. A missing default may be replaced by complete environment configuration.
+- File selection: `-c`/`--config` (also `--config=<file>`; the last one wins) > `CONFIG_FILE` > `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid fails; only the implicit default may be absent, in which case the environment must supply the required settings.
+- Field precedence: `VVIDEO_*` environment variables > selected YAML > defaults, however the file was selected.
 - File paths resolve against the configuration directory; environment/default paths against the working directory. Defaults are `data/data.sqlite` and `.cache/thumbnails`. Media roots must not overlap, and writable data/cache must remain outside originals. `ignore` specifies exact files or directory subtrees, not globs.
 - Environment names are `VVIDEO_` plus uppercase paths separated by `__`, e.g. `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA`/`VVIDEO_IGNORE` replace complete lists using JSON arrays of `{"path":"..."}`. Unknown/legacy fields, duplicate keys, aliases, tags, wrong types and empty required values fail. No `.env` loading or YAML variable interpolation.
 - `scan.cron` is five-field cron, default `*/30 * * * *`, with optional `CRON_TZ=...`. Empty disables periodic scans, retaining the startup scan. Running scans do not accumulate cron triggers. Positive integer concurrency/thread values have a defensive upper bound of 1024; they are not process-wide thread limits.

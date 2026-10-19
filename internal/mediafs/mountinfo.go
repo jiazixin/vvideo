@@ -11,12 +11,11 @@ import (
 	"strings"
 )
 
-type mountRecord struct{ raw, root, point, kind, source string }
+type mountRecord struct{ root, point, kind, source string }
 
 // Mount numbers and options are observations of this mount namespace, not
 // persistent volume identity. Bind-root/point layout can also change inside
 // a read-only service namespace; the opened root inode identifies the directory.
-// Keep the raw line only for a guarded v1 upgrade.
 func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, error) {
 	scan := bufio.NewScanner(reader)
 	scan.Buffer(make([]byte, 4096), 1<<20)
@@ -51,7 +50,7 @@ func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, er
 		if mountID != 0 && id != mountID {
 			continue
 		}
-		candidate := mountRecord{scan.Text(), unescape(fields[3]), point, fields[separator+1], unescape(fields[separator+2])}
+		candidate := mountRecord{unescape(fields[3]), point, fields[separator+1], unescape(fields[separator+2])}
 		if len(point) > length {
 			best = candidate
 			length = len(point)
@@ -68,11 +67,10 @@ func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, er
 	}
 	return best, nil
 }
-func mountIdentitiesFor(record mountRecord, filesystemType int64, fsid [2]int32) (stable, legacy string) {
+func mountIdentityFor(record mountRecord, filesystemType int64, fsid [2]int32) string {
 	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d,%d", record.kind, record.source, filesystemType, fsid[0], fsid[1])
 	sum := sha256.Sum256([]byte(key))
-	old := sha256.Sum256([]byte(record.raw))
-	return fmt.Sprintf("%x", sum[:12]), fmt.Sprintf("%x:%d", old[:12], filesystemType)
+	return fmt.Sprintf("%x", sum[:12])
 }
 func unescape(s string) string {
 	for _, v := range []string{"040", "011", "012", "134"} {

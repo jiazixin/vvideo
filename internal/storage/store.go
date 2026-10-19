@@ -32,18 +32,35 @@ type Store struct {
 	Fault func(string) error
 }
 
+// ErrLocked reports that another process already serves the same database.
+var ErrLocked = errors.New("database is in use by another vvideo process")
+
+// Open takes exclusive ownership of the database and initializes its schema.
+// Errors name the database path so startup failures are actionable.
 func Open(ctx context.Context, path string) (*Store, error) {
+	s, err := open(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("database %s: %w", path, err)
+	}
+	return s, nil
+}
+
+func open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	fd, err := unix.Open(path+".lock", unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
+	lockPath := path + ".lock"
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: lockPath, Err: err}
 	}
-	lock := os.NewFile(uintptr(fd), path+".lock")
+	lock := os.NewFile(uintptr(fd), lockPath)
 	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		lock.Close()
-		return nil, errors.New("database already owned by another service")
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, ErrLocked
+		}
+		return nil, &os.PathError{Op: "lock", Path: lockPath, Err: err}
 	}
 	acquired := false
 	defer func() {
@@ -65,15 +82,18 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	w.SetMaxIdleConns(1)
 	fail := func(err error) (*Store, error) { w.Close(); return nil, err }
 	var mode string
-	if err = w.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil || mode != "wal" {
-		return fail(fmt.Errorf("WAL required: %w", err))
+	if err = w.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
+		return fail(fmt.Errorf("enable WAL: %w", err))
+	}
+	if mode != "wal" {
+		return fail(fmt.Errorf("filesystem does not support WAL (journal mode %q); keep the database on a local disk", mode))
 	}
 	var v int
 	if err = w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
-		return fail(err)
+		return fail(fmt.Errorf("read schema version: %w", err))
 	}
-	if v > 1 {
-		return fail(errors.New("database schema is newer than this service"))
+	if v > schemaVersion {
+		return fail(fmt.Errorf("schema version %d is newer than this build supports (%d)", v, schemaVersion))
 	}
 	if v == 0 {
 		tx, err := w.BeginTx(ctx, nil)
@@ -82,7 +102,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		}
 		if _, err = tx.ExecContext(ctx, schemaSQL); err != nil {
 			tx.Rollback()
-			return fail(err)
+			return fail(fmt.Errorf("initialize schema: %w", err))
 		}
 		if err = tx.Commit(); err != nil {
 			return fail(err)

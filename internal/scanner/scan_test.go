@@ -26,7 +26,7 @@ func fixture(t *testing.T) (*Scanner, string) {
 	if e := os.Mkdir(root, 0700); e != nil {
 		t.Fatal(e)
 	}
-	c, e := config.Load(base, []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)})
+	c, e := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)}})
 	if e != nil {
 		t.Fatal(e)
 	}
