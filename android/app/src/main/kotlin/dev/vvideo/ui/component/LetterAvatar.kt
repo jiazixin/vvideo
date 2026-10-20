@@ -21,6 +21,7 @@ fun avatarLetter(name: String): String {
         ?: points.firstOrNull { Character.isDigit(it) } ?: return "?"
     return String(Character.toChars(point)).uppercase(java.util.Locale.ROOT)
 }
+
 fun avatarColorIndex(id: String): Int = (kotlin.math.abs(id.hashCode().toLong()) % 7).toInt()
 
 @Composable
@@ -28,6 +29,11 @@ fun LetterAvatar(id: String, name: String, size: Dp = 52.dp) {
     val letter = remember(name) { avatarLetter(name) }
     val brush = remember(id) { AvatarGradients[avatarColorIndex(id)] }
     Box(Modifier.size(size).background(brush, CircleShape), contentAlignment = Alignment.Center) {
-        Text(letter, color = Color.White, fontSize = (size.value * .4f).sp, fontWeight = FontWeight.Medium)
+        Text(
+            letter,
+            color = Color.White,
+            fontSize = (size.value * .4f).sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }

@@ -20,7 +20,8 @@
 
 # Local build tools, verification output and Android state
 .DS_Store
-/scripts/__pycache__/
+__pycache__/
+*.pyc
 /android/.gradle/
 /android/.kotlin/
 /android/.idea/

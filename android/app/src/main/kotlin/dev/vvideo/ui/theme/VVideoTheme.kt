@@ -3,8 +3,8 @@ package dev.vvideo.ui.theme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -53,14 +53,34 @@ enum class ThemeMode { System, Light, Dark }
 
 @Composable
 fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
-    val dark = when (mode) { ThemeMode.System -> isSystemInDarkTheme(); ThemeMode.Dark -> true; ThemeMode.Light -> false }
+    val dark = when (mode) {
+        ThemeMode.System -> isSystemInDarkTheme()
+        ThemeMode.Dark -> true
+        ThemeMode.Light -> false
+    }
     val c = if (dark) NightBlue else Day
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
-        primary = c.accentFill, onPrimary = Color.White, primaryContainer = c.accentSoft,
-        onPrimaryContainer = c.accentText, background = c.bgPage, surface = c.bgSurface,
-        onBackground = c.textPrimary, onSurface = c.textPrimary, onSurfaceVariant = c.textSecondary, surfaceVariant = c.bgPlaceholder,
-        surfaceContainer = c.bgRaised, surfaceContainerHigh = c.bgRaised, surfaceContainerLow = c.bgSurface,
-        surfaceTint = Color.Transparent, secondary = c.accentText, onSecondary = Color.White, secondaryContainer = c.accentSoft, onSecondaryContainer = c.accentText, outline = c.divider, outlineVariant = c.divider, error = c.error,
+        primary = c.accentFill,
+        onPrimary = Color.White,
+        primaryContainer = c.accentSoft,
+        onPrimaryContainer = c.accentText,
+        background = c.bgPage,
+        surface = c.bgSurface,
+        onBackground = c.textPrimary,
+        onSurface = c.textPrimary,
+        onSurfaceVariant = c.textSecondary,
+        surfaceVariant = c.bgPlaceholder,
+        surfaceContainer = c.bgRaised,
+        surfaceContainerHigh = c.bgRaised,
+        surfaceContainerLow = c.bgSurface,
+        surfaceTint = Color.Transparent,
+        secondary = c.accentText,
+        onSecondary = Color.White,
+        secondaryContainer = c.accentSoft,
+        onSecondaryContainer = c.accentText,
+        outline = c.divider,
+        outlineVariant = c.divider,
+        error = c.error,
     )
     CompositionLocalProvider(LocalVV provides c, LocalAnimations provides animationsEnabled()) {
         MaterialTheme(colorScheme = scheme, typography = VVTypography, content = content)
@@ -72,12 +92,20 @@ private fun type(size: Int, line: Int, medium: Boolean = false) = TextStyle(
     fontWeight = if (medium) FontWeight.Medium else FontWeight.Normal,
     fontFeatureSettings = "tnum",
 )
+
 val VVTypography = Typography(
-    headlineSmall = type(22,30,true), titleLarge = type(20,26,true),
-    titleMedium = type(17,22,true), titleSmall = type(16,22,true),
-    bodyLarge = type(16,22), bodyMedium = type(14,20), bodySmall = type(13,18),
-    labelLarge = type(15,20,true), labelMedium = type(12,16,true), labelSmall = type(13,18,true),
+    headlineSmall = type(22, 30, true),
+    titleLarge = type(20, 26, true),
+    titleMedium = type(17, 22, true),
+    titleSmall = type(16, 22, true),
+    bodyLarge = type(16, 22),
+    bodyMedium = type(14, 20),
+    bodySmall = type(13, 18),
+    labelLarge = type(15, 20, true),
+    labelMedium = type(12, 16, true),
+    labelSmall = type(13, 18, true),
 )
+
 object VVDimens {
     val appBar = 56.dp
     val row = 72.dp

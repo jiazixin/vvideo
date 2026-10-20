@@ -10,10 +10,17 @@ data class TimeLabels(
     val yearPattern: String, val recentPattern: String, val oldPattern: String,
     val weekdayPattern: String, val locale: Locale = Locale.getDefault(),
 ) {
-    private fun format(value: ZonedDateTime, pattern: String) = value.format(DateTimeFormatter.ofPattern(pattern, locale))
-    fun recent(millis: Long, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
+    private fun format(value: ZonedDateTime, pattern: String) =
+        value.format(DateTimeFormatter.ofPattern(pattern, locale))
+
+    fun recent(
+        millis: Long,
+        now: Instant = Instant.now(),
+        zone: ZoneId = ZoneId.systemDefault()
+    ): String {
         val value = Instant.ofEpochMilli(millis).atZone(zone)
-        val date = value.toLocalDate(); val current = now.atZone(zone).toLocalDate()
+        val date = value.toLocalDate()
+        val current = now.atZone(zone).toLocalDate()
         val days = java.time.temporal.ChronoUnit.DAYS.between(date, current)
         return when {
             days == 0L -> format(value, "HH:mm")
@@ -23,17 +30,33 @@ data class TimeLabels(
             else -> format(value, oldPattern)
         }
     }
-    fun date(nanos: Long, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
-        val value = instant(nanos).atZone(zone); val current = now.atZone(zone).toLocalDate()
-        return when(value.toLocalDate()) {
+
+    fun date(
+        nanos: Long,
+        now: Instant = Instant.now(),
+        zone: ZoneId = ZoneId.systemDefault()
+    ): String {
+        val value = instant(nanos).atZone(zone)
+        val current = now.atZone(zone).toLocalDate()
+        return when (value.toLocalDate()) {
             current -> today
             current.minusDays(1) -> yesterday
-            else -> format(value, if(value.year == current.year) datePattern else yearPattern)
+            else -> format(value, if (value.year == current.year) datePattern else yearPattern)
         }
     }
+
     companion object {
-        fun instant(nanos: Long): Instant = Instant.ofEpochSecond(Math.floorDiv(nanos, 1_000_000_000L), Math.floorMod(nanos, 1_000_000_000L))
-        fun timestamp(nanos:Long,pattern:String,zone:ZoneId=ZoneId.systemDefault(),locale:Locale=Locale.getDefault()):String=instant(nanos).atZone(zone).format(DateTimeFormatter.ofPattern(pattern,locale))
+        fun instant(nanos: Long): Instant = Instant.ofEpochSecond(
+            Math.floorDiv(nanos, 1_000_000_000L),
+            Math.floorMod(nanos, 1_000_000_000L)
+        )
+
+        fun timestamp(
+            nanos: Long,
+            pattern: String,
+            zone: ZoneId = ZoneId.systemDefault(),
+            locale: Locale = Locale.getDefault()
+        ): String = instant(nanos).atZone(zone).format(DateTimeFormatter.ofPattern(pattern, locale))
     }
 }
 

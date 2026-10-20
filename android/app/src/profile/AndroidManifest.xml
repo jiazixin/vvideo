@@ -1,1 +1,6 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><profileable android:shell="true"/></application></manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <profileable android:shell="true" />
+    </application>
+</manifest>

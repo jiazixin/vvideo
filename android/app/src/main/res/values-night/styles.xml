@@ -1,1 +1,8 @@
-<resources><style name="Theme.VVideo" parent="android:style/Theme.Material.NoActionBar"><item name="android:windowLightStatusBar">false</item><item name="android:colorAccent">#2575CC</item><item name="android:windowBackground">#0E1621</item></style></resources>
+<resources>
+
+    <style name="Theme.VVideo" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">#2575CC</item>
+        <item name="android:windowBackground">#0E1621</item>
+    </style>
+</resources>
