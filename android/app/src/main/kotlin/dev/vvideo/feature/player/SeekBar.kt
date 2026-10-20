@@ -91,6 +91,24 @@ fun SeekBar(
             delay(250)
         }
     }
+    // A seek moves the bar at once. Between polls the released thumb would otherwise
+    // fall back to the position before the seek, then jump to the target.
+    DisposableEffect(player, mediaId, live) {
+        if (!live) return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK ||
+                    reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT
+                ) position = newPosition.positionMs.coerceAtLeast(0)
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
     DisposableEffect(mediaId) { onDispose { onDragging(false) } }
     val shownDuration = if (duration > 0) duration else expectedDurationMs.coerceAtLeast(0)
     val fraction =
