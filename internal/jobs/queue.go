@@ -37,9 +37,16 @@ type Queue struct {
 // writer only revalidates and leases the one selected job.
 const currentJob = `EXISTS(SELECT 1 FROM entries e JOIN directories d ON d.id=e.directory_id JOIN libraries l ON l.id=d.library_id WHERE e.media_id=j.media_id AND e.version=j.version AND e.generation=d.generation AND e.state='visible' AND l.active=1 AND NOT EXISTS(WITH RECURSIVE ancestry(id,parent_id,state,depth) AS (SELECT d.id,d.parent_id,d.state,0 UNION ALL SELECT p.id,p.parent_id,p.state,a.depth+1 FROM directories p JOIN ancestry a ON p.id=a.parent_id WHERE a.depth<1023) SELECT 1 FROM ancestry WHERE state!='visible' OR (depth=1023 AND parent_id IS NOT NULL)))`
 
+// Claim leases the next eligible job of kind. Foreground (on-demand) jobs go
+// first, by due time; only when none is eligible does the background backlog
+// get its turn. INDEXED BY keeps the foreground probe on the partial index of
+// queued foreground jobs instead of scanning the backlog for priority>0.
 func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
-	var j Job
-	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM jobs j WHERE j.kind=? AND j.state='queued' AND j.due<=? AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, q.Now().UnixMilli()).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
+	now := q.Now().UnixMilli()
+	j, err := q.candidate(ctx, "jobs j INDEXED BY job_foreground", " AND j.priority>0", kind, now)
+	if errors.Is(err, sql.ErrNoRows) {
+		j, err = q.candidate(ctx, "jobs j", "", kind, now)
+	}
 	if err != nil {
 		return j, err
 	}
@@ -57,6 +64,12 @@ func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
 	if err == nil {
 		j.Attempts++
 	}
+	return j, err
+}
+
+func (q *Queue) candidate(ctx context.Context, from, filter, kind string, now int64) (Job, error) {
+	var j Job
+	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM `+from+` WHERE j.kind=? AND j.state='queued' AND j.due<=?`+filter+` AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, now).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
 	return j, err
 }
 
@@ -105,7 +118,7 @@ func (q *Queue) EnqueueThumbnail(ctx context.Context, e library.Entry, parameter
 		priority = 1
 	}
 	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO jobs(media_id,version,kind,parameters,due,priority) VALUES(?,?,'thumbnail',?,?,?) ON CONFLICT(media_id,version,kind,parameters) DO UPDATE SET priority=max(priority,excluded.priority),attempts=CASE WHEN state='done' THEN 0 ELSE attempts END,due=CASE WHEN state='done' THEN excluded.due ELSE due END,state=CASE WHEN state='done' THEN 'queued' ELSE state END`, e.ID, e.Version, parameters, q.Now().UnixMilli(), priority)
+		_, err := tx.ExecContext(ctx, `INSERT INTO jobs(media_id,version,kind,parameters,due,priority) VALUES(?,?,'thumbnail',?,?,?) ON CONFLICT(media_id,version,kind,parameters) DO UPDATE SET priority=CASE WHEN state='done' THEN excluded.priority ELSE max(priority,excluded.priority) END,attempts=CASE WHEN state='done' THEN 0 ELSE attempts END,due=CASE WHEN state='done' THEN excluded.due ELSE due END,state=CASE WHEN state='done' THEN 'queued' ELSE state END`, e.ID, e.Version, parameters, q.Now().UnixMilli(), priority)
 		return err
 	})
 }

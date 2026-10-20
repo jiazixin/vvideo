@@ -95,17 +95,18 @@ func open(ctx context.Context, path string) (*Store, error) {
 	if v > schemaVersion {
 		return fail(fmt.Errorf("schema version %d is newer than this build supports (%d)", v, schemaVersion))
 	}
+	if v < 0 {
+		return fail(fmt.Errorf("schema version %d is not a vvideo database", v))
+	}
 	if v == 0 {
-		tx, err := w.BeginTx(ctx, nil)
-		if err != nil {
-			return fail(err)
-		}
-		if _, err = tx.ExecContext(ctx, schemaSQL); err != nil {
-			tx.Rollback()
+		if err = execTx(ctx, w, schemaSQL); err != nil {
 			return fail(fmt.Errorf("initialize schema: %w", err))
 		}
-		if err = tx.Commit(); err != nil {
-			return fail(err)
+		v = schemaVersion
+	}
+	for ; v < schemaVersion; v++ {
+		if err = execTx(ctx, w, migrations[v-1]); err != nil {
+			return fail(fmt.Errorf("migrate schema from version %d: %w", v, err))
 		}
 	}
 	if err = os.Chmod(path, 0600); err != nil {
@@ -126,6 +127,19 @@ func open(ctx context.Context, path string) (*Store, error) {
 	}
 	acquired = true
 	return &Store{Reader: r, Writer: w, Path: path, gate: make(chan struct{}, 1), lock: lock}, nil
+}
+
+// execTx runs a schema script atomically, including its user_version update.
+func execTx(ctx context.Context, w *sql.DB, script string) error {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, script); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() { s.closeError = errors.Join(s.Reader.Close(), s.Writer.Close(), s.lock.Close()) })

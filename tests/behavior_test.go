@@ -560,6 +560,69 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	}
 }
 
+// TestForegroundCoverClaimsAheadOfBacklog: an on-demand cover enqueued after a
+// large, earlier-due background backlog is claimed first, and a finished
+// foreground job re-queued in the background loses its precedence.
+func TestForegroundCoverClaimsAheadOfBacklog(t *testing.T) {
+	i, s, root := setup(t)
+	for _, name := range []string{"a.mp4", "b.mp4"} {
+		os.WriteFile(filepath.Join(root, name), []byte(name), 0600)
+	}
+	if e := s.Run(t.Context(), false); e != nil {
+		t.Fatal(e)
+	}
+	libs, _ := i.Libraries(t.Context())
+	p, e := i.List(t.Context(), libs[0].DirectoryID, library.ListOptions{Sort: "name", Direction: "asc"})
+	if e != nil || len(p.Items) != 2 {
+		t.Fatal(e, p)
+	}
+	background, wanted := p.Items[0], p.Items[1]
+	const backlog = 5000
+	if e = i.Store.Write(t.Context(), backlog, func(tx *sql.Tx) error {
+		stmt, e := tx.PrepareContext(t.Context(), "INSERT INTO jobs(media_id,version,kind,parameters,due) VALUES(?,?,'thumbnail',?,?)")
+		if e != nil {
+			return e
+		}
+		defer stmt.Close()
+		for n := range backlog {
+			if _, e = stmt.ExecContext(t.Context(), background.ID, background.Version, fmt.Sprintf("bg-%05d", n), n); e != nil {
+				return e
+			}
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	q := &jobs.Queue{Store: i.Store, Index: i, Now: time.Now}
+	if e = q.EnqueueThumbnail(t.Context(), wanted, "cover", true); e != nil {
+		t.Fatal(e)
+	}
+	claim := func() jobs.Job {
+		t.Helper()
+		j, e := q.Claim(t.Context(), "thumbnail")
+		if e != nil {
+			t.Fatal(e)
+		}
+		return j
+	}
+	fg := claim()
+	if fg.MediaID != wanted.ID || fg.Parameters != "cover" {
+		t.Fatalf("claimed %s %s ahead of the on-demand cover", fg.MediaID, fg.Parameters)
+	}
+	if e = q.Finish(t.Context(), fg, "done", ""); e != nil {
+		t.Fatal(e)
+	}
+	if j := claim(); j.Parameters != "bg-00000" {
+		t.Fatalf("background order broken: %s", j.Parameters)
+	}
+	if e = q.EnqueueThumbnail(t.Context(), wanted, "cover", false); e != nil {
+		t.Fatal(e)
+	}
+	if j := claim(); j.Parameters != "bg-00001" {
+		t.Fatalf("re-queued background job kept foreground precedence: %s", j.Parameters)
+	}
+}
+
 // TestPlaybackCooldown covers the gate list reordering still waits on; scans,
 // probes and covers no longer consult it.
 func TestPlaybackCooldown(t *testing.T) {

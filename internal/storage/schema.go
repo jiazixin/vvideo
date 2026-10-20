@@ -1,7 +1,18 @@
 package storage
 
 // schemaVersion is the PRAGMA user_version written by schemaSQL.
-const schemaVersion = 1
+const schemaVersion = 2
+
+// migrations[v-1] upgrades a version v database to v+1 in one transaction.
+// schemaSQL already contains every step, so new databases skip them.
+var migrations = []string{
+	// 2: on-demand covers claim ahead of the background backlog.
+	jobForegroundSQL + "PRAGMA user_version=2;",
+}
+
+// jobForegroundSQL indexes only queued foreground jobs, so claiming them does
+// not scan the background backlog and finished jobs leave the index.
+const jobForegroundSQL = "CREATE INDEX job_foreground ON jobs(kind,due,id) WHERE state='queued' AND priority>0;\n"
 
 // schemaSQL initializes the schema atomically, only for an uninitialized database.
 const schemaSQL = `CREATE TABLE libraries (
@@ -65,7 +76,7 @@ CREATE TABLE jobs (
  FOREIGN KEY(media_id,version) REFERENCES versions(media_id,version)
 );
 CREATE INDEX job_claim ON jobs(kind,state,due,id);
-CREATE INDEX job_version ON jobs(media_id,version,state);
+` + jobForegroundSQL + `CREATE INDEX job_version ON jobs(media_id,version,state);
 CREATE TABLE thumbnails (
  key TEXT PRIMARY KEY, media_id TEXT NOT NULL, version TEXT NOT NULL,
  size INTEGER NOT NULL, accessed INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'ready',
@@ -80,5 +91,5 @@ CREATE INDEX group_anchor_time ON group_anchors(directory_id,token,sort,directio
 CREATE INDEX group_anchor_name ON group_anchors(directory_id,token,sort,direction,name_key,media_id);
 
 CREATE INDEX directory_dirty_groups ON directories(id) WHERE state='visible' AND group_revision!=revision;
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 `

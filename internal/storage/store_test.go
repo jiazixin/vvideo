@@ -158,3 +158,32 @@ func TestSingleServiceOwnsWriterAndCrashLockReleases(t *testing.T) {
 	}
 	t.Cleanup(func() { second.Close() })
 }
+
+// TestMigrateVersion1 upgrades a version 1 database to the current schema in
+// place and matches what a new database gets.
+func TestMigrateVersion1(t *testing.T) {
+	if len(migrations) != schemaVersion-1 {
+		t.Fatalf("%d migrations for schema version %d", len(migrations), schemaVersion)
+	}
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	s, e := Open(t.Context(), path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Writer.ExecContext(t.Context(), "DROP INDEX job_foreground; PRAGMA user_version=1;"); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	s, e = Open(t.Context(), path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	var v, indexes int
+	if e = s.Reader.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); e != nil || v != schemaVersion {
+		t.Fatal("version", v, e)
+	}
+	if e = s.Reader.QueryRowContext(t.Context(), "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='job_foreground'").Scan(&indexes); e != nil || indexes != 1 {
+		t.Fatal("job_foreground missing", indexes, e)
+	}
+}
