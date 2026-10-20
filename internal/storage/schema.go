@@ -1,13 +1,23 @@
 package storage
 
 // schemaVersion is the PRAGMA user_version written by schemaSQL.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations[v-1] upgrades a version v database to v+1 in one transaction.
 // schemaSQL already contains every step, so new databases skip them.
 var migrations = []string{
 	// 2: on-demand covers claim ahead of the background backlog.
 	jobForegroundSQL + "PRAGMA user_version=2;",
+	// 3: file fingerprints drop the device number ("f2:dev:rest" -> "f3:rest"),
+	// so unchanged files keep matching after the upgrade and after remounts.
+	dropDeviceSQL("versions", "fingerprint") + dropDeviceSQL("jobs", "fingerprint") +
+		dropDeviceSQL("directories", "identity") + "PRAGMA user_version=3;",
+}
+
+// dropDeviceSQL rewrites one column from the f2 fingerprint layout, which
+// started with the device number, to the f3 layout without it.
+func dropDeviceSQL(table, column string) string {
+	return "UPDATE " + table + " SET " + column + "='f3:'||substr(" + column + ",4+instr(substr(" + column + ",4),':')) WHERE " + column + " LIKE 'f2:%';\n"
 }
 
 // jobForegroundSQL indexes only queued foreground jobs, so claiming them does
@@ -91,5 +101,5 @@ CREATE INDEX group_anchor_time ON group_anchors(directory_id,token,sort,directio
 CREATE INDEX group_anchor_name ON group_anchors(directory_id,token,sort,direction,name_key,media_id);
 
 CREATE INDEX directory_dirty_groups ON directories(id) WHERE state='visible' AND group_revision!=revision;
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 `

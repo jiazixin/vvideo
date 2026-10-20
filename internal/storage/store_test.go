@@ -4,9 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"vvideo/internal/mediafs"
 )
 
 func fixture(t *testing.T) *Store {
@@ -185,5 +191,54 @@ func TestMigrateVersion1(t *testing.T) {
 	}
 	if e = s.Reader.QueryRowContext(t.Context(), "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='job_foreground'").Scan(&indexes); e != nil || indexes != 1 {
 		t.Fatal("job_foreground missing", indexes, e)
+	}
+}
+
+// TestMigrateDropsDeviceFromFingerprints: fingerprints stored before version 3
+// carry the device number. After the upgrade an unchanged file's stored value
+// equals what the scanner now computes, so nothing looks changed.
+func TestMigrateDropsDeviceFromFingerprints(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.mp4")
+	if e := os.WriteFile(file, []byte("media"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	info, e := os.Stat(file)
+	if e != nil {
+		t.Fatal(e)
+	}
+	current := mediafs.Fingerprint(info)
+	rest, ok := strings.CutPrefix(current, "f3:")
+	if !ok {
+		t.Skip("platform has no inode fingerprint")
+	}
+	legacy := fmt.Sprintf("f2:%d:%s", info.Sys().(*syscall.Stat_t).Dev, rest)
+	path := filepath.Join(dir, "index.sqlite")
+	s, e := Open(t.Context(), path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Writer.ExecContext(t.Context(), `INSERT INTO libraries(id,root,name) VALUES('l','/m','m');
+INSERT INTO directories(id,library_id,relative,name,identity) VALUES(1,'l','.','m',?),(2,'l','x','x','v2:root');
+INSERT INTO media(id,directory_id,name) VALUES('m',1,'a.mp4');
+INSERT INTO versions(media_id,version,fingerprint,size,mtime,kind,effective_time) VALUES('m','v',?,5,0,'video',0);
+INSERT INTO jobs(media_id,version,kind,parameters,due,fingerprint) VALUES('m','v','probe','',0,?);
+PRAGMA user_version=2;`, legacy, legacy, legacy); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	if s, e = Open(t.Context(), path); e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	for _, q := range []string{"SELECT fingerprint FROM versions", "SELECT fingerprint FROM jobs", "SELECT identity FROM directories WHERE id=1"} {
+		var got string
+		if e = s.Reader.QueryRowContext(t.Context(), q).Scan(&got); e != nil || got != current {
+			t.Errorf("%s: %q, want %q (%v)", q, got, current, e)
+		}
+	}
+	var untouched string
+	if e = s.Reader.QueryRowContext(t.Context(), "SELECT identity FROM directories WHERE id=2").Scan(&untouched); e != nil || untouched != "v2:root" {
+		t.Errorf("non-fingerprint identity rewritten: %q (%v)", untouched, e)
 	}
 }

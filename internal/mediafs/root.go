@@ -25,9 +25,11 @@ func Fingerprint(info fs.FileInfo) string {
 		return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
 	}
 	// Metadata change time catches same-size writes followed by mtime restore.
-	// It is a version guard, never a capture-time sorting source.
+	// It is a version guard, never a capture-time sorting source. The device
+	// number is left out: network mounts (CIFS, NFS) get an anonymous one at
+	// mount time, so a remount would otherwise make every file look changed.
 	changed := changeTime(stat)
-	return fmt.Sprintf("f2:%d:%d:%d:%d:%d:%d", stat.Dev, stat.Ino, info.Size(), info.ModTime().UnixNano(), changed.Sec, changed.Nsec)
+	return fmt.Sprintf("f3:%d:%d:%d:%d:%d", stat.Ino, info.Size(), info.ModTime().UnixNano(), changed.Sec, changed.Nsec)
 }
 func Open(path string) (*Root, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
