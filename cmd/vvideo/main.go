@@ -30,8 +30,9 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run handles command-line usage with plain text; once the service starts,
-// everything is logged as JSON on stdout.
+// run handles command-line usage with plain text. Configuration errors are
+// logged as JSON on stdout; once the configuration loads, everything goes to
+// the configured log output, level and format.
 func run(args []string, stdout, stderr io.Writer) int {
 	o, err := parseArgs(args)
 	if err != nil {
@@ -47,7 +48,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(stdout, nil)))
-	if err := serve(o.configFile); err != nil {
+	c, err := loadConfig(o.configFile)
+	if err != nil {
+		slog.Error("service_failed", "error", err.Error())
+		return exitFailure
+	}
+	logger, closeLog, err := newLogger(c, stdout, stderr)
+	if err != nil {
+		slog.Error("service_failed", "error", "log.file: "+err.Error())
+		return exitFailure
+	}
+	defer closeLog()
+	slog.SetDefault(logger)
+	if err := serve(c); err != nil {
 		slog.Error("service_failed", "error", err.Error())
 		return exitFailure
 	}
@@ -55,15 +68,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func serve(configFile string) error {
+func loadConfig(configFile string) (config.Config, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return config.Config{}, err
 	}
 	c, err := config.Load(config.Source{WorkDir: cwd, Env: os.Environ(), File: configFile})
 	if err != nil {
-		return fmt.Errorf("config: %w", err)
+		return c, fmt.Errorf("config: %w", err)
 	}
+	return c, nil
+}
+
+func serve(c config.Config) error {
 	slog.Info("service_starting", "version", versionString())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"math"
 	"net"
@@ -59,6 +60,13 @@ type Config struct {
 		Parallel, Threads int
 		Percent           float64
 	}
+	Log struct {
+		Level slog.Level
+		// Format is "json" or "text"; Output is "stdout", "stderr" or "file".
+		Format, Output string
+		// File is the log file when Output is "file", otherwise empty.
+		File string
+	}
 }
 
 // Source describes where configuration is read from. Tests pass an explicit
@@ -95,9 +103,13 @@ var fields = map[string]fieldKind{
 	"cache.parallel":      intField,
 	"cache.threads":       intField,
 	"cache.percent":       numberField,
+	"log.level":           stringField,
+	"log.format":          stringField,
+	"log.output":          stringField,
+	"log.file":            stringField,
 }
 
-var sections = []string{"server", "auth", "scan", "cache"}
+var sections = []string{"server", "auth", "scan", "cache", "log"}
 
 var defaults = map[string]string{
 	"server.listen":       "0.0.0.0",
@@ -112,7 +124,12 @@ var defaults = map[string]string{
 	"cache.parallel":      "2",
 	"cache.threads":       "2",
 	"cache.percent":       "10",
+	"log.level":           "info",
+	"log.format":          "json",
+	"log.output":          "stdout",
 }
+
+var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
 
 var errRequired = errors.New("required setting missing")
 
@@ -430,7 +447,43 @@ func (s *settings) build(cwd string) (Config, error) {
 	if c.Ignore, err = s.pathList("ignore", cwd); err != nil {
 		return c, err
 	}
+	if err = s.buildLog(&c, cwd); err != nil {
+		return c, err
+	}
 	return c, c.validatePaths()
+}
+
+func (s *settings) buildLog(c *Config, cwd string) error {
+	level, ok := logLevels[s.values["log.level"]]
+	if !ok {
+		return errors.New("log.level must be debug, info, warn or error")
+	}
+	c.Log.Level = level
+	c.Log.Format = s.values["log.format"]
+	if c.Log.Format != "json" && c.Log.Format != "text" {
+		return errors.New("log.format must be json or text")
+	}
+	c.Log.Output = s.values["log.output"]
+	switch c.Log.Output {
+	case "stdout", "stderr":
+		if s.values["log.file"] != "" {
+			return fmt.Errorf("log.file is only used when log.output is file, not %s", c.Log.Output)
+		}
+	case "file":
+		if strings.TrimSpace(s.values["log.file"]) == "" {
+			return errors.New("log.file must be set when log.output is file")
+		}
+		var err error
+		if c.Log.File, err = s.path("log.file", cwd); err != nil {
+			return err
+		}
+		if info, err := os.Stat(c.Log.File); err == nil && info.IsDir() {
+			return fmt.Errorf("log.file %s is a directory", c.Log.File)
+		}
+	default:
+		return errors.New("log.output must be stdout, stderr or file")
+	}
+	return nil
 }
 
 // validateListen accepts a host name or IP address; the port is server.port.
@@ -460,6 +513,9 @@ func (c Config) validatePaths() error {
 		return fmt.Errorf("storage %s and cache.path %s must not contain each other", c.Storage, c.Cache.Path)
 	}
 	writable := map[string]string{"storage": c.Storage, "cache.path": c.Cache.Path}
+	if c.Log.File != "" {
+		writable["log.file"] = c.Log.File
+	}
 	for i, root := range c.Media {
 		for _, other := range c.Media[:i] {
 			if Contains(root.Path, other.Path) || Contains(other.Path, root.Path) {

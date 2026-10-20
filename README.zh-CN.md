@@ -49,11 +49,11 @@ Options:
   -h, --help            Print this help and exit
 ```
 
-退出码：正常结束、`--help`、`--version` 为 0；命令行参数错误为 2（输出到 stderr）；服务无法启动或运行失败为 1。启动后日志为 stdout 上的 JSON 行。启动失败只记录一条 `service_failed`，其 `error` 写明具体原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 缺少 `libwebp`、配置文件及行号、数据库已被另一进程锁定、端口已被占用。
+退出码：正常结束、`--help`、`--version` 为 0；命令行参数错误为 2（输出到 stderr）；服务无法启动或运行失败为 1。配置错误以 JSON 行写到 stdout；配置加载后按 `log` 设置输出（默认 stdout 上 info 级 JSON 行）。启动失败只记录一条 `service_failed`，其 `error` 写明具体原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 缺少 `libwebp`、配置文件及行号、数据库已被另一进程锁定、端口已被占用。
 
 示例相对路径以 `configs/` 为基准。保护私有配置，将源媒体以只读方式挂载。服务写入数据库/暂存与封面缓存；SIGTERM 取消任务，HTTP 优雅退出最多等待 30 秒。数据库所有权锁拒绝第二个进程同时使用该库。
 
-[deploy/vvideo.service](deploy/vvideo.service) 是实际 systemd 定义，约定 `/opt/vvideo` 和已存在的 `vvideo` 服务账户。安装前创建账户及可写的 `data/`、`cache/`，安装二进制/配置，并按部署环境调整路径和账户。沙箱只允许写入上述目录与私有临时空间，媒体挂载需保留读取权限。配置正确后安装到 `/etc/systemd/system/vvideo.service`，执行 systemd reload 与 enable/start；不能直接使用尚未适配路径的 unit。
+[deploy/vvideo.service](deploy/vvideo.service) 是实际 systemd 定义，约定 `/opt/vvideo` 和已存在的 `vvideo` 服务账户。安装前创建账户及可写的 `data/`、`cache/`，安装二进制/配置，并按部署环境调整路径和账户。沙箱只允许写入上述目录与私有临时空间；使用 `log.output: file` 时需把日志目录加入 `ReadWritePaths`（或保持默认 stdout 交给 journald）。媒体挂载需保留读取权限。配置正确后安装到 `/etc/systemd/system/vvideo.service`，执行 systemd reload 与 enable/start；不能直接使用尚未适配路径的 unit。
 
 ## 安卓
 
@@ -89,6 +89,7 @@ adb reverse tcp:19323 tcp:19323
 - 环境变量为 `VVIDEO_` 加大写字段路径，以 `__` 分隔，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA`/`VVIDEO_IGNORE` 以 JSON `[{"path":"..."}]` 整体替换列表。未知/旧字段、重复键、别名、标签、类型错误及必填空值失败；不加载 `.env` 或插值 YAML 变量。
 - `scan.cron` 为五段 cron，默认 `*/30 * * * *`，可带 `CRON_TZ=...`。空值只关闭周期扫描，仍保留启动扫描；正在运行时不积压 cron 触发。`scan.parallel` 限制文件属性读取并发，`scan.probe_parallel` 限制同时运行的 ffprobe 元信息探测任务，默认均为 2。并发/线程是正整数，防御性上限 1024，不是进程总线程限制。
 - 封面配置包括 `cache.path`、正数 `cache.max_size`（`MB/GB/MiB/GiB`）、`cache.parallel`、`cache.threads` 与 `[0,100)` 内有限单值 `cache.percent`。默认容量 `30GB`、2 工作者、2 解码线程、10% 取图；容量是内容预算，不预占空间。
+- 日志：`log.level` 为 `debug`、`info`（默认）、`warn` 或 `error`；`log.format` 为 `json`（默认）或 `text`；`log.output` 为 `stdout`（默认）、`stderr` 或 `file`，`log.file` 仅在 `file` 时填写且必填。文件及其目录不存在时自动创建，追加写入，不内置轮转，可用 logrotate 的 `copytruncate`。有封面在生成时，每 5 分钟输出一条 info 级 `thumbnail_progress`：本周期生成数与失败尝试数、队列总量（`total`/`done`/`failed`/`pending`/`percent`）、仍在等探测的 `waiting_probe`、单张平均耗时 `avg_ms`、吞吐 `per_minute`，以及按本周期速率估算的 `eta`；队列空闲时不输出。
 - 修改配置后重启。重排/重启保留库 ID，改根路径创建另一媒体库；移除根配置停止管理，不删除原件。
 
 超时、重试、页大小与资源策略内置，见 [设计](docs/DESIGN.md) 和 [开发说明](docs/IMPLEMENTATION.md)。格式兼容性取决于 FFmpeg、Media3、设备及实际媒体流。

@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
+
+	"vvideo/internal/config"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -93,5 +97,39 @@ func TestConfigErrorExitsBeforeStartup(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "service_starting") {
 		t.Fatal("service started despite invalid configuration")
+	}
+}
+
+func TestLoggerOutputs(t *testing.T) {
+	file := t.TempDir() + "/logs/vvideo.log"
+	var c config.Config
+	c.Log.Level, c.Log.Format, c.Log.Output, c.Log.File = slog.LevelWarn, "text", "file", file
+	for range 2 { // a restart appends instead of truncating
+		logger, closeLog, err := newLogger(c, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logger.Info("hidden")
+		logger.Warn("shown", "n", 1)
+		if err = closeLog(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); strings.Count(got, "level=WARN msg=shown n=1\n") != 2 || strings.Contains(got, "hidden") {
+		t.Fatalf("log file content:\n%s", got)
+	}
+	var stdout, stderr bytes.Buffer
+	c.Log.Level, c.Log.Format, c.Log.Output, c.Log.File = slog.LevelDebug, "json", "stderr", ""
+	logger, _, err := newLogger(c, &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Debug("detail")
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), `"level":"DEBUG","msg":"detail"`) {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }

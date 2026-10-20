@@ -73,6 +73,40 @@ func (q *Queue) candidate(ctx context.Context, from, filter, kind string, now in
 	return j, err
 }
 
+// Backlog counts the jobs of one kind by outcome.
+type Backlog struct {
+	// Pending includes queued jobs that are not yet due or whose directory is
+	// currently unavailable.
+	Pending, Done, Failed int64
+}
+
+// Backlog reads the kind's whole range of the job_claim index, so callers
+// poll it at most every few minutes rather than per job or request.
+func (q *Queue) Backlog(ctx context.Context, kind string) (Backlog, error) {
+	var b Backlog
+	rows, err := q.Store.Reader.QueryContext(ctx, "SELECT state,count(*) FROM jobs WHERE kind=? GROUP BY state", kind)
+	if err != nil {
+		return b, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		var n int64
+		if err = rows.Scan(&state, &n); err != nil {
+			return b, err
+		}
+		switch state {
+		case "queued", "running":
+			b.Pending += n
+		case "done":
+			b.Done += n
+		case "failed":
+			b.Failed += n
+		}
+	}
+	return b, rows.Err()
+}
+
 // Finish records a running job's outcome. "retry" requeues it after
 // retryDelay until MaxAttempts, then fails it. A failed job also marks its
 // media version failed so clients stop waiting for metadata or a cover.

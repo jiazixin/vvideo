@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"vvideo/internal/config"
 	"vvideo/internal/jobs"
@@ -47,10 +49,21 @@ func CheckEncoder(ctx context.Context) error {
 	return fmt.Errorf("%s has no %s encoder, which video covers require; install an FFmpeg build with libwebp (check: ffmpeg -hide_banner -encoders | grep %s)", path, Encoder, Encoder)
 }
 
+// Metrics counts this process's cover jobs since startup for progress logs.
+type Metrics struct {
+	Generated atomic.Int64
+	// GenerateNS sums the run time of jobs that published a cover.
+	GenerateNS atomic.Int64
+	// Failed counts attempts that returned an error, excluding shutdown and
+	// version changes; a job may fail several attempts before giving up.
+	Failed atomic.Int64
+}
+
 type Engine struct {
 	Config     config.Config
 	Queue      *jobs.Queue
 	Parameters string
+	Metrics    Metrics
 	mu         sync.Mutex
 	pins       map[string]int
 	deleting   map[string]bool
@@ -184,7 +197,17 @@ func (e *Engine) Evict(ctx context.Context, reserve int64) error {
 		}
 	}
 }
+
+// Run generates one cover and records its outcome in Metrics.
 func (e *Engine) Run(ctx context.Context, j jobs.Job) error {
+	err := e.run(ctx, j, time.Now())
+	if err != nil && ctx.Err() == nil && !errors.Is(err, library.ErrConflict) {
+		e.Metrics.Failed.Add(1)
+	}
+	return err
+}
+
+func (e *Engine) run(ctx context.Context, j jobs.Job, start time.Time) error {
 	item, err := e.Queue.Index.Media(ctx, j.MediaID)
 	if err != nil || item.Version != j.Version {
 		return library.ErrConflict
@@ -281,5 +304,9 @@ func (e *Engine) Run(ctx context.Context, j jobs.Job) error {
 		return err
 	}
 	e.budget.Unlock()
+	elapsed := time.Since(start)
+	e.Metrics.Generated.Add(1)
+	e.Metrics.GenerateNS.Add(elapsed.Nanoseconds())
+	slog.Debug("thumbnail_generated", "media_id", item.ID, "kind", item.Kind, "duration_ms", elapsed.Milliseconds())
 	return e.Evict(ctx, 0)
 }

@@ -35,6 +35,9 @@ const (
 	// sortPublishInterval batches capture-time reorders from probes, so a
 	// large import changes each directory's revision at most this often.
 	sortPublishInterval = 20 * time.Second
+	// thumbnailProgressInterval is how often cover progress is logged while
+	// covers are being generated; an idle queue logs nothing.
+	thumbnailProgressInterval = 5 * time.Minute
 )
 
 type App struct {
@@ -148,6 +151,8 @@ func (a *App) Start(ctx context.Context) error {
 	for range a.Config.Cache.Parallel {
 		a.wg.Go(func() { a.Queue.Worker(ctx, "thumbnail", timed(&a.thumbnailNS, a.Thumbnails.Run)) })
 	}
+	progress := &thumbnail.Progress{Engine: a.Thumbnails}
+	a.wg.Go(func() { progress.Run(ctx, thumbnailProgressInterval) })
 	if a.cron != nil {
 		a.cron.Start()
 	}

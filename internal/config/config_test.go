@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +278,55 @@ func TestErrorsNameTheProblem(t *testing.T) {
 	}
 }
 
+func TestLogSettings(t *testing.T) {
+	d, e := envFor(t)
+	c, err := Load(Source{WorkDir: d, Env: e})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Log.Level != slog.LevelInfo || c.Log.Format != "json" || c.Log.Output != "stdout" || c.Log.File != "" {
+		t.Fatalf("wrong log defaults: %+v", c.Log)
+	}
+	p := filepath.Join(d, "configs", "log.yaml")
+	os.MkdirAll(filepath.Dir(p), 0700)
+	os.WriteFile(p, []byte("log: {level: debug, format: text, output: file, file: ../logs/vvideo.log}\n"), 0600)
+	if c, err = Load(Source{WorkDir: d, Env: e, File: p}); err != nil {
+		t.Fatal(err)
+	}
+	if c.Log.Level != slog.LevelDebug || c.Log.Format != "text" || c.Log.File != filepath.Join(d, "logs/vvideo.log") {
+		t.Fatalf("log file settings lost: %+v", c.Log)
+	}
+	if c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_LOG__OUTPUT=stderr", "VVIDEO_LOG__FILE=", "VVIDEO_LOG__LEVEL=warn")}); err != nil {
+		t.Fatal(err)
+	}
+	if c.Log.Output != "stderr" || c.Log.File != "" || c.Log.Level != slog.LevelWarn {
+		t.Fatalf("environment did not replace log settings: %+v", c.Log)
+	}
+	os.MkdirAll(filepath.Join(d, "dir.log"), 0700)
+	for _, tc := range []struct{ env, want string }{
+		{"VVIDEO_LOG__LEVEL=INFO", "log.level"},
+		{"VVIDEO_LOG__LEVEL=trace", "log.level"},
+		{"VVIDEO_LOG__FORMAT=logfmt", "log.format"},
+		{"VVIDEO_LOG__OUTPUT=syslog", "log.output"},
+		{"VVIDEO_LOG__OUTPUT=file", "log.file must be set"},
+		{"VVIDEO_LOG__FILE=vvideo.log", "only used when log.output is file"},
+	} {
+		if _, err := Load(Source{WorkDir: d, Env: append(e, tc.env)}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want an error naming %q", tc.env, err, tc.want)
+		}
+	}
+	for _, file := range []string{"media/vvideo.log", "dir.log"} {
+		if _, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_LOG__OUTPUT=file", "VVIDEO_LOG__FILE="+file)}); err == nil || !strings.Contains(err.Error(), "log.file") {
+			t.Errorf("log file %s accepted or unexplained: %v", file, err)
+		}
+	}
+	bad := filepath.Join(d, "level.yaml")
+	os.WriteFile(bad, []byte("log: {level: 1}\n"), 0600)
+	if _, err := Load(Source{WorkDir: d, Env: e, File: bad}); err == nil || !strings.Contains(err.Error(), "log.level must be a string") {
+		t.Fatalf("numeric level accepted or unexplained: %v", err)
+	}
+}
+
 func TestExampleConfigLoads(t *testing.T) {
 	d, err := Canonical(t.TempDir())
 	if err != nil {
@@ -296,5 +346,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if c.Address() != "0.0.0.0:8080" || c.Database() != filepath.Join(repo, "data", DatabaseFile) || c.Cache.Path != filepath.Join(repo, "cache") {
 		t.Fatalf("example resolves to %s, %s and %s", c.Address(), c.Database(), c.Cache.Path)
+	}
+	if c.Log.Level != slog.LevelInfo || c.Log.Format != "json" || c.Log.Output != "stdout" {
+		t.Fatalf("example log settings %+v differ from the defaults", c.Log)
 	}
 }
