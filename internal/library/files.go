@@ -5,9 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
 	"vvideo/internal/mediafs"
 )
 
+// OpenMedia opens the published version e through its root descriptor without
+// following symlinks. It fails with ErrConflict if the file's fingerprint no
+// longer matches. The returned validate function re-checks, after the caller
+// has used the file, that the same file is still at that path, unchanged.
 func (i *Index) OpenMedia(ctx context.Context, e Entry) (*os.File, func() error, error) {
 	d, err := i.Directory(ctx, e.DirectoryID)
 	if err != nil {

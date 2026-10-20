@@ -36,10 +36,13 @@ const (
 	maxDepth    = 8
 )
 
+// Path is one entry of the media or ignore list.
 type Path struct {
 	Path string `yaml:"path" json:"path"`
 }
 
+// Config is the validated service configuration. Paths are absolute and
+// symlink-resolved.
 type Config struct {
 	Server struct {
 		Listen string // host or IP address, without a port
@@ -555,6 +558,7 @@ var capacity = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)(MB|GB|MiB|GiB)$`)
 
 var units = map[string]float64{"MB": 1e6, "GB": 1e9, "MiB": 1 << 20, "GiB": 1 << 30}
 
+// ParseSize parses a cache.max_size value such as "30GB" or "512MiB" into bytes.
 func ParseSize(s string) (int64, error) {
 	m := capacity.FindStringSubmatch(s)
 	if m == nil {
@@ -607,6 +611,7 @@ func Contains(root, path string) bool {
 	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) && !filepath.IsAbs(r)
 }
 
+// IsIgnored reports whether path is, or lies inside, an ignored path.
 func (c Config) IsIgnored(path string) bool {
 	return slices.ContainsFunc(c.Ignore, func(p Path) bool { return Contains(p.Path, path) })
 }

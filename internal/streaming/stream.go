@@ -1,3 +1,5 @@
+// Package streaming serves original media bytes over HTTP Range requests and
+// locates the MP4 index boxes a client may prefetch.
 package streaming
 
 import (
@@ -11,13 +13,26 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
 	"vvideo/internal/mediafs"
 )
 
-// maxStreams bounds concurrent original-byte responses, including prefetch.
-const maxStreams = 8
+const (
+	// maxStreams bounds concurrent original-byte responses, including prefetch.
+	maxStreams = 8
+	// writeIdleTimeout is extended after every write, so a long playback is
+	// never cut off while a stalled client still releases its slot.
+	writeIdleTimeout = 60 * time.Second
+
+	// MP4 index search limits: a file whose moov box lies beyond these simply
+	// gets no hints and plays through ordinary Range requests.
+	maxIndexBoxes   = 10000
+	indexSearchTime = 5 * time.Second
+	maxFtypSize     = 1 << 20
+	maxMoovSize     = 32 << 20
+)
 
 // Handler serves original media bytes with Range support. It rejects bytes
 // whose file version no longer matches the published index.
@@ -27,9 +42,14 @@ type Handler struct {
 	slots    chan struct{}
 }
 
+// New returns a Handler that reports each transfer to p.
 func New(index *library.Index, p *jobs.Priority) *Handler {
 	return &Handler{Index: index, Priority: p, slots: make(chan struct{}, maxStreams)}
 }
+
+// ServeHTTP answers GET /v1/media/{id}/bytes?version=. A version that no longer
+// matches the index gets 409; a file rewritten mid-response aborts the
+// connection so the client never mixes old and new bytes.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
 	case h.slots <- struct{}{}:
@@ -85,6 +105,7 @@ func fail(w http.ResponseWriter, status int, code string) {
 	json.MarshalWrite(w, map[string]string{"error": code})
 }
 
+// versionReader re-checks the file's fingerprint around every read.
 type versionReader struct {
 	f           *os.File
 	fingerprint string
@@ -95,6 +116,7 @@ type versionReader struct {
 func (v *versionReader) Seek(offset int64, whence int) (int64, error) {
 	return v.f.Seek(offset, whence)
 }
+
 func (v *versionReader) Read(b []byte) (int, error) {
 	if err := v.ctx.Err(); err != nil {
 		return 0, err
@@ -116,31 +138,40 @@ func (v *versionReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// progressWriter extends the write deadline after each write.
 type progressWriter struct {
 	http.ResponseWriter
 	controller *http.ResponseController
 }
 
 func (w *progressWriter) Write(b []byte) (int, error) {
-	w.controller.SetWriteDeadline(time.Now().Add(60 * time.Second))
+	w.controller.SetWriteDeadline(time.Now().Add(writeIdleTimeout))
 	return w.ResponseWriter.Write(b)
 }
+
 func (w *progressWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// Range is a byte range of the original file.
 type Range struct {
 	Offset int64 `json:"offset"`
 	Length int64 `json:"length"`
 }
+
+// Hints lists the original-offset ranges worth prefetching for one version.
 type Hints struct {
 	Version string  `json:"version"`
 	Size    int64   `json:"size"`
 	Ranges  []Range `json:"ranges"`
 }
 
+// MP4Ranges walks the top-level boxes of an MP4/MOV file and returns the ftyp
+// and moov ranges at their original offsets, so a client cache keyed by those
+// offsets stays valid for the real file. It fails when no moov box is found
+// within the search limits.
 func MP4Ranges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, error) {
 	out := []Range{}
-	deadline := time.Now().Add(5 * time.Second)
-	for offset, boxes := int64(0), 0; offset < size && boxes < 10000; boxes++ {
+	deadline := time.Now().Add(indexSearchTime)
+	for offset, boxes := int64(0), 0; offset < size && boxes < maxIndexBoxes; boxes++ {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -179,11 +210,11 @@ func MP4Ranges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, error) 
 		kind := string(header[4:8])
 		switch kind {
 		case "ftyp":
-			if length <= 1<<20 {
+			if length <= maxFtypSize {
 				out = append(out, Range{Offset: offset, Length: length})
 			}
 		case "moov":
-			if length > 32<<20 {
+			if length > maxMoovSize {
 				return nil, errors.New("index exceeds 32 MB")
 			}
 			out = append(out, Range{Offset: offset, Length: length})

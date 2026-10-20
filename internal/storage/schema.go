@@ -1,11 +1,12 @@
 package storage
 
-// schemaVersion is the PRAGMA user_version written by schemaSQL. Until the
+// schemaVersion is the PRAGMA user_version written after schemaSQL. Until the
 // first release the schema changes without migrations: a database with any
 // other version is refused and its storage directory must be rebuilt.
 const schemaVersion = 3
 
-// schemaSQL initializes the schema atomically, only for an uninitialized database.
+// schemaSQL creates the schema of an uninitialized database. It runs in the
+// same transaction that records schemaVersion.
 const schemaSQL = `CREATE TABLE libraries (
  id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
  identity TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
@@ -84,5 +85,4 @@ CREATE INDEX group_anchor_time ON group_anchors(directory_id,token,sort,directio
 CREATE INDEX group_anchor_name ON group_anchors(directory_id,token,sort,direction,name_key,media_id);
 
 CREATE INDEX directory_dirty_groups ON directories(id) WHERE state='visible' AND group_revision!=revision;
-PRAGMA user_version=3;
 `

@@ -40,6 +40,8 @@ const (
 	thumbnailProgressInterval = 5 * time.Minute
 )
 
+// App is the running service: the index, its background workers and the HTTP
+// API that serves it.
 type App struct {
 	Config     config.Config
 	Store      *storage.Store
@@ -126,7 +128,7 @@ func (a *App) Start(ctx context.Context) error {
 		}
 		a.cron = cron.New()
 		a.cron.Schedule(schedule, cron.FuncJob(func() {
-			// A running or paused scan never accumulates cron work.
+			// A running scan never accumulates cron work.
 			if !a.Scanner.Running() {
 				a.Trigger(false)
 			}

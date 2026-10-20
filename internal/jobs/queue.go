@@ -1,3 +1,5 @@
+// Package jobs is the durable work queue for media probes and covers, and the
+// playback tracker that list reordering waits for.
 package jobs
 
 import (
@@ -6,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
 	"vvideo/internal/library"
 	"vvideo/internal/storage"
 )
@@ -18,24 +21,51 @@ const (
 	idlePoll    = 200 * time.Millisecond
 	// maxClaimBackoff caps the retry delay while claiming keeps failing.
 	maxClaimBackoff = 30 * time.Second
+	// finishTimeout bounds recording an outcome after the worker's context ends.
+	finishTimeout = 5 * time.Second
 )
 
+// Job is one leased unit of work for a specific media version.
 type Job struct {
-	ID                                              int64
-	MediaID, Version, Kind, Parameters, Fingerprint string
-	FirstObserved                                   int64
-	Attempts                                        int
+	ID int64
+	// MediaID and Version identify the media version the job belongs to.
+	MediaID, Version string
+	// Kind is "probe" or "thumbnail"; Parameters distinguish cover settings.
+	Kind, Parameters string
+	// Fingerprint and FirstObserved support the probe stability check.
+	Fingerprint   string
+	FirstObserved int64
+	Attempts      int
 }
+
+// Queue stores jobs in the jobs table and leases them to workers.
 type Queue struct {
 	Store *storage.Store
 	Index *library.Index
 	Now   func() time.Time
 }
 
-// Eligible jobs must belong to a published version and an available ancestor
-// chain. The potentially large candidate search uses a read connection; the
-// writer only revalidates and leases the one selected job.
-const currentJob = `EXISTS(SELECT 1 FROM entries e JOIN directories d ON d.id=e.directory_id JOIN libraries l ON l.id=d.library_id WHERE e.media_id=j.media_id AND e.version=j.version AND e.generation=d.generation AND e.state='visible' AND l.active=1 AND NOT EXISTS(WITH RECURSIVE ancestry(id,parent_id,state,depth) AS (SELECT d.id,d.parent_id,d.state,0 UNION ALL SELECT p.id,p.parent_id,p.state,a.depth+1 FROM directories p JOIN ancestry a ON p.id=a.parent_id WHERE a.depth<1023) SELECT 1 FROM ancestry WHERE state!='visible' OR (depth=1023 AND parent_id IS NOT NULL)))`
+// currentJob is an SQL condition on the job row j: it belongs to a published
+// version whose whole ancestor chain is visible. The potentially large
+// candidate search uses a read connection; the writer only revalidates and
+// leases the one selected job.
+const currentJob = `EXISTS(
+	SELECT 1 FROM entries e
+	JOIN directories d ON d.id=e.directory_id
+	JOIN libraries l ON l.id=d.library_id
+	WHERE e.media_id=j.media_id AND e.version=j.version AND e.generation=d.generation
+		AND e.state='visible' AND l.active=1
+		AND NOT EXISTS(
+			WITH RECURSIVE ancestry(id,parent_id,state,depth) AS (
+				SELECT d.id,d.parent_id,d.state,0
+				UNION ALL
+				SELECT p.id,p.parent_id,p.state,a.depth+1
+				FROM directories p JOIN ancestry a ON p.id=a.parent_id
+				WHERE a.depth<1023
+			)
+			SELECT 1 FROM ancestry WHERE state!='visible' OR (depth=1023 AND parent_id IS NOT NULL)
+		)
+)`
 
 // Claim leases the next eligible job of kind. Foreground (on-demand) jobs go
 // first, by due time; only when none is eligible does the background backlog
@@ -67,6 +97,7 @@ func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
 	return j, err
 }
 
+// candidate finds the next due job of kind on a read connection.
 func (q *Queue) candidate(ctx context.Context, from, filter, kind string, now int64) (Job, error) {
 	var j Job
 	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM `+from+` WHERE j.kind=? AND j.state='queued' AND j.due<=?`+filter+` AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, now).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
@@ -140,12 +171,19 @@ func (q *Queue) Release(ctx context.Context, j Job) error {
 	})
 }
 
+// Delay requeues a probe whose file is still changing: it restarts the
+// stability window with the newly observed fingerprint.
 func (q *Queue) Delay(ctx context.Context, j Job, fingerprint string) error {
 	return q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',due=?,first_observed=?,fingerprint=?,attempts=0,lease=0 WHERE id=?", q.Now().Add(60*time.Second).UnixMilli(), q.Now().UnixMilli(), fingerprint, j.ID)
+		now := q.Now()
+		_, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',due=?,first_observed=?,fingerprint=?,attempts=0,lease=0 WHERE id=?", now.Add(library.StabilityDelay).UnixMilli(), now.UnixMilli(), fingerprint, j.ID)
 		return err
 	})
 }
+
+// EnqueueThumbnail queues a cover job for e. A foreground job (a client is
+// waiting for this cover) is claimed ahead of the background backlog; a cover
+// already done is queued again, for example after the LRU evicted its file.
 func (q *Queue) EnqueueThumbnail(ctx context.Context, e library.Entry, parameters string, foreground bool) error {
 	priority := 0
 	if foreground {
@@ -198,7 +236,7 @@ func (q *Queue) runNext(ctx context.Context, kind string, run func(context.Conte
 	if err = run(ctx, j); err == nil {
 		return true, nil
 	}
-	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
 	switch {
 	case ctx.Err() != nil:

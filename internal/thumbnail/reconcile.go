@@ -9,8 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
 	"vvideo/internal/storage"
 )
+
+// staleTempAge is how old an unfinished FFmpeg output must be before
+// Reconcile deletes it; it exceeds coverTimeout so running jobs keep theirs.
+const staleTempAge = 3 * time.Minute
 
 // Reconcile is one bounded background pass. Request-time statistics never walk
 // the cache directory. Only this service's hex-named covers and old temp files
@@ -34,7 +39,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			path := filepath.Join(e.Config.Cache.Path, name)
 			if strings.HasPrefix(name, ".frame-") && strings.HasSuffix(name, ".webp") {
 				info, err := item.Info()
-				if err == nil && time.Since(info.ModTime()) > 3*time.Minute {
+				if err == nil && time.Since(info.ModTime()) > staleTempAge {
 					if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 						return err
 					}
@@ -79,7 +84,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT 128", cursor)
+		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT ?", cursor, storage.BatchSize)
 		if err != nil {
 			return err
 		}
@@ -109,20 +114,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			e.budget.Lock()
 			_, err = os.Stat(filepath.Join(e.Config.Cache.Path, x.key+".webp"))
 			if errors.Is(err, os.ErrNotExist) {
-				err = e.Queue.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-					r, err := tx.ExecContext(ctx, "DELETE FROM thumbnails WHERE key=?", x.key)
-					if err != nil {
-						return err
-					}
-					n, err := r.RowsAffected()
-					if err != nil {
-						return err
-					}
-					if n > 0 {
-						_, err = tx.ExecContext(ctx, "UPDATE counters SET value=max(0,value-?) WHERE name='thumbnail_bytes'", x.size)
-					}
-					return err
-				})
+				err = e.forget(ctx, x.key, x.size)
 			}
 			e.budget.Unlock()
 			if err != nil {

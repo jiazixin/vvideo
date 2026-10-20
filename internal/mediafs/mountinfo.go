@@ -11,9 +11,11 @@ import (
 	"strings"
 )
 
+// mountRecord is the part of one mountinfo line that identifies a mount.
 type mountRecord struct{ root, point, kind, source string }
 
-// Mount numbers and options are observations of this mount namespace, not
+// selectMount returns the mount containing path, preferring the entry whose
+// mount ID equals mountID when it is known. Mount numbers and options are observations of this mount namespace, not
 // persistent volume identity. Bind-root/point layout can also change inside
 // a read-only service namespace; the opened root inode identifies the directory.
 func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, error) {
@@ -67,15 +69,16 @@ func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, er
 	}
 	return best, nil
 }
+
+// mountIdentityFor hashes the mount's type, source and filesystem ID.
 func mountIdentityFor(record mountRecord, filesystemType int64, fsid [2]int32) string {
 	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d,%d", record.kind, record.source, filesystemType, fsid[0], fsid[1])
 	sum := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", sum[:12])
 }
-func unescape(s string) string {
-	for _, v := range []string{"040", "011", "012", "134"} {
-		n, _ := strconv.ParseInt(v, 8, 8)
-		s = strings.ReplaceAll(s, "\\"+v, string(rune(n)))
-	}
-	return s
-}
+
+// mountinfoEscapes undoes the octal escapes the kernel writes in mountinfo
+// paths for space, tab, newline and backslash.
+var mountinfoEscapes = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+
+func unescape(s string) string { return mountinfoEscapes.Replace(s) }

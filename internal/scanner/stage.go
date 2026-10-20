@@ -13,10 +13,24 @@ import (
 	"path/filepath"
 	"strings"
 	"uuid"
+
 	"vvideo/internal/config"
 	"vvideo/internal/library"
+	"vvideo/internal/storage"
 )
 
+// stageSchema is the disposable per-scan database. baseline holds the
+// directory's published entries, observation both listing passes, merged the
+// entries of the next generation, and walk the subdirectories still to visit.
+const stageSchema = `
+CREATE TABLE baseline(name TEXT PRIMARY KEY,id TEXT UNIQUE,payload BLOB NOT NULL);
+CREATE TABLE observation(pass INTEGER,name TEXT,fingerprint TEXT,kind TEXT,size INTEGER,mtime INTEGER,directory INTEGER,PRIMARY KEY(pass,name));
+CREATE TABLE merged(id TEXT PRIMARY KEY,payload BLOB NOT NULL);
+CREATE TABLE walk(parent INTEGER,name TEXT,relative TEXT,identity TEXT,PRIMARY KEY(parent,name));
+`
+
+// stage is a scan's scratch database on local disk. It may use unsafe
+// durability settings because it is deleted after the scan and on restart.
 type stage struct {
 	db   *sql.DB
 	path string
@@ -25,9 +39,9 @@ type stage struct {
 // newStage opens a stage under the storage directory. The namespace hashes the
 // database path, so only stages left by an interrupted scan of this database
 // are removed.
-func newStage(ctx context.Context, storage string) (*stage, error) {
-	database := filepath.Join(storage, config.DatabaseFile)
-	dir := filepath.Join(config.StageDir(storage), fmt.Sprintf("%x", sha256.Sum256([]byte(database))))
+func newStage(ctx context.Context, storageDir string) (*stage, error) {
+	database := filepath.Join(storageDir, config.DatabaseFile)
+	dir := filepath.Join(config.StageDir(storageDir), fmt.Sprintf("%x", sha256.Sum256([]byte(database))))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -42,7 +56,7 @@ func newStage(ctx context.Context, storage string) (*stage, error) {
 			directory.Close()
 			return nil, ctx.Err()
 		}
-		batch, readErr := directory.ReadDir(128)
+		batch, readErr := directory.ReadDir(storage.BatchSize)
 		for _, entry := range batch {
 			stem, ok := strings.CutSuffix(entry.Name(), ".sqlite")
 			if !ok || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
@@ -71,7 +85,7 @@ func newStage(ctx context.Context, storage string) (*stage, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.ExecContext(ctx, `CREATE TABLE baseline(name TEXT PRIMARY KEY,id TEXT UNIQUE,payload BLOB NOT NULL);CREATE TABLE observation(pass INTEGER,name TEXT,fingerprint TEXT,kind TEXT,size INTEGER,mtime INTEGER,directory INTEGER,PRIMARY KEY(pass,name));CREATE TABLE merged(id TEXT PRIMARY KEY,payload BLOB NOT NULL);CREATE TABLE walk(parent INTEGER,name TEXT,relative TEXT,identity TEXT,PRIMARY KEY(parent,name));`)
+	_, err = db.ExecContext(ctx, stageSchema)
 	if err != nil {
 		db.Close()
 		os.Remove(path)
@@ -80,11 +94,17 @@ func newStage(ctx context.Context, storage string) (*stage, error) {
 	os.Chmod(path, 0600)
 	return &stage{db: db, path: path}, nil
 }
+
+// Close closes and deletes the stage database.
 func (s *stage) Close() error { return errors.Join(s.db.Close(), os.Remove(s.path)) }
+
+// Reset clears everything but the walk table before the next directory.
 func (s *stage) Reset(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM baseline;DELETE FROM observation;DELETE FROM merged;")
 	return err
 }
+
+// baseline stages a batch of the directory's published entries.
 func (s *stage) baseline(ctx context.Context, es []library.Entry) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -107,6 +127,8 @@ func (s *stage) baseline(ctx context.Context, es []library.Entry) error {
 	}
 	return tx.Commit()
 }
+
+// observe stages one page of a listing pass.
 func (s *stage) observe(ctx context.Context, pass int, es []Attributes) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -125,11 +147,15 @@ func (s *stage) observe(ctx context.Context, pass int, es []Attributes) error {
 	}
 	return tx.Commit()
 }
+
+// equal reports whether both listing passes saw exactly the same entries.
 func (s *stage) equal(ctx context.Context) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observation a LEFT JOIN observation b ON b.pass=3-a.pass AND b.name=a.name WHERE b.name IS NULL OR a.fingerprint!=b.fingerprint OR a.kind!=b.kind OR a.size!=b.size OR a.mtime!=b.mtime OR a.directory!=b.directory`).Scan(&n)
 	return n == 0, err
 }
+
+// put stages one entry of the next generation.
 func (s *stage) put(ctx context.Context, e library.Entry) error {
 	b, err := encodeEntry(e)
 	if err != nil {
@@ -138,11 +164,17 @@ func (s *stage) put(ctx context.Context, e library.Entry) error {
 	_, err = s.db.ExecContext(ctx, "INSERT INTO merged VALUES(?,?)", e.ID, b)
 	return err
 }
+
+// merge compares the second listing pass with the baseline and stages the
+// next generation: unchanged entries keep their version, changed and new
+// files get a new one, and baseline entries no longer listed stay as absent
+// (or ignored) so missing confirmation can count them. It returns the number
+// of changes; zero means the directory needs no new generation.
 func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(string) bool, force bool, resolve func(string) (string, error)) (int64, error) {
 	var changed int64
 	after := ""
 	for {
-		rows, err := s.db.QueryContext(ctx, "SELECT id,payload FROM baseline WHERE id>? ORDER BY id LIMIT 128", after)
+		rows, err := s.db.QueryContext(ctx, "SELECT id,payload FROM baseline WHERE id>? ORDER BY id LIMIT ?", after, storage.BatchSize)
 		if err != nil {
 			return 0, err
 		}
@@ -205,7 +237,7 @@ func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(str
 	}
 	after = ""
 	for {
-		rows, err := s.db.QueryContext(ctx, `SELECT o.name,o.fingerprint,o.kind,o.size,o.mtime FROM observation o LEFT JOIN baseline b ON b.name=o.name WHERE o.pass=2 AND o.directory=0 AND b.id IS NULL AND o.name>? ORDER BY o.name LIMIT 128`, after)
+		rows, err := s.db.QueryContext(ctx, `SELECT o.name,o.fingerprint,o.kind,o.size,o.mtime FROM observation o LEFT JOIN baseline b ON b.name=o.name WHERE o.pass=2 AND o.directory=0 AND b.id IS NULL AND o.name>? ORDER BY o.name LIMIT ?`, after, storage.BatchSize)
 		if err != nil {
 			return 0, err
 		}
@@ -240,11 +272,15 @@ func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(str
 	}
 	return changed, nil
 }
+
+// changedEntry is a new version of a file in d, with attributes a.
 func changedEntry(d library.Directory, id string, a Attributes) library.Entry {
 	return library.Entry{ID: id, Version: uuid.New().String(), DirectoryID: d.ID, LibraryID: d.LibraryID, Name: a.Name, Kind: a.Kind, Fingerprint: a.Fingerprint, Size: a.Size, Mtime: a.Mtime, EffectiveTime: a.Mtime, State: "visible", Present: true, NewVersion: true}
 }
+
+// merged pages the staged next generation by media ID.
 func (s *stage) merged(ctx context.Context, after string) ([]library.Entry, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT payload FROM merged WHERE id>? ORDER BY id LIMIT 128", after)
+	rows, err := s.db.QueryContext(ctx, "SELECT payload FROM merged WHERE id>? ORDER BY id LIMIT ?", after, storage.BatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -264,11 +300,35 @@ func (s *stage) merged(ctx context.Context, after string) ([]library.Entry, erro
 	return out, rows.Err()
 }
 
+// queueSubdirectories adds the subdirectories of d seen in the second pass
+// to the walk, recording each one's relative path and fingerprint.
+func (s *stage) queueSubdirectories(ctx context.Context, d library.Directory) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO walk(parent,name,relative,identity)
+		SELECT ?,name,CASE WHEN ?='.' THEN name ELSE ?||'/'||name END,fingerprint
+		FROM observation WHERE pass=2 AND directory=1`, d.ID, d.Relative, d.Relative)
+	return err
+}
+
+// nextSubdirectory returns the first queued subdirectory of parent named after
+// after, or sql.ErrNoRows when none is left.
+func (s *stage) nextSubdirectory(ctx context.Context, parent int64, after string) (name, relative, identity string, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT name,relative,identity FROM walk WHERE parent=? AND name>? ORDER BY name LIMIT 1", parent, after).Scan(&name, &relative, &identity)
+	return name, relative, identity, err
+}
+
+// forgetSubdirectories drops parent's walk rows once all were visited. A
+// failure only leaves rows behind until the stage is deleted.
+func (s *stage) forgetSubdirectories(ctx context.Context, parent int64) {
+	s.db.ExecContext(ctx, "DELETE FROM walk WHERE parent=?", parent)
+}
+
+// encodeEntry and decodeEntry serialize staged entries.
 func encodeEntry(e library.Entry) ([]byte, error) {
 	var b bytes.Buffer
 	err := gob.NewEncoder(&b).Encode(e)
 	return b.Bytes(), err
 }
+
 func decodeEntry(b []byte, e *library.Entry) error {
 	return gob.NewDecoder(bytes.NewReader(b)).Decode(e)
 }

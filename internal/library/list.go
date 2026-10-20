@@ -10,6 +10,22 @@ import (
 	"slices"
 )
 
+const (
+	// defaultPageSize and maxPageSize bound one media page.
+	defaultPageSize = 100
+	maxPageSize     = 200
+	// childPageSize is the fixed page size of subdirectory listings.
+	childPageSize = 100
+	// maxCursorLength rejects oversized cursors before decoding them.
+	maxCursorLength = 4096
+)
+
+// sortColumns maps a sort name to its entries column.
+var sortColumns = map[string]string{"capture": "effective_time", "mtime": "mtime", "name": "name"}
+
+// Cursor is the opaque paging position handed to clients. It pins the
+// directory revision and listing options, so a stale cursor fails with
+// ErrConflict instead of silently mixing two orders.
 type Cursor struct {
 	DirectoryID int64  `json:"directory_id"`
 	Revision    int64  `json:"revision"`
@@ -20,14 +36,17 @@ type Cursor struct {
 	ID          string `json:"id"`
 }
 
+// EncodeCursor serializes c as URL-safe base64 JSON.
 func EncodeCursor(c Cursor) string {
 	b, _ := json.Marshal(&c)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// DecodeCursor parses a cursor made by EncodeCursor.
 func DecodeCursor(s string) (Cursor, error) {
 	var c Cursor
 	errCursor := fmt.Errorf("%w: malformed cursor", ErrInvalid)
-	if len(s) > 4096 {
+	if len(s) > maxCursorLength {
 		return c, errCursor
 	}
 	b, err := base64.RawURLEncoding.DecodeString(s)
@@ -40,11 +59,21 @@ func DecodeCursor(s string) (Cursor, error) {
 	return c, nil
 }
 
+// ListOptions are the query parameters of a media listing.
 type ListOptions struct {
-	Sort, Direction, Kind, Cursor, Anchor, Fallback string
-	Previous                                        bool
-	Limit                                           int
+	// Sort is "capture" (default), "mtime" or "name"; Direction is "asc" or
+	// "desc" (default); Kind optionally filters to "video" or "image".
+	Sort, Direction, Kind string
+	// Cursor continues after (or, with Previous, before) an earlier page.
+	Cursor   string
+	Previous bool
+	// Anchor starts the page at the album group containing this media ID.
+	// Fallback is the cursor to use when the anchor no longer exists.
+	Anchor, Fallback string
+	Limit            int
 }
+
+// Page is one page of a media listing.
 type Page struct {
 	Directory   Directory `json:"directory"`
 	Items       []Entry   `json:"items"`
@@ -63,10 +92,10 @@ func (o *ListOptions) normalize() error {
 		o.Direction = "desc"
 	}
 	if o.Limit == 0 {
-		o.Limit = 100
+		o.Limit = defaultPageSize
 	}
-	if o.Limit < 1 || o.Limit > 200 {
-		return fmt.Errorf("%w: limit must be 1..200", ErrInvalid)
+	if o.Limit < 1 || o.Limit > maxPageSize {
+		return fmt.Errorf("%w: limit must be 1..%d", ErrInvalid, maxPageSize)
 	}
 	if o.Sort != "capture" && o.Sort != "mtime" && o.Sort != "name" {
 		return fmt.Errorf("%w: sort must be capture, mtime or name", ErrInvalid)
@@ -79,6 +108,8 @@ func (o *ListOptions) normalize() error {
 	}
 	return nil
 }
+
+// key is e's cursor key for sort.
 func key(e Entry, sort string) string {
 	switch sort {
 	case "name":
@@ -89,6 +120,9 @@ func key(e Entry, sort string) string {
 		return fmt.Sprint(e.EffectiveTime)
 	}
 }
+
+// List returns one page of directory id's visible media in the requested order.
+// Ties are broken by media ID, so paging never repeats or skips an item.
 func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error) {
 	var p Page
 	if err := o.normalize(); err != nil {
@@ -108,7 +142,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	if err = tx.QueryRowContext(ctx, "SELECT healthy FROM libraries WHERE id=?", p.Directory.LibraryID).Scan(&p.Healthy); err != nil {
 		return p, err
 	}
-	col := map[string]string{"capture": "effective_time", "mtime": "mtime", "name": "name"}[o.Sort]
+	col := sortColumns[o.Sort]
 	dir := o.Direction
 	comparison := ">"
 	if dir == "desc" {
@@ -204,6 +238,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	return p, tx.Commit()
 }
 
+// ChildrenPage is one page of subdirectories.
 type ChildrenPage struct {
 	Items    []Directory `json:"items"`
 	Next     string      `json:"next"`
@@ -236,7 +271,7 @@ func (i *Index) Children(ctx context.Context, parent int64, cursor string, previ
 	if previous {
 		comparison, order = "<", "DESC"
 	}
-	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE parent_id=? AND state='visible' AND (name,id)"+comparison+"(?,?) ORDER BY name "+order+",id "+order+" LIMIT 101", parent, name, id)
+	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE parent_id=? AND state='visible' AND (name,id)"+comparison+"(?,?) ORDER BY name "+order+",id "+order+" LIMIT ?", parent, name, id, childPageSize+1)
 	if err != nil {
 		return p, err
 	}
@@ -248,9 +283,9 @@ func (i *Index) Children(ctx context.Context, parent int64, cursor string, previ
 		}
 		p.Items = append(p.Items, d)
 	}
-	more := len(p.Items) > 100
+	more := len(p.Items) > childPageSize
 	if more {
-		p.Items = p.Items[:100]
+		p.Items = p.Items[:childPageSize]
 	}
 	if previous {
 		slices.Reverse(p.Items)

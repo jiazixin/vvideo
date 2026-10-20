@@ -14,11 +14,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Root is an opened media root directory. Identity combines the root's inode
+// with its mount identity, so a different filesystem mounted at the same path
+// is detected.
 type Root struct {
 	Path, Identity string
 	file           *os.File
 }
 
+// Fingerprint is the version guard of a file: inode, size, modification time
+// and change time. Any difference means the content may have changed.
 func Fingerprint(info fs.FileInfo) string {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -31,6 +36,9 @@ func Fingerprint(info fs.FileInfo) string {
 	changed := changeTime(stat)
 	return fmt.Sprintf("f3:%d:%d:%d:%d:%d", stat.Ino, info.Size(), info.ModTime().UnixNano(), changed.Sec, changed.Nsec)
 }
+
+// Open opens the root directory without following a symlink at path and
+// records its identity.
 func Open(path string) (*Root, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -58,7 +66,12 @@ func Open(path string) (*Root, error) {
 func (r *Root) Matches(identity string) bool {
 	return identity == r.Identity
 }
+
+// Close releases the root directory descriptor.
 func (r *Root) Close() error { return r.file.Close() }
+
+// Validate reopens the root by path and checks that it is still the same
+// directory on the same filesystem.
 func (r *Root) Validate() error {
 	other, err := Open(r.Path)
 	if err != nil {
@@ -98,6 +111,9 @@ func (r *Root) OpenFile(relative string) (*os.File, error) {
 	// which must not carry full media paths into logs.
 	return os.NewFile(uintptr(fd), relative), nil
 }
+
+// ValidateDirectory checks that the root is unchanged and that relative still
+// names the directory described by original.
 func (r *Root) ValidateDirectory(relative string, original fs.FileInfo) error {
 	if err := r.Validate(); err != nil {
 		return err

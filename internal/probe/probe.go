@@ -1,3 +1,5 @@
+// Package probe reads media metadata with ffprobe and EXIF, and runs the probe
+// jobs that fill in dimensions, duration and capture time.
 package probe
 
 import (
@@ -14,11 +16,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
 	"vvideo/internal/mediafs"
 )
 
+const (
+	// probeTimeout bounds one ffprobe run.
+	probeTimeout = 30 * time.Second
+	// maxProbeOutput bounds ffprobe's JSON output.
+	maxProbeOutput = 1 << 20
+	// maxDurationSeconds rejects durations of ten years or more as bogus.
+	maxDurationSeconds = 10 * 365 * 24 * 60 * 60
+)
+
+// ffprobeEntries selects the fields Run reads from ffprobe's JSON output.
+const ffprobeEntries = "format=duration:format_tags=creation_time:" +
+	"stream=codec_type,width,height,duration:stream_tags=creation_time:stream_side_data=rotation"
+
+// Result is the metadata of one media version. EffectiveTime is the sort time:
+// the capture time when one is trustworthy, otherwise the modification time;
+// CapturedSource records which.
 type Result struct {
 	Width, Height, Rotation     int
 	DurationMS, EffectiveTime   int64
@@ -71,12 +90,14 @@ func ExtraFilePath() string {
 	return "/proc/self/fd/3"
 }
 
+// Run probes the open file f, the published version e, with ffprobe and, for
+// images, its EXIF header.
 func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:format_tags=creation_time:stream=codec_type,width,height,duration:stream_tags=creation_time:stream_side_data=rotation", "-of", "json", ExtraFilePath())
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", ffprobeEntries, "-of", "json", ExtraFilePath())
 	cmd.ExtraFiles = []*os.File{f}
-	out := &boundedBuffer{Limit: 1 << 20}
+	out := &boundedBuffer{Limit: maxProbeOutput}
 	var stderr Diagnostics
 	cmd.Stdout = out
 	cmd.Stderr = &stderr
@@ -125,7 +146,7 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 		}
 	}
 	duration, err := strconv.ParseFloat(data.Format.Duration, 64)
-	if err == nil && duration > 0 && duration < 315360000 {
+	if err == nil && duration > 0 && duration < maxDurationSeconds {
 		r.DurationMS = int64(duration * 1000)
 	}
 	if r.CapturedRaw != "" {
@@ -150,6 +171,9 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 	return r, nil
 }
 
+// Worker runs probe jobs. Tool and Rescan are optional: Tool replaces Run in
+// tests, and Rescan is called when the file on disk no longer matches the
+// index so a scan can pick up the change.
 type Worker struct {
 	Queue      *jobs.Queue
 	Parameters string
@@ -158,6 +182,9 @@ type Worker struct {
 	Rescan     func()
 }
 
+// Run probes the job's media version once its file has kept the same
+// fingerprint for library.StabilityDelay, then stores the metadata and queues
+// its cover.
 func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 	e, err := w.Queue.Index.Media(ctx, j.MediaID)
 	if err != nil || e.Version != j.Version {
@@ -176,7 +203,7 @@ func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 		return err
 	}
 	fp := mediafs.Fingerprint(info)
-	if w.Now().UnixMilli()-j.FirstObserved < 60_000 || fp != j.Fingerprint {
+	if w.Now().UnixMilli()-j.FirstObserved < library.StabilityDelay.Milliseconds() || fp != j.Fingerprint {
 		return w.Queue.Delay(ctx, j, fp)
 	}
 	tool := w.Tool
@@ -193,6 +220,12 @@ func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 		}
 		return library.ErrConflict
 	}
+	return w.save(ctx, j, e, r)
+}
+
+// save stores r for version e and queues the next step, unless a newer
+// version was published while the tool ran.
+func (w *Worker) save(ctx context.Context, j jobs.Job, e library.Entry, r Result) error {
 	return w.Queue.Store.Write(ctx, 1, func(tx *sql.Tx) error {
 		var current string
 		if err := tx.QueryRowContext(ctx, `SELECT e.version FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.media_id=? AND e.generation=d.generation`, e.ID).Scan(&current); err != nil {
@@ -222,6 +255,9 @@ func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 		return err
 	})
 }
+
+// Parameters is the cover job parameter string for a cover taken at percent
+// of the video's duration. Changing any part of it invalidates cached covers.
 func Parameters(percent float64) string {
 	return fmt.Sprintf("percent=%s;width=640;quality=80;format=webp", strconv.FormatFloat(percent, 'g', -1, 64))
 }

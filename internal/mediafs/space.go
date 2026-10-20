@@ -2,6 +2,7 @@ package mediafs
 
 import "golang.org/x/sys/unix"
 
+// Space reports the total and available bytes of the filesystem holding path.
 func Space(path string) (total, free int64, err error) {
 	var s unix.Statfs_t
 	if err = unix.Statfs(path, &s); err != nil {

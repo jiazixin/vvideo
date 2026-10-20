@@ -32,6 +32,9 @@ func Exif(reader io.Reader) (raw, offset string, rotation int) {
 	}
 	return
 }
+
+// tiff reads DateTimeOriginal, OffsetTimeOriginal and Orientation from a TIFF
+// structure, following at most the IFD0 → Exif IFD chain.
 func tiff(b []byte) (raw, offset string, rotation int) {
 	if len(b) < 8 {
 		return

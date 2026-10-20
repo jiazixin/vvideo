@@ -1,3 +1,5 @@
+// Package library is the published media index: libraries, directories, media
+// versions, cursor-paged listings and album anchors.
 package library
 
 import (
@@ -14,15 +16,25 @@ import (
 )
 
 var (
-	ErrConflict    = errors.New("directory revision changed; relocate by anchor")
+	// ErrConflict means the client's cursor or version no longer matches the
+	// published index; it relocates by anchor and retries.
+	ErrConflict = errors.New("directory revision changed; relocate by anchor")
+	// ErrUnavailable marks media or directories that are hidden, missing or
+	// belong to an unmounted root.
 	ErrUnavailable = errors.New("media or directory unavailable")
 	// ErrInvalid marks malformed client input such as a bad cursor or sort.
 	ErrInvalid = errors.New("invalid request")
 )
 
-// maxDepth bounds ancestor walks so a corrupted parent chain cannot loop.
-const maxDepth = 1024
+const (
+	// maxDepth bounds ancestor walks so a corrupted parent chain cannot loop.
+	maxDepth = 1024
+	// StabilityDelay is how long a new file version must keep the same
+	// fingerprint before it is probed, so files still being copied are not.
+	StabilityDelay = 60 * time.Second
+)
 
+// Library is one configured media root.
 type Library struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -31,6 +43,9 @@ type Library struct {
 	DirectoryID int64  `json:"directory_id"`
 	Healthy     bool   `json:"healthy"`
 }
+
+// Directory is one indexed directory. Generation counts published listings;
+// Revision changes whenever the visible order changes, invalidating cursors.
 type Directory struct {
 	ID         int64  `json:"id"`
 	LibraryID  string `json:"library_id"`
@@ -45,31 +60,37 @@ type Directory struct {
 
 // Entry holds one immutable file version and its published directory membership.
 type Entry struct {
-	ID                                         string `json:"id"`
-	Version                                    string `json:"version"`
-	DirectoryID                                int64  `json:"directory_id"`
-	LibraryID                                  string `json:"library_id"`
-	Name                                       string `json:"name"`
-	Kind                                       string `json:"kind"`
-	Size                                       int64  `json:"size"`
-	Mtime                                      int64  `json:"mtime"`
-	Fingerprint                                string `json:"-"`
-	Width                                      int    `json:"width"`
-	Height                                     int    `json:"height"`
-	Rotation                                   int    `json:"rotation"`
-	DurationMS                                 int64  `json:"duration_ms"`
-	EffectiveTime                              int64  `json:"effective_time"`
-	CapturedRaw                                string `json:"captured_raw"`
-	CapturedSource                             string `json:"captured_source"`
-	Status                                     string `json:"status"`
-	Error                                      string `json:"error"`
-	State                                      string `json:"state"`
-	Present                                    bool   `json:"-"`
-	MissingStreak, MissingEpoch, ObservedRound int64  `json:"-"`
-	NewVersion                                 bool   `json:"-"`
+	ID             string `json:"id"`
+	Version        string `json:"version"`
+	DirectoryID    int64  `json:"directory_id"`
+	LibraryID      string `json:"library_id"`
+	Name           string `json:"name"`
+	Kind           string `json:"kind"`
+	Size           int64  `json:"size"`
+	Mtime          int64  `json:"mtime"`
+	Fingerprint    string `json:"-"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	Rotation       int    `json:"rotation"`
+	DurationMS     int64  `json:"duration_ms"`
+	EffectiveTime  int64  `json:"effective_time"`
+	CapturedRaw    string `json:"captured_raw"`
+	CapturedSource string `json:"captured_source"`
+	Status         string `json:"status"`
+	Error          string `json:"error"`
+	State          string `json:"state"`
+	// The remaining fields are scanner bookkeeping and never leave the server.
+	Present                                    bool  `json:"-"`
+	MissingStreak, MissingEpoch, ObservedRound int64 `json:"-"`
+	// NewVersion marks an entry whose version row is created by this build.
+	NewVersion bool `json:"-"`
 }
+
+// Index reads and writes the published index in Store.
 type Index struct{ Store *storage.Store }
 
+// Register marks the configured media roots active, creating a library and its
+// root directory for each new root, and deactivates roots no longer configured.
 func (i *Index) Register(ctx context.Context, c config.Config) error {
 	return i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE libraries SET active=0"); err != nil {
@@ -90,6 +111,8 @@ func (i *Index) Register(ctx context.Context, c config.Config) error {
 		return nil
 	})
 }
+
+// Libraries lists the active libraries by name.
 func (i *Index) Libraries(ctx context.Context) ([]Library, error) {
 	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT l.id,l.name,l.root,l.identity,d.id,l.healthy FROM libraries l JOIN directories d ON d.library_id=l.id AND d.relative='.' WHERE l.active=1 ORDER BY l.name,l.id LIMIT 200")
 	if err != nil {
@@ -106,11 +129,16 @@ func (i *Index) Libraries(ctx context.Context) ([]Library, error) {
 	}
 	return out, rows.Err()
 }
+
+// Directory reads one directory row, whatever its state.
 func (i *Index) Directory(ctx context.Context, id int64) (Directory, error) {
 	var d Directory
 	err := i.Store.Reader.QueryRowContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE id=?", id).Scan(&d.ID, &d.LibraryID, &d.ParentID, &d.Relative, &d.Name, &d.Identity, &d.Generation, &d.Revision, &d.State)
 	return d, err
 }
+
+// Visible returns ErrUnavailable unless the directory and all its ancestors
+// are visible and its library is active.
 func (i *Index) Visible(ctx context.Context, id int64) error {
 	for depth := 0; id != 0; depth++ {
 		if depth >= maxDepth {
@@ -159,6 +187,8 @@ func (i *Index) Path(ctx context.Context, id int64) ([]Directory, error) {
 	return path, nil
 }
 
+// Child records a subdirectory observed in round under parent, creating it or
+// making it visible again, and returns its current row.
 func (i *Index) Child(ctx context.Context, parent Directory, relative, name, identity string, round int64) (Directory, error) {
 	var id int64
 	err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
@@ -175,13 +205,16 @@ func (i *Index) Child(ctx context.Context, parent Directory, relative, name, ide
 
 const entryColumns = `e.media_id,e.version,e.directory_id,d.library_id,e.name,e.kind,v.size,e.mtime,v.fingerprint,v.width,v.height,v.rotation,v.duration_ms,e.effective_time,v.captured_raw,v.captured_source,v.status,v.error,e.state,e.present,e.missing_streak,e.missing_epoch,e.observed_round`
 
+// ScanEntry scans one row selected with entryColumns.
 func ScanEntry(row interface{ Scan(...any) error }) (Entry, error) {
 	var e Entry
 	err := row.Scan(&e.ID, &e.Version, &e.DirectoryID, &e.LibraryID, &e.Name, &e.Kind, &e.Size, &e.Mtime, &e.Fingerprint, &e.Width, &e.Height, &e.Rotation, &e.DurationMS, &e.EffectiveTime, &e.CapturedRaw, &e.CapturedSource, &e.Status, &e.Error, &e.State, &e.Present, &e.MissingStreak, &e.MissingEpoch, &e.ObservedRound)
 	return e, err
 }
+
+// Baseline pages the published entries of d by media ID, after the given ID.
 func (i *Index) Baseline(ctx context.Context, d Directory, after string) ([]Entry, error) {
-	rows, err := i.Store.Reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id>? ORDER BY e.media_id LIMIT 128`, d.ID, d.Generation, after)
+	rows, err := i.Store.Reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id>? ORDER BY e.media_id LIMIT ?`, d.ID, d.Generation, after, storage.BatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +229,8 @@ func (i *Index) Baseline(ctx context.Context, d Directory, after string) ([]Entr
 	}
 	return out, rows.Err()
 }
+
+// Media returns the published, visible version of one media item.
 func (i *Index) Media(ctx context.Context, id string) (Entry, error) {
 	e, err := ScanEntry(i.Store.Reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM media m JOIN directories d ON d.id=m.directory_id JOIN libraries l ON l.id=d.library_id JOIN entries e ON e.media_id=m.id AND e.directory_id=d.id AND e.generation=d.generation JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE m.id=? AND l.active=1 AND e.state='visible'`, id))
 	if err != nil {
@@ -203,6 +238,9 @@ func (i *Index) Media(ctx context.Context, id string) (Entry, error) {
 	}
 	return e, i.Visible(ctx, e.DirectoryID)
 }
+
+// BeginBuild registers the next generation of d and returns its number. The
+// generation stays invisible until Publish.
 func (i *Index) BeginBuild(ctx context.Context, d Directory) (int64, error) {
 	gen := d.Generation + 1
 	err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
@@ -211,6 +249,9 @@ func (i *Index) BeginBuild(ctx context.Context, d Directory) (int64, error) {
 	})
 	return gen, err
 }
+
+// AddBatch writes up to storage.BatchSize entries of an unpublished generation
+// in one transaction, creating version rows and probe jobs for new versions.
 func (i *Index) AddBatch(ctx context.Context, d Directory, gen int64, entries []Entry, now time.Time) error {
 	if len(entries) > storage.BatchSize {
 		return errors.New("build batch exceeds limit")
@@ -250,7 +291,7 @@ func (i *Index) AddBatch(ctx context.Context, d Directory, gen int64, entries []
 				if _, err = version.ExecContext(ctx, e.ID, e.Version, e.Fingerprint, e.Size, e.Mtime, e.Kind, e.EffectiveTime); err != nil {
 					return err
 				}
-				if _, err = job.ExecContext(ctx, e.ID, e.Version, now.Add(60*time.Second).UnixMilli(), now.UnixMilli(), e.Fingerprint); err != nil {
+				if _, err = job.ExecContext(ctx, e.ID, e.Version, now.Add(StabilityDelay).UnixMilli(), now.UnixMilli(), e.Fingerprint); err != nil {
 					return err
 				}
 			}
@@ -261,10 +302,15 @@ func (i *Index) AddBatch(ctx context.Context, d Directory, gen int64, entries []
 		return nil
 	})
 }
+
+// Publish makes generation gen the visible listing of d. validate re-checks
+// the directory on disk before the writer is taken; ErrConflict means another
+// publication replaced d's generation first.
 func (i *Index) Publish(ctx context.Context, d Directory, gen int64, identity string, round int64, validate func() error) error {
+	// Filesystem work happens before taking the writer.
 	if err := validate(); err != nil {
 		return err
-	} // filesystem work precedes the writer.
+	}
 	return i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		var base int64
 		if err := tx.QueryRowContext(ctx, "SELECT generation FROM directories WHERE id=?", d.ID).Scan(&base); err != nil {
@@ -305,7 +351,7 @@ func (i *Index) Cleanup(ctx context.Context, id int64) error {
 	for {
 		n := int64(0)
 		err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-			res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE (directory_id,generation,media_id) IN (SELECT e.directory_id,e.generation,e.media_id FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.directory_id=? AND e.generation!=d.generation LIMIT 128)`, id)
+			res, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE (directory_id,generation,media_id) IN (SELECT e.directory_id,e.generation,e.media_id FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.directory_id=? AND e.generation!=d.generation LIMIT ?)`, id, storage.BatchSize)
 			if err != nil {
 				return err
 			}
@@ -330,7 +376,7 @@ func (i *Index) Cleanup(ctx context.Context, id int64) error {
 func (i *Index) Recover(ctx context.Context) error {
 	var after int64
 	for {
-		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT 128", after)
+		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT ?", after, storage.BatchSize)
 		if err != nil {
 			return err
 		}
@@ -361,7 +407,7 @@ func (i *Index) Recover(ctx context.Context) error {
 	for {
 		var changed int64
 		if err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-			result, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',lease=0 WHERE id IN (SELECT id FROM jobs WHERE state='running' LIMIT 128)")
+			result, err := tx.ExecContext(ctx, "UPDATE jobs SET state='queued',lease=0 WHERE id IN (SELECT id FROM jobs WHERE state='running' LIMIT ?)", storage.BatchSize)
 			if err != nil {
 				return err
 			}
@@ -376,6 +422,8 @@ func (i *Index) Recover(ctx context.Context) error {
 	}
 }
 
+// ResolveID returns the stable media ID for name in directory, or a new ID if
+// the name has never been indexed there.
 func (i *Index) ResolveID(ctx context.Context, directory int64, name string) (string, error) {
 	var id string
 	err := i.Store.Reader.QueryRowContext(ctx, "SELECT id FROM media WHERE directory_id=? AND name=?", directory, name).Scan(&id)

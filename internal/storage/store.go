@@ -1,3 +1,5 @@
+// Package storage owns the SQLite database: exclusive ownership, connection
+// settings, schema initialization and the single serialized writer.
 package storage
 
 import (
@@ -5,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,12 +14,31 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
-const BatchSize = 128
+const (
+	// BatchSize is the maximum number of rows a scan, cleanup or rebuild step
+	// reads or writes per transaction.
+	BatchSize = 128
+	// readConnections is the size of the read-only connection pool.
+	readConnections = 4
+)
 
-type Metrics struct{ Commits, Rows, Failed, WaitNS, ExecutionNS, CommitNS, MaxTransactionNS atomic.Int64 }
+// Metrics are cumulative writer statistics since the store was opened.
+type Metrics struct {
+	Commits, Failed atomic.Int64
+	// Rows counts the business rows that committed write calls reported.
+	Rows atomic.Int64
+	// WaitNS, ExecutionNS and CommitNS sum the time spent waiting for the
+	// writer, running transaction bodies and committing.
+	WaitNS, ExecutionNS, CommitNS atomic.Int64
+	MaxTransactionNS              atomic.Int64
+}
+
+// Store holds one writer connection and a pool of read-only connections to
+// the same WAL database.
 type Store struct {
 	Reader     *sql.DB
 	Writer     *sql.DB
@@ -96,7 +116,7 @@ func open(ctx context.Context, path string) (*Store, error) {
 		return fail(fmt.Errorf("schema version %d does not match this build (%d); there are no migrations before release, so stop the service and delete the storage directory to rebuild the index", v, schemaVersion))
 	}
 	if v == 0 {
-		if err = execTx(ctx, w, schemaSQL); err != nil {
+		if err = initSchema(ctx, w); err != nil {
 			return fail(fmt.Errorf("initialize schema: %w", err))
 		}
 	}
@@ -110,8 +130,8 @@ func open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return fail(err)
 	}
-	r.SetMaxOpenConns(4)
-	r.SetMaxIdleConns(4)
+	r.SetMaxOpenConns(readConnections)
+	r.SetMaxIdleConns(readConnections)
 	if err = r.PingContext(ctx); err != nil {
 		r.Close()
 		return fail(err)
@@ -120,22 +140,32 @@ func open(ctx context.Context, path string) (*Store, error) {
 	return &Store{Reader: r, Writer: w, Path: path, gate: make(chan struct{}, 1), lock: lock}, nil
 }
 
-// execTx runs the schema script atomically, including its user_version update.
-func execTx(ctx context.Context, w *sql.DB, script string) error {
+// initSchema creates the schema and records schemaVersion atomically.
+func initSchema(ctx context.Context, w *sql.DB) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, script); err != nil {
+	if _, err = tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
+
+// Close closes both connection pools and releases the ownership lock.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() { s.closeError = errors.Join(s.Reader.Close(), s.Writer.Close(), s.lock.Close()) })
 	return s.closeError
 }
+
+// Write runs fn in a transaction on the single writer connection and commits
+// it. Callers queue for the writer, so fn must not do filesystem or tool work,
+// nor call Write itself. rows is the number of business rows fn writes, added
+// to Metrics.Rows only when the commit succeeds.
 func (s *Store) Write(ctx context.Context, rows int64, fn func(*sql.Tx) error) (err error) {
 	wait := time.Now()
 	select {

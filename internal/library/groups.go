@@ -11,9 +11,12 @@ import (
 	"vvideo/internal/storage"
 )
 
+// groupSize is the number of media per album group.
+const groupSize = 10
+
 // RebuildGroups materializes one anchor per ten media without holding a read
 // transaction across writer requests. Candidates are invisible until the final
-// revision check. All reads/writes retain at most 128 records.
+// revision check. All reads/writes retain at most storage.BatchSize records.
 func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.Context) error) error {
 	if err := i.CleanupGroups(ctx, id); err != nil {
 		return err
@@ -49,7 +52,7 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 		return err
 	}
 	for _, sort := range []string{"capture", "mtime", "name"} {
-		col := map[string]string{"capture": "effective_time", "mtime": "mtime", "name": "name"}[sort]
+		col := sortColumns[sort]
 		for _, dir := range []string{"asc", "desc"} {
 			var cursor Cursor
 			ordinal := int64(0)
@@ -67,7 +70,7 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 					filter = " AND (" + col + ",media_id)" + operator + "(?,?)"
 					args = append(args, cursor.Key, cursor.ID)
 				}
-				rows, err := i.Store.Reader.QueryContext(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+dir+`,media_id `+dir+` LIMIT 128`, args...)
+				rows, err := i.Store.Reader.QueryContext(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+dir+`,media_id `+dir+` LIMIT ?`, append(args, storage.BatchSize)...)
 				if err != nil {
 					return err
 				}
@@ -102,9 +105,9 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 						keyTime = 0
 						keyName = x.name
 					}
-					if ordinal%10 == 0 {
+					if ordinal%groupSize == 0 {
 						pending = append(pending, anchor{sort: sort, direction: dir, id: x.id, time: keyTime, name: keyName})
-						if len(pending) == 128 {
+						if len(pending) == storage.BatchSize {
 							if err = flush(); err != nil {
 								return err
 							}
@@ -140,11 +143,13 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 	}
 	return i.CleanupGroups(ctx, id)
 }
+
+// CleanupGroups deletes album anchors left by superseded rebuilds.
 func (i *Index) CleanupGroups(ctx context.Context, id int64) error {
 	for {
 		var n int64
 		err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
-			r, err := tx.ExecContext(ctx, `DELETE FROM group_anchors WHERE (directory_id,token,sort,direction,media_id) IN(SELECT g.directory_id,g.token,g.sort,g.direction,g.media_id FROM group_anchors g JOIN directories d ON d.id=g.directory_id WHERE g.directory_id=? AND g.token!=d.group_token LIMIT 128)`, id)
+			r, err := tx.ExecContext(ctx, `DELETE FROM group_anchors WHERE (directory_id,token,sort,direction,media_id) IN(SELECT g.directory_id,g.token,g.sort,g.direction,g.media_id FROM group_anchors g JOIN directories d ON d.id=g.directory_id WHERE g.directory_id=? AND g.token!=d.group_token LIMIT ?)`, id, storage.BatchSize)
 			if err != nil {
 				return err
 			}
@@ -251,6 +256,10 @@ func (i *Index) DirtyDirectory(ctx context.Context, after int64) (int64, error) 
 	}
 	return id, err
 }
+
+// groupStart returns the inclusive cursor of the album group containing e, so
+// an anchored page starts on a group boundary. A kind-filtered listing has no
+// groups and starts at e itself.
 func (i *Index) groupStart(ctx context.Context, tx *sql.Tx, d Directory, o ListOptions, e Entry) (Cursor, error) {
 	if o.Kind != "" {
 		return Cursor{ID: e.ID, Key: key(e, o.Sort)}, nil

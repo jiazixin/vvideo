@@ -4,10 +4,15 @@ package mediafs
 
 import (
 	"errors"
-	"golang.org/x/sys/unix"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
+// mountIdentity identifies the filesystem that file (opened at path) is on,
+// from /proc/self/mountinfo and statfs. It fails when the mount cannot be
+// identified unambiguously or reports no capacity, which a root that is
+// offline or unmounted typically does.
 func mountIdentity(path string, file *os.File) (string, error) {
 	f, err := os.Open("/proc/self/mountinfo")
 	if err != nil {
