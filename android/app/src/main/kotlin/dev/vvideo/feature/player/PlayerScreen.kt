@@ -1,5 +1,9 @@
 package dev.vvideo.feature.player
 
+import android.content.Context
+import android.content.res.Configuration
+import android.os.SystemClock
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -10,27 +14,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.*
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
@@ -41,24 +35,13 @@ import dev.vvideo.core.media.model.PlaybackItem
 import dev.vvideo.core.media.playback.PlaybackSession
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
-import dev.vvideo.ui.component.ActionIcon
-import dev.vvideo.ui.component.mediaDuration
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.delay
+import dev.vvideo.ui.component.BulletinHost
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.withContext
 
-/** Controls hide after this long without interaction, unless accessibility asks for longer. */
-private const val CONTROLS_TIMEOUT_MS = 3000L
-
-/** One double tap seeks this far; taps within [SEEK_CHAIN_MS] add up. */
-private const val SEEK_STEP_SECONDS = 10
-private const val SEEK_CHAIN_MS = 600L
-
-/** Pulling past the last video this far (in px) shows the "last video" notice. */
-private const val END_OVERSCROLL_PX = 80f
-
+/**
+ * The vertical video feed. This route owns the playback session and the viewer's UI
+ * state; the pieces it composes take values and callbacks.
+ */
 @UnstableApi
 @Composable
 fun PlayerRoute(
@@ -74,43 +57,14 @@ fun PlayerRoute(
 ) {
     val live by vm.state.collectAsStateWithLifecycle()
     val state by rememberUpdatedState(retainedWhileLeaving(live, leaving))
-    var session by remember { mutableStateOf<PlaybackSession?>(null) }
     val pager = rememberPagerState(pageCount = { state.items.size })
-    val owner = LocalLifecycleOwner.current
     val latestItems by rememberUpdatedState(state.items)
     LaunchedEffect(state.initialId, state.items.isNotEmpty()) {
         val index = state.items.indexOfFirst { it.id == state.initialId }
         if (index >= 0) pager.scrollToPage(index)
     }
-    var foreground by remember { mutableStateOf(true) }
-    // The creating effect owns the player immediately, before a recomposition
-    // can install a DisposableEffect keyed by it. Leaving during that gap must
-    // still release the player that was already returned to this route.
-    LaunchedEffect(c.id, c.token) {
-        val owned = create(c.token)
-        try {
-            session = owned
-            awaitCancellation()
-        } finally {
-            if (session === owned) session = null
-            withContext(NonCancellable) { release(owned) }
-        }
-    }
-    DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_STOP -> {
-                    foreground = false
-                    session?.pause()
-                }
-
-                Lifecycle.Event.ON_START -> foreground = true
-                else -> Unit
-            }
-        }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
-    }
+    val session by rememberPlaybackSession(c, create, release)
+    val foreground by rememberForeground(onStop = { session?.pause() })
     var controlsVisible by remember { mutableStateOf(true) }
     var dragging by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -118,358 +72,180 @@ fun PlayerRoute(
     var controlFocused by remember { mutableStateOf(false) }
     var interactionSerial by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(false) }
-    val activity = androidx.activity.compose.LocalActivity.current
-    val orientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
-    val isLandscape = orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    // Read in the effect, after a route this one replaces has restored its own
-    // request; composition would still see that route's landscape lock.
-    DisposableEffect(activity) {
-        val originalOrientation = activity?.requestedOrientation
-            ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        onDispose { activity?.requestedOrientation = originalOrientation }
-    }
-    androidx.activity.compose.BackHandler(isLandscape) {
-        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-    }
+    val activity = LocalActivity.current
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    ViewerOrientation(activity, isLandscape)
     var holding by remember { mutableStateOf(false) }
-    var seekSeconds by remember { mutableIntStateOf(0) }
-    var seekForward by remember { mutableStateOf(true) }
-    var seekAt by remember { mutableLongStateOf(0L) }
+    val seekChain = remember { SeekChain() }
     var bulletin by remember { mutableStateOf<String?>(null) }
     val lastVideo = stringResource(R.string.last_video)
-    val accessibility = LocalAccessibilityManager.current
-    val active = session
-    if (active != null) {
-        val playback by active.state.collectAsStateWithLifecycle()
-        // A leaving page keeps its last frame and controls: it pauses at once so no
-        // sound outlives the tap, stops tracking the player, and sends no further
-        // commands to the session or ViewModel. Release still follows disposal.
-        DisposableEffect(active, leaving) {
-            if (leaving) return@DisposableEffect onDispose {}
-            playing = active.player.isPlaying
-            val listener = object : Player.Listener {
-                override fun onIsPlayingChanged(value: Boolean) {
-                    playing = value
-                }
-            }
-            active.player.addListener(listener)
-            onDispose { active.player.removeListener(listener) }
+    val active = session ?: return
+    val playback by active.state.collectAsStateWithLifecycle()
+    // A leaving page keeps its last frame and controls: it pauses at once so no
+    // sound outlives the tap, stops tracking the player, and sends no further
+    // commands to the session or ViewModel. Release still follows disposal.
+    TrackIsPlaying(active, leaving) { playing = it }
+    AutoHideControls(
+        visible = controlsVisible,
+        pinned = !playing || playback.error || dragging || detailsOpen || menuOpen || controlFocused,
+        page = pager.settledPage,
+        interactions = interactionSerial,
+        onVisibleChange = { controlsVisible = it }
+    )
+    // The settled page plays; a moving pager or a stopped screen pauses.
+    LaunchedEffect(
+        active,
+        pager,
+        foreground,
+        leaving,
+        state.items.getOrNull(pager.settledPage)?.version
+    ) {
+        if (leaving) {
+            active.pause()
+            return@LaunchedEffect
         }
-        LaunchedEffect(
-            playing,
-            playback.error,
-            dragging,
-            detailsOpen,
-            menuOpen,
-            controlFocused,
-            pager.settledPage,
-            interactionSerial,
-            controlsVisible
-        ) {
-            val keepControls = !playing || playback.error || dragging || detailsOpen || menuOpen || controlFocused
-            if (keepControls) {
-                controlsVisible = true
-            } else if (controlsVisible) {
-                delay(
-                    accessibility?.calculateRecommendedTimeoutMillis(
-                        CONTROLS_TIMEOUT_MS,
-                        containsIcons = true,
-                        containsText = true,
-                        containsControls = true
-                    ) ?: CONTROLS_TIMEOUT_MS
-                )
-                controlsVisible = false
-            }
-        }
-        LaunchedEffect(
-            active,
-            pager,
-            foreground,
-            leaving,
-            state.items.getOrNull(pager.settledPage)?.version
-        ) {
-            if (leaving) {
-                active.pause()
-                return@LaunchedEffect
-            }
-            snapshotFlow { pager.settledPage to pager.isScrollInProgress }.distinctUntilChanged()
-                .collect { (index, moving) ->
-                    onInteraction(moving)
-                    if (moving || !foreground) active.pause() else latestItems.getOrNull(index)
-                        ?.let {
-                            vm.selected(it.id)
-                            val opening = it.id == state.initialId && active.state.value.id.isEmpty()
-                            active.select(
-                                it.playback(c),
-                                if (opening && initialSelectionMs > 0) {
-                                    initialSelectionMs
-                                } else {
-                                    android.os.SystemClock.elapsedRealtime()
-                                }
-                            )
-                        }
-                }
-        }
-        LaunchedEffect(
-            active,
-            playback.firstFrame,
-            playback.buffering,
-            pager.settledPage,
-            state.items,
-            leaving
-        ) {
-            val settled = playback.firstFrame && !playback.buffering && !pager.isScrollInProgress
-            if (settled && foreground && !leaving) {
-                active.preload(state.items.getOrNull(pager.settledPage + 1)?.playback(c))
-            }
-        }
-        LaunchedEffect(pager, state.items.size, leaving) {
-            if (leaving) return@LaunchedEffect
-            snapshotFlow { pager.settledPage }.distinctUntilChanged().collect { index ->
-                if (index >= state.items.size - 3) vm.page(false)
-                if (index < 2 && state.items.isNotEmpty()) vm.page(true)
-            }
-        }
-        LaunchedEffect(playback.id) {
-            active.player.setPlaybackSpeed(1f)
-            seekSeconds = 0
-        }
-        LaunchedEffect(seekAt) {
-            if (seekSeconds > 0) {
-                delay(SEEK_CHAIN_MS)
-                seekSeconds = 0
-            }
-        }
-        val edgeFeedback = remember(pager, state.endReached, lastVideo) {
-            object : NestedScrollConnection {
-                private var overflow = 0f
-                override fun onPostScroll(
-                    consumed: Offset,
-                    available: Offset,
-                    source: NestedScrollSource
-                ): Offset {
-                    if (state.endReached && !pager.canScrollForward && available.y < 0) {
-                        overflow -= available.y
-                        if (overflow > END_OVERSCROLL_PX) {
-                            bulletin = lastVideo
-                            overflow = 0f
-                        }
-                    } else overflow = 0f
-                    return Offset.Zero
-                }
-            }
-        }
-        val currentItem = state.items.getOrNull(pager.settledPage)
-        // Controls describe one page. While pages move they step aside, and after the
-        // pager rests they name the new page even before the player has switched to it,
-        // so nothing from the previous video stays on screen.
-        val swiping = pager.isScrollInProgress
-        val currentKey = currentItem?.playback(c)?.cacheKey
-        val live = currentKey != null && playback.id == currentKey
-        if (detailsOpen && currentItem != null) MediaDetailsSheet(
-            currentItem,
-            state.pathLabel
-        ) { detailsOpen = false }
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            // The video Surface belongs to the session, not a pager item. Recreating it
-            // for every settled page forces compositor transactions and decoder output
-            // handoffs. Pager covers conceal it until the matching media renders.
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        player = active.player
-                        useController = false
-                        keepScreenOn = true
-                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                    }
-                },
-                update = { it.player = active.player },
-                onRelease = { it.player = null },
-                modifier = Modifier.fillMaxSize()
-            )
-            VerticalPager(
-                state = pager,
-                key = { state.items[it].id },
-                beyondViewportPageCount = 1,
-                userScrollEnabled = !dragging && !isLandscape,
-                modifier = Modifier.fillMaxSize().nestedScroll(edgeFeedback)
-                    .viewerGestures(active.player, {
-                        controlsVisible = !controlsVisible
-                        interactionSerial++
-                    }, { holding = it }, { forward ->
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        val chained = now - seekAt <= SEEK_CHAIN_MS && seekForward == forward
-                        seekSeconds = if (chained) seekSeconds + SEEK_STEP_SECONDS else SEEK_STEP_SECONDS
-                        seekForward = forward
-                        seekAt = now
-                        val step = SEEK_STEP_SECONDS * 1000L * if (forward) 1 else -1
-                        active.player.seekTo(
-                            (active.player.currentPosition + step)
-                                .coerceIn(0, active.player.duration.coerceAtLeast(0))
-                        )
-                        interactionSerial++
-                    })
-            ) { index ->
-                val item = state.items[index]
-                val activePage = pager.settledPage == index
-                val selected = activePage && !pager.isScrollInProgress
-                val covered =
-                    !selected || playback.id != item.playback(c).cacheKey || !playback.firstFrame
-                // A covered page is opaque: the shared Surface behind it may still hold the
-                // previous video's last frame, which would show through letterboxing or a
-                // cover that has not loaded yet.
-                Box(
-                    Modifier.fillMaxSize()
-                        .then(if (covered) Modifier.background(Color.Black) else Modifier)
-                ) {
-                    if (covered) {
-                        val context = LocalContext.current
-                        val request = remember(item.id, item.version, c.token) {
-                            ImageRequest.Builder(context)
-                                .data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}")
-                                .httpHeaders(
-                                    NetworkHeaders.Builder()
-                                        .set("Authorization", "Bearer ${c.token}").build()
-                                ).build()
-                        }
-                        AsyncImage(
-                            request,
-                            item.name,
-                            imageLoader = loader,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    if (selected && playback.error && playback.id == item.playback(c).cacheKey) {
-                        val unsupported = active.player.playerError?.errorCode in listOf(
-                            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-                            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
-                        )
-                        Column(
-                            Modifier.align(Alignment.Center)
-                                .background(Color.Black.copy(alpha = .8f)).padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                androidx.compose.ui.res.painterResource(R.drawable.ic_video_off),
-                                null,
-                                Modifier.size(48.dp),
-                                tint = Color.White
-                            )
-                            Text(
-                                stringResource(if (unsupported) R.string.cannot_decode else R.string.playback_error),
-                                color = Color.White
-                            )
-                            Text(
-                                active.player.playerError?.errorCodeName.orEmpty(),
-                                color = Color.White.copy(alpha = .6f)
-                            )
-                            dev.vvideo.ui.component.VVButton(
-                                stringResource(if (unsupported) R.string.media_details else R.string.retry),
-                                {
-                                    if (unsupported) detailsOpen = true else {
-                                        vm.retry(item.id)
-                                        active.select(item.playback(c))
-                                    }
-                                },
-                                kind = dev.vvideo.ui.component.ButtonKind.Secondary
-                            )
-                        }
-                    }
-
-                }
-            }
-            androidx.compose.animation.AnimatedVisibility(
-                controlsVisible && !swiping,
-                Modifier.align(Alignment.TopCenter),
-                enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),
-                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))
-            ) { PlayerChrome(currentItem, onBack, { detailsOpen = true }) }
-            androidx.compose.animation.AnimatedVisibility(
-                !swiping,
-                Modifier.align(Alignment.BottomCenter),
-                enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),
-                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))
-            ) {
-                Box(
-                    Modifier.then(
-                        if (controlsVisible) Modifier.background(BottomViewerGradient)
-                            .padding(top = 40.dp) else Modifier
-                    ).navigationBarsPadding()
-                ) {
-                    SeekBar(
-                        active.player,
-                        currentKey.orEmpty(),
-                        live,
-                        currentItem?.durationMs ?: 0L,
-                        live && playback.firstFrame && !playback.error,
-                        controlsVisible,
-                        currentItem?.displayRatio?.let { it > 1f } == true,
-                        {
-                            activity?.requestedOrientation = if (isLandscape) {
-                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        snapshotFlow { pager.settledPage to pager.isScrollInProgress }.distinctUntilChanged()
+            .collect { (index, moving) ->
+                onInteraction(moving)
+                if (moving || !foreground) active.pause() else latestItems.getOrNull(index)
+                    ?.let {
+                        vm.selected(it.id)
+                        val opening = it.id == state.initialId && active.state.value.id.isEmpty()
+                        active.select(
+                            it.playback(c),
+                            if (opening && initialSelectionMs > 0) {
+                                initialSelectionMs
                             } else {
-                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                SystemClock.elapsedRealtime()
                             }
-                        },
-                        Modifier.onFocusChanged { controlFocused = it.hasFocus },
-                        leaving,
-                        { menuOpen = it }) {
-                        dragging = it
-                        interactionSerial++
+                        )
                     }
+            }
+    }
+    // The next video preloads once the current one renders and stops buffering.
+    LaunchedEffect(
+        active,
+        playback.firstFrame,
+        playback.buffering,
+        pager.settledPage,
+        state.items,
+        leaving
+    ) {
+        val settled = playback.firstFrame && !playback.buffering && !pager.isScrollInProgress
+        if (settled && foreground && !leaving) {
+            active.preload(state.items.getOrNull(pager.settledPage + 1)?.playback(c))
+        }
+    }
+    LaunchedEffect(pager, state.items.size, leaving) {
+        if (leaving) return@LaunchedEffect
+        snapshotFlow { pager.settledPage }.distinctUntilChanged().collect { index ->
+            if (index >= state.items.size - 3) vm.page(false)
+            if (index < 2 && state.items.isNotEmpty()) vm.page(true)
+        }
+    }
+    LaunchedEffect(playback.id) {
+        active.player.setPlaybackSpeed(1f)
+        seekChain.reset()
+    }
+    LaunchedEffect(seekChain.lastTapMs) { seekChain.expire() }
+    val endOverscroll = rememberEndOverscroll(pager, state.endReached) { bulletin = lastVideo }
+    val currentItem = state.items.getOrNull(pager.settledPage)
+    // Controls describe one page. While pages move they step aside, and after the
+    // pager rests they name the new page even before the player has switched to it,
+    // so nothing from the previous video stays on screen.
+    val swiping = pager.isScrollInProgress
+    val currentKey = currentItem?.playback(c)?.cacheKey
+    val sessionOnPage = currentKey != null && playback.id == currentKey
+    if (detailsOpen && currentItem != null) {
+        MediaDetailsSheet(currentItem, state.pathLabel) { detailsOpen = false }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // The video Surface belongs to the session, not a pager item. Recreating it
+        // for every settled page forces compositor transactions and decoder output
+        // handoffs. Pager covers conceal it until the matching media renders.
+        SessionSurface(active.player, Modifier.fillMaxSize())
+        VerticalPager(
+            state = pager,
+            key = { state.items[it].id },
+            beyondViewportPageCount = 1,
+            userScrollEnabled = !dragging && !isLandscape,
+            // The gesture callbacks are installed once per player, so they read and
+            // write this route's state directly instead of capturing values.
+            modifier = Modifier.fillMaxSize().nestedScroll(endOverscroll).viewerGestures(
+                active.player,
+                onTap = {
+                    controlsVisible = !controlsVisible
+                    interactionSerial++
+                },
+                onHold = { holding = it },
+                onSeek = { forward ->
+                    active.player.seekBy(seekChain.tap(forward, SystemClock.elapsedRealtime()))
+                    interactionSerial++
+                }
+            )
+        ) { index ->
+            val item = state.items[index]
+            val selected = pager.settledPage == index && !pager.isScrollInProgress
+            val itemKey = item.playback(c).cacheKey
+            val failed = selected && playback.error && playback.id == itemKey
+            VideoPage(
+                item,
+                c,
+                loader,
+                covered = !selected || playback.id != itemKey || !playback.firstFrame,
+                failed = failed,
+                error = if (failed) active.player.playerError else null,
+                onDetails = { detailsOpen = true },
+                onRetry = {
+                    vm.retry(item.id)
+                    active.select(item.playback(c))
+                }
+            )
+        }
+        FadingChrome(
+            controlsVisible && !swiping,
+            currentItem,
+            onBack,
+            { detailsOpen = true },
+            Modifier.align(Alignment.TopCenter)
+        )
+        ViewerFade(!swiping, Modifier.align(Alignment.BottomCenter)) {
+            ControlsScrim(shaded = controlsVisible) {
+                SeekBar(
+                    active.player,
+                    currentKey.orEmpty(),
+                    sessionOnPage,
+                    currentItem?.durationMs ?: 0L,
+                    sessionOnPage && playback.firstFrame && !playback.error,
+                    controlsVisible,
+                    currentItem?.displayRatio?.let { it > 1f } == true,
+                    { activity?.lockOrientation(landscape = !isLandscape) },
+                    Modifier.onFocusChanged { controlFocused = it.hasFocus },
+                    leaving,
+                    { menuOpen = it }
+                ) {
+                    dragging = it
+                    interactionSerial++
                 }
             }
-            val showPlay = live && !playing && playback.firstFrame && !playback.error &&
+        }
+        val showPlay = sessionOnPage && !playing && playback.firstFrame && !playback.error &&
                 !playback.buffering && !pager.isScrollInProgress
-            if (showPlay) {
-                dev.vvideo.ui.component.ActionIcon(
-                    R.drawable.ic_play,
-                    R.string.play,
-                    { active.player.play() },
-                    Modifier.align(Alignment.Center).size(64.dp).background(
-                        Color.Black.copy(alpha = .45f),
-                        androidx.compose.foundation.shape.CircleShape
-                    ),
-                    Color.White
-                )
-            }
-            if (holding) Text(
-                stringResource(R.string.speed_hold),
-                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)
-                    .background(
-                        Color.Black.copy(alpha = .5f),
-                        androidx.compose.foundation.shape.CircleShape
-                    ).padding(12.dp),
-                color = Color.White
+        if (showPlay) PlayButton({ active.player.play() }, Modifier.align(Alignment.Center))
+        if (holding) SpeedHoldLabel(Modifier.align(Alignment.TopCenter))
+        if (seekChain.seconds > 0) {
+            SeekFeedback(
+                seekChain.seconds,
+                seekChain.forward,
+                Modifier.align(if (seekChain.forward) Alignment.CenterEnd else Alignment.CenterStart)
             )
-            if (seekSeconds > 0) Box(
-                Modifier.align(if (seekForward) Alignment.CenterEnd else Alignment.CenterStart)
-                    .fillMaxHeight(.5f).fillMaxWidth(.4f).background(
-                    Color.White.copy(alpha = .13f),
-                    androidx.compose.foundation.shape.CircleShape
-                ), contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    stringResource(
-                        if (seekForward) R.string.seek_forward else R.string.seek_back,
-                        seekSeconds
-                    ), color = Color.White
-                )
-            }
-            dev.vvideo.ui.component.BulletinHost(
-                bulletin,
-                { bulletin = null },
-                Modifier.align(Alignment.BottomCenter)
-            )
-            if (!state.error && !swiping && (playback.buffering || !playback.firstFrame && !playback.error)) Box(
-                Modifier.align(Alignment.Center).size(64.dp).background(
-                    Color.Black.copy(alpha = .45f),
-                    androidx.compose.foundation.shape.CircleShape
-                ),
-                contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator(Modifier.size(48.dp), color = Color.White) }
-            if (state.error && state.items.isEmpty()) Text(
+        }
+        BulletinHost(bulletin, { bulletin = null }, Modifier.align(Alignment.BottomCenter))
+        if (!state.error && !swiping && (playback.buffering || !playback.firstFrame && !playback.error)) {
+            BufferingIndicator(Modifier.align(Alignment.Center))
+        }
+        if (state.error && state.items.isEmpty()) {
+            Text(
                 stringResource(R.string.playback_error),
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
@@ -489,6 +265,13 @@ fun Media.playback(c: Connection) = PlaybackItem(
     size,
     durationMs
 )
+
+/** An authorized image request for this media's [resource], such as "thumbnail" or "bytes". */
+internal fun Media.imageRequest(context: Context, c: Connection, resource: String): ImageRequest =
+    ImageRequest.Builder(context)
+        .data("${c.address}/v1/media/$id/$resource?version=$version")
+        .httpHeaders(NetworkHeaders.Builder().set("Authorization", "Bearer ${c.token}").build())
+        .build()
 
 // Photos page left and right through the folder's image queue, like a phone
 // gallery; videos keep the vertical feed. Zoom belongs to the page in front:
@@ -607,12 +390,13 @@ fun PhotoScreen(
             Text(stringResource(R.string.photo_failed), color = Color.White)
             Button(onClick = onRetry) { Text(stringResource(R.string.retry)) }
         }
-        androidx.compose.animation.AnimatedVisibility(
+        FadingChrome(
             controls && !pager.isScrollInProgress,
-            Modifier.align(Alignment.TopCenter),
-            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),
-            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))
-        ) { PlayerChrome(item, onBack, { details = true }) }
+            item,
+            onBack,
+            { details = true },
+            Modifier.align(Alignment.TopCenter)
+        )
     }
 }
 
@@ -642,16 +426,10 @@ private fun PhotoPage(
     }
     val context = LocalContext.current
     val request = remember(item.id, item.version, c.token, attempt) {
-        ImageRequest.Builder(context)
-            .data("${c.address}/v1/media/${item.id}/bytes?version=${item.version}")
-            .httpHeaders(NetworkHeaders.Builder().set("Authorization", "Bearer ${c.token}").build())
-            .build()
+        item.imageRequest(context, c, "bytes")
     }
     val thumb = remember(item.id, item.version, c.token) {
-        ImageRequest.Builder(context)
-            .data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}")
-            .httpHeaders(NetworkHeaders.Builder().set("Authorization", "Bearer ${c.token}").build())
-            .build()
+        item.imageRequest(context, c, "thumbnail")
     }
     Box(modifier.fillMaxSize()) {
         if (!loaded || !original) AsyncImage(
