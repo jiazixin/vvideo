@@ -28,4 +28,20 @@ class LibraryKeysTest {
     fun emptyFolderIsNotReported() {
         assertFalse(anchorMoved("gone", page(false, emptyList())))
     }
+
+    @Test
+    fun restoreFindsTheSavedRowOrTheAnchorAlbum() {
+        val state = LibraryUiState(children = listOf(dir.copy(id = 7), dir.copy(id = 8)))
+        assertEquals(1, restoreIndex(libraryKeys(state), state.albums, "folder:8", ""))
+        val albums = listOf(Album(listOf(item)))
+        val keys = libraryKeys(LibraryUiState(albums = albums))
+        assertEquals(0, restoreIndex(keys, albums, "album:gone", "m1"))
+    }
+
+    // A row that is no longer shown gives no index, so its offset is not applied at the top.
+    @Test
+    fun missingRowGivesNoIndex() {
+        val state = LibraryUiState(children = listOf(dir.copy(id = 7)))
+        assertNull(restoreIndex(libraryKeys(state), state.albums, "folder:9", "m1"))
+    }
 }

@@ -85,6 +85,7 @@ class LibraryViewModel(
     private var viewportKey = ""
     private var viewportOffset = 0
     private var viewportWidth = 0
+    private val positions = FolderPositions()
     private var connection = Connection()
     private var recentRequest: Job? = null
     private var request: Job? = null
@@ -136,6 +137,7 @@ class LibraryViewModel(
         if (!refresh && sameConnection && mutable.value.libraries.isNotEmpty()) return
         flush()
         cancelRequests()
+        if (!sameConnection) positions.clear()
         viewportKey = ""
         bookmark = null
         kept = null
@@ -236,6 +238,7 @@ class LibraryViewModel(
     }
 
     fun roots() {
+        leaveFolder()
         flush()
         cancelRequests()
         viewportKey = ""
@@ -257,6 +260,10 @@ class LibraryViewModel(
         val leftKey = viewportKey
         val leftOffset = viewportOffset
         val leftWidth = viewportWidth
+        val restore = override == null && kind.isEmpty() && !fromStart
+        // A refresh keeps the folder where it is; a new sort, filter or jump starts it over.
+        if (mutable.value.directory?.id != id || restore) leaveFolder()
+        if (!restore) positions.forget(id)
         flush()
         cancelRequests()
         viewportKey = ""
@@ -297,7 +304,6 @@ class LibraryViewModel(
             } else {
                 bookmarks.get(connection.id, id)
             }
-            val restore = override == null && kind.isEmpty() && !fromStart
             val sort = override ?: saved?.let { Sort(it.sort, it.direction) } ?: Sort()
             try {
                 var page: MediaPage? = null
@@ -344,6 +350,7 @@ class LibraryViewModel(
                     }
                 }
                 val preparedAlbums = albums(sort, initial.items)
+                val left = if (restore) positions[id] else null
                 // Nothing suspends from here to the published state: the windows, the
                 // bookmark and the page change together, and a late reveal must not undo it.
                 reveal?.cancel()
@@ -379,10 +386,10 @@ class LibraryViewModel(
                     error = false,
                     errorStatus = 0,
                     healthy = initial.healthy,
-                    restoreKey = "",
+                    restoreKey = left?.key.orEmpty(),
                     restoreAnchor = if (restore) saved?.anchor.orEmpty() else "",
-                    restoreOffset = if (restore) saved?.pixelOffset ?: 0 else 0,
-                    restoreWidth = saved?.width ?: 0,
+                    restoreOffset = left?.offset ?: if (restore) saved?.pixelOffset ?: 0 else 0,
+                    restoreWidth = left?.width ?: saved?.width ?: 0,
                     restoreSerial = mutable.value.restoreSerial + 1,
                     anchorMissing = restore && anchorMoved(saved?.anchor.orEmpty(), initial)
                 )
@@ -407,6 +414,14 @@ class LibraryViewModel(
                 )
             }
         }
+    }
+
+    // Keys of a filtered list do not place the unfiltered one, so only an unfiltered
+    // page is remembered; viewportKey is blank until the shown page reported a position.
+    private fun leaveFolder() {
+        val s = mutable.value
+        val d = s.directory ?: return
+        if (s.kind.isEmpty()) positions.leave(d.id, FolderPosition(viewportKey, viewportOffset, viewportWidth))
     }
 
     private fun restore(page: KeptPage) {

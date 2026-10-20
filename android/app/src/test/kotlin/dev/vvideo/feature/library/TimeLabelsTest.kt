@@ -133,7 +133,7 @@ class TimeLabelsTest {
         assertEquals(listOf("subfolder-bar", "date:a", "album:a", "date:b", "album:b"), keys)
         assertEquals(4, restoreIndex(keys, albums, "missing", "b"))
         assertEquals(2, restoreIndex(keys, albums, "album:a", "b"))
-        assertEquals(0, restoreIndex(keys, albums, "gone", "gone"))
+        assertNull(restoreIndex(keys, albums, "gone", "gone"))
         assertEquals("album:a", anchorKey(listOf(a.copy(items = a.items + b.items)), "b"))
     }
 

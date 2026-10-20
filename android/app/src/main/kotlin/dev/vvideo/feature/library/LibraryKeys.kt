@@ -25,10 +25,11 @@ fun anchorKey(albums: List<Album>, anchor: String): String? =
     albums.firstOrNull { album -> album.items.any { it.id == anchor } }
         ?.let(::albumKey)
 
-fun restoreIndex(keys: List<String>, albums: List<Album>, key: String, anchor: String): Int {
+/** The row a saved position lands on: its own key, else the album holding the anchor; null if neither is shown. */
+fun restoreIndex(keys: List<String>, albums: List<Album>, key: String, anchor: String): Int? {
     val exact = keys.indexOf(key)
     if (exact >= 0) return exact
-    return keys.indexOf(anchorKey(albums, anchor)).coerceAtLeast(0)
+    return keys.indexOf(anchorKey(albums, anchor)).takeIf { it >= 0 }
 }
 
 // A saved position that is gone is only worth a notice when the page shows

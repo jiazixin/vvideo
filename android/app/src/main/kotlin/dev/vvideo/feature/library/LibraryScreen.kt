@@ -106,9 +106,11 @@ fun LibraryRoute(
     LaunchedEffect(state.restoreSerial, list) {
         restoring = true
         val keys = libraryKeys(state)
+        // A position whose row is gone starts the list at its top, not part way into it.
+        val index = restoreIndex(keys, state.albums, state.restoreKey, state.restoreAnchor)
         list.scrollToItem(
-            restoreIndex(keys, state.albums, state.restoreKey, state.restoreAnchor),
-            if (state.restoreWidth == width) state.restoreOffset else 0
+            index ?: 0,
+            if (index != null && state.restoreWidth == width) state.restoreOffset else 0
         )
         restoring = false
     }
