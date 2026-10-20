@@ -49,8 +49,9 @@ type Config struct {
 	Storage       string
 	Media, Ignore []Path
 	Scan          struct {
-		Cron     string
-		Parallel int
+		Cron string
+		// Parallel bounds file attribute reads; ProbeParallel bounds ffprobe jobs.
+		Parallel, ProbeParallel int
 	}
 	Cache struct {
 		Path              string
@@ -80,35 +81,37 @@ const (
 )
 
 var fields = map[string]fieldKind{
-	"server.listen":  stringField,
-	"server.port":    intField,
-	"auth.token":     stringField,
-	"storage":        stringField,
-	"media":          pathListField,
-	"ignore":         pathListField,
-	"scan.cron":      stringField,
-	"scan.parallel":  intField,
-	"cache.path":     stringField,
-	"cache.max_size": stringField,
-	"cache.parallel": intField,
-	"cache.threads":  intField,
-	"cache.percent":  numberField,
+	"server.listen":       stringField,
+	"server.port":         intField,
+	"auth.token":          stringField,
+	"storage":             stringField,
+	"media":               pathListField,
+	"ignore":              pathListField,
+	"scan.cron":           stringField,
+	"scan.parallel":       intField,
+	"scan.probe_parallel": intField,
+	"cache.path":          stringField,
+	"cache.max_size":      stringField,
+	"cache.parallel":      intField,
+	"cache.threads":       intField,
+	"cache.percent":       numberField,
 }
 
 var sections = []string{"server", "auth", "scan", "cache"}
 
 var defaults = map[string]string{
-	"server.listen":  "0.0.0.0",
-	"server.port":    "8080",
-	"storage":        "data",
-	"ignore":         "[]",
-	"scan.cron":      "*/30 * * * *",
-	"scan.parallel":  "2",
-	"cache.path":     ".cache/thumbnails",
-	"cache.max_size": "30GB",
-	"cache.parallel": "2",
-	"cache.threads":  "2",
-	"cache.percent":  "10",
+	"server.listen":       "0.0.0.0",
+	"server.port":         "8080",
+	"storage":             "data",
+	"ignore":              "[]",
+	"scan.cron":           "*/30 * * * *",
+	"scan.parallel":       "2",
+	"scan.probe_parallel": "2",
+	"cache.path":          ".cache/thumbnails",
+	"cache.max_size":      "30GB",
+	"cache.parallel":      "2",
+	"cache.threads":       "2",
+	"cache.percent":       "10",
 }
 
 var errRequired = errors.New("required setting missing")
@@ -394,6 +397,9 @@ func (s *settings) build(cwd string) (Config, error) {
 		return c, err
 	}
 	if c.Scan.Parallel, err = s.worker("scan.parallel"); err != nil {
+		return c, err
+	}
+	if c.Scan.ProbeParallel, err = s.worker("scan.probe_parallel"); err != nil {
 		return c, err
 	}
 	if c.Cache.Parallel, err = s.worker("cache.parallel"); err != nil {

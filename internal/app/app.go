@@ -28,7 +28,6 @@ import (
 )
 
 const (
-	probeWorkers = 2
 	// groupSettle is how long a directory revision must stay unchanged before
 	// its album anchors are rebuilt, so bursts of probe results coalesce.
 	groupSettle = 700 * time.Millisecond
@@ -143,7 +142,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.wg.Go(func() { a.groupLoop(ctx) })
 	a.wg.Go(func() { a.sortLoop(ctx) })
 	prober := &probe.Worker{Queue: a.Queue, Parameters: a.Thumbnails.Parameters, Now: time.Now, Rescan: func() { a.Trigger(false) }}
-	for range probeWorkers {
+	for range a.Config.Scan.ProbeParallel {
 		a.wg.Go(func() { a.Queue.Worker(ctx, "probe", a.Priority, timed(&a.probeNS, prober.Run)) })
 	}
 	for range a.Config.Cache.Parallel {

@@ -18,6 +18,7 @@ ignore:
 scan:
   cron: "*/30 * * * *"           # 五段式：分 时 日 月 周；按服务端时区，每小时 00/30 分
   parallel: 2                   # 全局文件属性读取并发，不是整个进程的系统线程上限
+  probe_parallel: 2             # 同时运行的 ffprobe 元信息探测任务数；抽帧要等探测拿到时长
 
 cache:
   path: "../.cache/thumbnails"   # 服务端缩略图目录，与安卓媒体缓存分开

@@ -34,15 +34,15 @@ func TestExplicitFileAndEmptyOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Storage != filepath.Join(d, "data") || c.Database() != filepath.Join(d, "data/data.sqlite") || c.Scan.Parallel != 2 || c.Cache.MaxSize != 30_000_000_000 {
-		t.Fatalf("wrong defaults: %s %d %d", c.Storage, c.Scan.Parallel, c.Cache.MaxSize)
+	if c.Storage != filepath.Join(d, "data") || c.Database() != filepath.Join(d, "data/data.sqlite") || c.Scan.Parallel != 2 || c.Scan.ProbeParallel != 2 || c.Cache.MaxSize != 30_000_000_000 {
+		t.Fatalf("wrong defaults: %s %d %d %d", c.Storage, c.Scan.Parallel, c.Scan.ProbeParallel, c.Cache.MaxSize)
 	}
 	if c.Address() != "0.0.0.0:8080" {
 		t.Fatalf("wrong default address %s", c.Address())
 	}
 }
 func TestStrictYAML(t *testing.T) {
-	for _, input := range []string{"auth: {token: supersecret}\nauth: {token: other}", "scan: {parallel: 2.5}", "scan: {parallel: '2'}", "auth: {token: 42}", "old: true", "cache: 3", "media: &x [{path: /a}]\nignore: *x", "auth: {token: !private supersecret}", "scan: {<<: {parallel: 2}}", "{}\n---\n{}", "[]", ""} {
+	for _, input := range []string{"auth: {token: supersecret}\nauth: {token: other}", "scan: {parallel: 2.5}", "scan: {parallel: '2'}", "scan: {probe_parallel: 2.5}", "auth: {token: 42}", "old: true", "cache: 3", "media: &x [{path: /a}]\nignore: *x", "auth: {token: !private supersecret}", "scan: {<<: {parallel: 2}}", "{}\n---\n{}", "[]", ""} {
 		t.Run(input, func(t *testing.T) {
 			d, e := envFor(t)
 			p := filepath.Join(d, "bad.yaml")
@@ -97,24 +97,24 @@ func TestOriginsAndEnvironment(t *testing.T) {
 	d, e := envFor(t)
 	p := filepath.Join(d, "configs", "instance.yaml")
 	os.MkdirAll(filepath.Dir(p), 0700)
-	os.WriteFile(p, []byte("storage: ../db\ncache: {path: ../thumbs, percent: 0}\nscan: {cron: ''}\n"), 0600)
+	os.WriteFile(p, []byte("storage: ../db\ncache: {path: ../thumbs, percent: 0}\nscan: {cron: '', probe_parallel: 6}\n"), 0600)
 	c, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE=configs/instance.yaml")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Database() != filepath.Join(d, "db/data.sqlite") || c.Cache.Path != filepath.Join(d, "thumbs") || c.Cache.Percent != 0 || c.Scan.Cron != "" {
+	if c.Database() != filepath.Join(d, "db/data.sqlite") || c.Cache.Path != filepath.Join(d, "thumbs") || c.Cache.Percent != 0 || c.Scan.Cron != "" || c.Scan.ProbeParallel != 6 {
 		t.Fatal("file origins or zero values lost")
 	}
-	c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env", "VVIDEO_IGNORE=[]")})
+	c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env", "VVIDEO_IGNORE=[]", "VVIDEO_SCAN__PROBE_PARALLEL=3")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Storage != filepath.Join(d, "env") || len(c.Ignore) != 0 {
+	if c.Storage != filepath.Join(d, "env") || len(c.Ignore) != 0 || c.Scan.ProbeParallel != 3 {
 		t.Fatal("environment did not replace file")
 	}
 }
 func TestInvalidValuesAndBoundaries(t *testing.T) {
-	for _, v := range []string{"VVIDEO_SCAN__PARALLEL=0", "VVIDEO_SCAN__PARALLEL=-1", "VVIDEO_SCAN__PARALLEL=1.5", "VVIDEO_SCAN__PARALLEL=999999999999999999999", "VVIDEO_CACHE__THREADS=0", "VVIDEO_CACHE__PERCENT=100", "VVIDEO_CACHE__PERCENT=NaN", "VVIDEO_CACHE__PERCENT=[10]", "VVIDEO_CACHE__MAX_SIZE=0GB", "VVIDEO_CACHE__MAX_SIZE=99999999999999999GiB", "VVIDEO_CACHE__PATH=", "VVIDEO_SCAN__CRON=* * * * * *", "VVIDEO_SCAN__CRON=CRON_TZ=Not/AZone * * * * *", "VVIDEO_MEDIA=[]", "VVIDEO_MEDIA=[{\"path\":\"x\",\"other\":1}]", "VVIDEO_MEDIA={}", "VVIDEO_OLD=1"} {
+	for _, v := range []string{"VVIDEO_SCAN__PARALLEL=0", "VVIDEO_SCAN__PARALLEL=-1", "VVIDEO_SCAN__PARALLEL=1.5", "VVIDEO_SCAN__PARALLEL=999999999999999999999", "VVIDEO_SCAN__PROBE_PARALLEL=0", "VVIDEO_SCAN__PROBE_PARALLEL=1.5", "VVIDEO_SCAN__PROBE_PARALLEL=1025", "VVIDEO_CACHE__THREADS=0", "VVIDEO_CACHE__PERCENT=100", "VVIDEO_CACHE__PERCENT=NaN", "VVIDEO_CACHE__PERCENT=[10]", "VVIDEO_CACHE__MAX_SIZE=0GB", "VVIDEO_CACHE__MAX_SIZE=99999999999999999GiB", "VVIDEO_CACHE__PATH=", "VVIDEO_SCAN__CRON=* * * * * *", "VVIDEO_SCAN__CRON=CRON_TZ=Not/AZone * * * * *", "VVIDEO_MEDIA=[]", "VVIDEO_MEDIA=[{\"path\":\"x\",\"other\":1}]", "VVIDEO_MEDIA={}", "VVIDEO_OLD=1"} {
 		t.Run(v, func(t *testing.T) {
 			d, e := envFor(t)
 			if _, err := Load(Source{WorkDir: d, Env: append(e, v)}); err == nil {
@@ -258,6 +258,7 @@ func TestErrorsNameTheProblem(t *testing.T) {
 		{"unknown variable", Source{WorkDir: d, Env: append(e, "VVIDEO_CACHE__COLOUR=blue")}, []string{"VVIDEO_CACHE__COLOUR"}},
 		{"no file and no token", Source{WorkDir: d}, []string{"auth.token", DefaultFile, "--config"}},
 		{"bad worker count", Source{WorkDir: d, Env: append(e, "VVIDEO_SCAN__PARALLEL=0")}, []string{"scan.parallel"}},
+		{"bad probe worker count", Source{WorkDir: d, Env: append(e, "VVIDEO_SCAN__PROBE_PARALLEL=-1")}, []string{"scan.probe_parallel"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Load(tc.src)
