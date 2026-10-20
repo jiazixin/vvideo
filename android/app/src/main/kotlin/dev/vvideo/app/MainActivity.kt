@@ -13,9 +13,20 @@ import dev.vvideo.app.navigation.VVideoRoot
 import dev.vvideo.ui.theme.ThemeMode
 import dev.vvideo.ui.theme.VVideoTheme
 
+/**
+ * How long the highest refresh rate stays requested after scrolling stops. Without
+ * it, the short pause between two flicks releases the request: the panel drops to
+ * 60 Hz and switches back on the next flick, and each display mode switch stalls
+ * the frame pipeline for tens of milliseconds on the test device.
+ */
+private const val REFRESH_HOLD_MS = 1500L
+
 @UnstableApi
 class MainActivity : ComponentActivity() {
     private var interacting = false
+    private var highRefresh = false
+    private val releaseHighRefresh = Runnable { requestHighRefresh(false) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -42,18 +53,34 @@ class MainActivity : ComponentActivity() {
                 Trace.endAsyncSection("VVideoScroll", 1)
             }
         }
+        val decor = window.decorView
+        decor.removeCallbacks(releaseHighRefresh)
+        if (active) {
+            requestHighRefresh(true)
+        } else {
+            decor.postDelayed(releaseHighRefresh, REFRESH_HOLD_MS)
+        }
+    }
+
+    /** Asks for the display's highest refresh rate at its current resolution, or releases the request. */
+    private fun requestHighRefresh(enabled: Boolean) {
+        if (highRefresh == enabled) return
         val current = window.decorView.display ?: return
         val native = current.mode
         val best = current.supportedModes
             .filter { it.physicalWidth == native.physicalWidth && it.physicalHeight == native.physicalHeight }
             .maxByOrNull { it.refreshRate }
+        highRefresh = enabled
         window.attributes = window.attributes.apply {
-            preferredDisplayModeId = if (active) best?.modeId ?: 0 else 0
+            preferredDisplayModeId = if (enabled) best?.modeId ?: 0 else 0
         }
     }
 
     override fun onStop() {
         interaction(false)
+        // A stopped app releases its request at once rather than after the hold.
+        window.decorView.removeCallbacks(releaseHighRefresh)
+        requestHighRefresh(false)
         super.onStop()
     }
 }
