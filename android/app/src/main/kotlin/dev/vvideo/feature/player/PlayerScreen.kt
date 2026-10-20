@@ -76,6 +76,10 @@ fun PlayerRoute(
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     ViewerOrientation(activity, isLandscape)
     var holding by remember { mutableStateOf(false) }
+    val levels = remember(activity) { ViewerLevels(activity) }
+    var edgeLevel by remember { mutableStateOf<Pair<EdgeControl, Float>?>(null) }
+    // Brightness set by an edge drag belongs to the viewer; leaving restores the system's.
+    DisposableEffect(levels) { onDispose { levels.resetBrightness() } }
     val seekChain = remember { SeekChain() }
     var bulletin by remember { mutableStateOf<String?>(null) }
     val lastVideo = stringResource(R.string.last_video)
@@ -171,7 +175,16 @@ fun PlayerRoute(
             userScrollEnabled = !dragging && !isLandscape,
             // The gesture callbacks are installed once per player, so they read and
             // write this route's state directly instead of capturing values.
-            modifier = Modifier.fillMaxSize().nestedScroll(endOverscroll).viewerGestures(
+            modifier = Modifier.fillMaxSize().nestedScroll(endOverscroll).edgeAdjustGestures(
+                onStart = { control ->
+                    if (control == EdgeControl.Brightness) levels.brightness() else levels.volume()
+                },
+                onAdjust = { control, level ->
+                    if (control == EdgeControl.Brightness) levels.setBrightness(level) else levels.setVolume(level)
+                    edgeLevel = control to level
+                },
+                onEnd = { edgeLevel = null }
+            ).viewerGestures(
                 active.player,
                 onTap = {
                     controlsVisible = !controlsVisible
@@ -233,6 +246,7 @@ fun PlayerRoute(
                 !playback.buffering && !pager.isScrollInProgress
         if (showPlay) PlayButton({ active.player.play() }, Modifier.align(Alignment.Center))
         if (holding) SpeedHoldLabel(Modifier.align(Alignment.TopCenter))
+        edgeLevel?.let { (control, level) -> EdgeLevelLabel(control, level, Modifier.align(Alignment.TopCenter)) }
         if (seekChain.seconds > 0) {
             SeekFeedback(
                 seekChain.seconds,

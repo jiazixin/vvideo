@@ -70,6 +70,8 @@
     <string name="last_video">已经是最后一个视频</string>
     <string name="seek_back">« %1$d 秒</string>
     <string name="seek_forward">%1$d 秒 »</string>
+    <string name="brightness_level">亮度 %1$d%%</string>
+    <string name="volume_level">音量 %1$d%%</string>
     <string name="speed_hold">2× 快进中</string>
     <string name="cannot_decode">这台手机无法解码此视频</string>
     <string name="connect_title">连接你的媒体服务</string>

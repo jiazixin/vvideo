@@ -205,6 +205,18 @@ internal fun SpeedHoldLabel(modifier: Modifier = Modifier) {
     )
 }
 
+/** The brightness or volume an edge drag is setting. */
+@Composable
+internal fun EdgeLevelLabel(control: EdgeControl, level: Float, modifier: Modifier = Modifier) {
+    val label = if (control == EdgeControl.Brightness) R.string.brightness_level else R.string.volume_level
+    Text(
+        stringResource(label, levelPercent(level)),
+        modifier.statusBarsPadding().padding(top = 72.dp)
+            .background(Color.Black.copy(alpha = .5f), CircleShape).padding(12.dp),
+        color = Color.White
+    )
+}
+
 /** The seconds a double-tap chain has seeked, on the side it seeks towards. */
 @Composable
 internal fun SeekFeedback(seconds: Int, forward: Boolean, modifier: Modifier = Modifier) {
