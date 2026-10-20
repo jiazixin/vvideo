@@ -22,6 +22,7 @@
 | --- | --- | --- | --- | --- |
 | 第 2、4 节未覆盖原生移动客户端 | 根 `android/` 是 Android 应用与 Gradle 工程边界 | 用户明确委托制定安卓规范；服务端与客户端构建工具和运行环境独立 | 本项目 Android 工程 | 引入独立发布的多个客户端或用户要求重组仓库 |
 | 第 3 节根入口文档清单 | 增加根 `安卓目录规范.md` 与 `README.zh-CN.md` | 用户明确要求安卓规范及中英文 README | 项目文档 | 文档入口或语言策略调整 |
+| 第 3 节根文件清单 | 根 `NOTICE` 与 `LICENSE` 并列，记录 Apache-2.0 版权声明；`CONTRIBUTING.md`、`SECURITY.md` 放 `docs/`（GitHub 会识别该位置） | 用户于2026-10-20选定 Apache-2.0、版权人 jzx；`LICENSE` 保持官方原文以便工具识别 | 项目许可与开源入口 | 更换许可证或托管平台 |
 | 第 4、6 节通用源码和测试位置 | `android/<module>/src/main/kotlin/`、`src/test/kotlin/`、`src/androidTest/kotlin/`；资源和 Manifest 使用相应 source set | 本项目选择 Android Gradle Plugin 支持的标准 source set；测试依赖及运行环境由 source set 区分，依据见安卓规范 | Android Gradle 模块 | 更换构建系统或 source set 配置 |
 | 第 4 节非 Go 发布输出与测试报告 | Android 输出保留在所属 Gradle 工程 / 模块的 `build/`，不另拷源码或构建目录 | 使用 Gradle/AGP 的默认输出和报告发现机制；不声称路径不可配置 | Android 构建及报告 | 实际工具配置更改输出位置 |
 | 第 7 节运行配置、`data/` 与 `.cache/` | 手机上使用 Android 应用私有持久目录、数据库、DataStore 与缓存目录；不创建源码树内的手机状态副本 | 应用沙箱和平台存储 API；可回收媒体缓存与持久配置/历史分开 | Android 安装后的运行状态 | 存储模式、离线下载功能或系统备份策略改变 |

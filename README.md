@@ -1,43 +1,115 @@
 <p align="center"><img src="docs/assets/logo.svg" width="96" height="96" alt="VVideo logo"></p>
 
-# VVideo
+<h1 align="center">VVideo</h1>
 
-The Android UI follows the [channel-style redesign](docs/plans/2026-10-10-android-ui-telegram-style.md): library home (recent folders are no longer listed), blue light/dark themes, media tabs, album date labels, player gestures and separate storage/connection screens. Room v2 preserves old anchors while adding recent visits. Bounded windows and the single-player architecture remain in place. See [acceptance](docs/ACCEPTANCE.md) for the build-specific device results and limitations.
+<p align="center">
+  A self-hosted media server for Linux/NAS and a native Android app for browsing and playing a folder-organized photo and video library.
+</p>
 
-English | [简体中文](README.zh-CN.md)
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-VVideo indexes an existing folder-organized media library with a Go service on Linux/NAS and browses it with a native Kotlin Android app. Originals are read-only; playback uses their original bytes without transcoding.
+---
 
-**Status: implemented; acceptance remains partial.** The 2026-10-10 redesign passed its 30-minute synthetic workload memory gates, but all three final warm-scroll frame rounds exceeded the 1% deadline-overrun target. Earlier APK measurements do not establish its performance. Full-library/NAS testing, universal codec support and matching-server deployment remain unverified. See [verification records](docs/ACCEPTANCE.md).
+VVideo indexes an existing media library where it already lives. A Go service scans your folders, extracts metadata and covers, and serves the original bytes over HTTP. A Kotlin/Jetpack Compose app shows each folder as an album feed and plays videos full screen with a vertical swipe between them. Originals stay read-only: there is no transcoding, renaming or moving of files.
 
-## Implemented scope
+<p align="center">
+  <img src="docs/assets/mockups/01-home-libraries.png" width="200" alt="Home screen mockup">
+  <img src="docs/assets/mockups/02-folder-album-feed.png" width="200" alt="Folder album feed mockup">
+  <img src="docs/assets/mockups/06-player-controls.png" width="200" alt="Player mockup">
+</p>
+<p align="center"><sub>Design mockups with placeholder images. See <a href="docs/assets/mockups/">all mockups</a>.</sub></p>
 
-- Folder navigation, ten-item aspect-aware albums, global server sorting by capture time, modification time or name, with stable ID ties.
-- Persistent per-folder sort and media anchors; bounded bidirectional metadata windows. Cache clearing preserves settings and browsing records.
-- A vertical video feed using one active Media3 player, versioned byte caches and bounded cancellable next-video prefetch. Images support full-screen viewing, zoom and horizontal swiping between the photos of a folder; media details identify the sorting time source.
-- SQLite WAL/FULL, one writer and four read connections, streaming scans with 128-entry batches, isolated disk staging and atomic directory publication. Failed/offline scans preserve the previous index; absence requires two consecutive complete healthy scans.
-- Durable delayed metadata/cover jobs, bounded ffprobe/FFmpeg execution, one WebP cover per video, and disk-budgeted thumbnail LRU.
-- Bearer-authenticated APIs, HTTP Range/ETag/version checks, optional original-offset MP4 index hints and scheduled scans. Scans, probes and covers keep running during playback, bounded by their worker counts.
-- Shared Android media cache budgets of **1/5/10 GB** (decimal bytes); disk quotas are independent of RAM buffering.
+## Project status
 
-The user's estimated 130,000 videos and 380,000 images are not verified filesystem counts. A 510,000-row synthetic database test is separate from real-media indexing. Public-network service, transcoding, iOS and recommendations are outside this release.
+**First release, partially accepted.** The server and app are implemented and tested on synthetic media and on a real phone (iQOO 12 Pro). Not yet verified: a full real library on a NAS, every codec/container combination, and a persistent production deployment. The latest warm-scroll frame measurements missed the 1% deadline-overrun target. The [acceptance record](docs/ACCEPTANCE.md) lists what was measured, on which build, and the known limitations.
 
-## Build and run the server
+Scope of this release: home network only, original-quality playback, Android only. Out of scope: public internet service, transcoding, iOS and recommendations.
 
-Use Go **1.27.1**, matching [go.mod](go.mod), with `ffmpeg` and `ffprobe` on PATH. The FFmpeg build must support your inputs and include the `libwebp` encoder used for covers; check with `ffmpeg -hide_banner -encoders | grep libwebp` (Debian/Ubuntu's `ffmpeg` package has it; current Homebrew `ffmpeg` does not). Store the SQLite database on the server's local filesystem, not SMB/NFS; media may reside on a mount.
+## Features
+
+**Server (Go, Linux/NAS)**
+
+- Streaming, batched scans of large folder trees. A failed or offline scan keeps the previous index, and a file is only treated as deleted after two consecutive complete, healthy scans.
+- SQLite in WAL mode with one writer and four read-only connections; the database lives on local disk while media may sit on a network mount.
+- Durable background jobs for `ffprobe` metadata and one WebP cover per video, with bounded concurrency and a disk-budgeted LRU cover cache. Scans, probes and covers keep running during playback, limited by their worker counts.
+- Global sorting by capture time, modification time or name, with cursor paging and stable anchors so clients can restore a position deep inside a folder.
+- Bearer-token API with HTTP Range, ETag and per-version checks, so a client never mixes bytes from an old and a new version of a file. Optional MP4 index hints let the client prefetch `moov` at its original offset.
+- Scheduled scans (cron), strict configuration validation, structured logs and graceful shutdown.
+
+**Android app (Kotlin, Compose, Media3)**
+
+- Folder navigation with ten-item, aspect-aware album blocks and per-folder sort and position that survive app restarts.
+- A vertical video feed driven by a single reused Media3 player, a versioned byte cache and bounded, cancellable prefetch of the next video.
+- Full-screen photos with zoom and horizontal paging; media details show where the sort time came from.
+- Media cache budgets of 1, 5 or 10 GB (decimal), separate from RAM buffering. Clearing the cache keeps settings and browsing positions.
+- Light and dark themes, high-refresh-rate scrolling and playback gestures (double-tap seek, hold for speed).
+
+The library size this was designed for (about 130,000 videos and 380,000 images) is the owner's estimate, not a measured count. Scale tests used a 510,000-row synthetic database, which is separate from indexing real media.
+
+## Architecture
+
+```text
+Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (index, jobs)
+  Compose UI                           │  scanner ─▶ read-only media folders
+  Media3 player ◀── Range bytes ───────┤  ffprobe / FFmpeg ─▶ cover cache
+  disk cache (1/5/10 GB)               └  REST API /v1
+```
+
+[docs/DESIGN.md](docs/DESIGN.md) describes the product behavior and performance targets, and [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) the server's scan, storage and performance rules.
+
+## Repository layout
+
+```text
+.
+├── cmd/vvideo/         server entry point (flags, logging, startup, shutdown)
+├── internal/           server packages
+│   ├── app/            wiring of storage, workers and the HTTP API
+│   ├── config/         strict configuration loader
+│   ├── jobs/           durable job queue and playback-activity tracker
+│   ├── library/        published index: directories, media, paging, album anchors
+│   ├── mediafs/        descriptor-relative, read-only file access and mount identity
+│   ├── probe/          ffprobe and EXIF metadata
+│   ├── scanner/        two-pass directory observation and publication
+│   ├── storage/        SQLite ownership, connections and schema
+│   ├── streaming/      Range responses and MP4 index hints
+│   └── thumbnail/      cover generation and LRU cache
+├── tests/              cross-package Go integration tests
+├── configs/            configuration example (local copies are git-ignored)
+├── deploy/             systemd unit
+├── scripts/            device measurement and synthetic-media tools
+├── android/            Android Gradle project (:app, :core:media, :benchmark)
+└── docs/               design, API, deployment, decisions, plans and acceptance records
+```
+
+Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规范.md](安卓目录规范.md) (Android) and the [project layout decision](docs/decisions/2026-10-08-project-layout.md), which also lists the project's documented exceptions.
+
+## Getting started
+
+### Requirements
+
+| Component | Version |
+| --- | --- |
+| Go | **1.27.1** or newer, as declared in [go.mod](go.mod) |
+| FFmpeg | `ffmpeg` and `ffprobe` on `PATH`; `ffmpeg` must include the `libwebp` encoder |
+| JDK (Android) | 21 |
+| Android SDK | Platform 36 and Build-Tools 35.0.0; devices running Android 9 (API 28) or later |
+
+Check FFmpeg with `ffmpeg -hide_banner -encoders | grep libwebp`. Debian and Ubuntu's `ffmpeg` package includes it; the current Homebrew `ffmpeg` does not.
+
+### Run the server
 
 ```sh
 go mod download
-go test ./...
-go vet ./...
 go build -trimpath -o bin/vvideo ./cmd/vvideo
 cp configs/config.example.yaml configs/config.local.yaml
-# Edit the media/ignore paths and set a private nonempty token.
+# Edit media paths and set a private, non-empty auth.token.
 chmod 600 configs/config.local.yaml
 bin/vvideo --config configs/config.local.yaml
 ```
 
-For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git.
+Put the SQLite data directory on the server's local disk, not on SMB/NFS; media folders may be network mounts. For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git.
 
 ```text
 Usage:
@@ -49,55 +121,91 @@ Options:
   -h, --help            Print this help and exit
 ```
 
-Exit status is 0 on success, `--help` or `--version`; 2 for a command-line error (printed to stderr); 1 when the service cannot start or fails. Configuration errors are logged as JSON lines on stdout; once the configuration loads, logs follow the `log` settings (default: info-level JSON lines on stdout). A failed start logs one `service_failed` event whose `error` names the cause, such as a missing `ffmpeg`/`ffprobe`, an FFmpeg without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use.
+The exit status is 0 on success, `--help` or `--version`; 2 for a command-line error; and 1 when the service cannot start or fails. A failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use. SIGTERM cancels background work and allows up to 30 seconds for HTTP requests to finish.
 
-The example paths are relative to `configs/`. Keep configuration private and mount originals read-only. The service writes only its database/staging and cover cache. SIGTERM cancels work and permits up to 30 seconds for graceful HTTP shutdown. A storage ownership lock rejects a second process using the same database.
+### Build and install the Android app
 
-[deploy/vvideo.service](deploy/vvideo.service) is an actual systemd definition for `/opt/vvideo` and an existing `vvideo` service account. Before installing, create the account and writable `data/` and `cache/` directories, install the binary/config, and adapt the paths/account to your deployment. Its sandbox permits writes only to those directories and private temporary storage; with `log.output: file`, add the log directory to `ReadWritePaths` (or keep the default stdout, which goes to journald). Preserve read access to your media mounts. Then install it as `/etc/systemd/system/vvideo.service`, reload systemd and enable/start it. Do not copy a unit whose paths have not been configured.
-
-## Android
-
-See [android/README.md](android/README.md). The real Wrapper pins Gradle **8.14.3** and its checksum; AGP **8.13.2**, Kotlin **2.2.21**, Media3 **1.8.1** and other dependencies are pinned in the version catalog. Build with **JDK 21**, Android SDK Platform 36 and Build-Tools 35.0.0:
+The Gradle Wrapper pins Gradle 8.14.3; AGP 8.13.2, Kotlin 2.2.21, Media3 1.8.1 and the other dependencies are pinned in [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml). Set `ANDROID_HOME` or an ignored `android/local.properties`.
 
 ```sh
-android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug :app:assembleDebug
-android/gradlew -p android :app:assembleProfile :benchmark:assembleProfile
+android/gradlew -p android :app:assembleDebug
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Enter the server root URL and token in Settings. Both HTTP and HTTPS are accepted for any host, for example `http://192.168.1.10:8080`; no special build property is needed. HTTP does not encrypt the link, so the token and media bytes are readable by anyone on the same network.
+Open Settings in the app and enter the server root URL (for example `http://192.168.1.10:8080`) and the token. HTTP and HTTPS are both accepted for any host. Plain HTTP does not encrypt the connection: anyone on the same network can read the token and the media.
 
-On the supplied test machine, the requested `~/vvideo` is the media root; runtime files, SQLite and caches are separate in `~/vvideo-runtime`. The recorded device tests use an SSH tunnel plus ADB reverse. Persistent service activation and firewall changes are separate deployment actions and have not been completed on the supplied machine.
-```sh
-ssh -N -L 19323:127.0.0.1:8080 vvideo
-# Run in another terminal while the tunnel is alive:
-adb reverse tcp:19323 tcp:19323
-# Android URL: http://127.0.0.1:19323
-```
-
-These ports are the development setup, not hidden application defaults. Phone disconnects or tunnel termination interrupt this connection. Profile builds are minified, non-debuggable, profileable and signed with the development key; release distribution requires your own signing process.
+Build variants, device tests and performance measurement are described in [android/README.md](android/README.md).
 
 ## Configuration
 
-[configs/config.example.yaml](configs/config.example.yaml) contains the supported fields. All but nonempty `auth.token` and at least one `media[].path` have defaults.
+[configs/config.example.yaml](configs/config.example.yaml) lists every supported field. Only `auth.token` and at least one `media[].path` are required; everything else has a default. Configuration is read once at startup, so changes need a restart.
 
-- File selection: `-c`/`--config` (also `--config=<file>`; the last one wins) > `CONFIG_FILE` > `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid fails; only the implicit default may be absent, in which case the environment must supply the required settings.
-- Field precedence: `VVIDEO_*` environment variables > selected YAML > defaults, however the file was selected.
-- `server.listen` is a host name or IP address without a port (default `0.0.0.0`; write IPv6 as `::`), and `server.port` is an integer from 1 to 65535 (default `8080`). A combined `host:port` in `server.listen` is rejected.
-- `storage` is a data directory, not a file: the database is `data.sqlite` inside it, beside the `.scan-tmp/` scan staging area. An existing file at that path is rejected.
-- File paths resolve against the configuration directory; environment/default paths against the working directory. Defaults are `data` (database `data/data.sqlite`) and `cache` (thumbnails). Media roots must not overlap, and writable data/cache must remain outside originals. `ignore` specifies exact files or directory subtrees, not globs.
-- Environment names are `VVIDEO_` plus uppercase paths separated by `__`, e.g. `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA`/`VVIDEO_IGNORE` replace complete lists using JSON arrays of `{"path":"..."}`. Unknown/legacy fields, duplicate keys, aliases, tags, wrong types and empty required values fail. No `.env` loading or YAML variable interpolation.
-- `scan.cron` is five-field cron, default `*/30 * * * *`, with optional `CRON_TZ=...`. Empty disables periodic scans, retaining the startup scan. Running scans do not accumulate cron triggers. `scan.parallel` bounds file attribute reads and `scan.probe_parallel` bounds concurrent ffprobe metadata jobs; both default to 2. Positive integer concurrency/thread values have a defensive upper bound of 1024; they are not process-wide thread limits.
-- Cover settings: `cache.path`, positive `cache.max_size` (`MB/GB/MiB/GiB`), `cache.parallel`, `cache.threads`, and finite single `cache.percent` in `[0,100)`. Defaults: `30GB`, 2 workers, 2 decode threads, 10%. Capacity is a content budget, not preallocated storage.
-- Logging: `log.level` is `debug`, `info` (default), `warn` or `error`; `log.format` is `json` (default) or `text`; `log.output` is `stdout` (default), `stderr` or `file`, and `log.file` is required for, and only accepted with, `file`. The file and its directory are created if missing and appended to; there is no built-in rotation, so use logrotate's `copytruncate`. While covers are being generated, a `thumbnail_progress` info event every 5 minutes reports covers published and failed attempts in the window, queue totals (`total`/`done`/`failed`/`pending`/`percent`), media still `waiting_probe`, average per-cover time `avg_ms`, throughput `per_minute` and an `eta` estimated from that window; an idle queue logs nothing.
-- Configuration changes require restart. Libraries retain IDs across reordering/restarts; changing a root path creates a different library. Removing a configured root stops management, without deleting originals.
+**Choosing the file.** `-c`/`--config` (also `--config=<file>`; the last one wins) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
 
-Timeouts, retry limits, page sizes and resource policies are built in; see [design](docs/DESIGN.md) and [implementation requirements](docs/IMPLEMENTATION.md). Source format compatibility depends on FFmpeg, Media3, the device and the actual streams.
+**Precedence and environment variables.** `VVIDEO_*` environment variables override the YAML file, which overrides the defaults. A variable name is `VVIDEO_` plus the uppercase field path with `__` between levels, for example `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA` and `VVIDEO_IGNORE` replace the whole list with a JSON array of `{"path": "..."}` objects. Unknown or legacy fields, duplicate keys, YAML aliases and tags, wrong types and empty required values are rejected. There is no `.env` loading and no variable interpolation in YAML.
 
-## Layout, verification and maintenance
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `server.listen` | Host name or IP address without a port; write IPv6 as `::` | `0.0.0.0` |
+| `server.port` | TCP port, 1–65535 | `8080` |
+| `auth.token` | Bearer token clients must send | required |
+| `storage` | Data directory holding `data.sqlite` and the `.scan-tmp/` staging area | `data` |
+| `media[].path` | Media roots; they must not overlap | required |
+| `ignore[].path` | Exact files or directory subtrees inside a media root, not globs | none |
+| `scan.cron` | Five-field cron with optional `CRON_TZ=`; empty disables periodic scans (the startup scan still runs) | `*/30 * * * *` |
+| `scan.parallel` | Concurrent file attribute reads during a scan | `2` |
+| `scan.probe_parallel` | Concurrent `ffprobe` jobs | `2` |
+| `cache.path` | Cover cache directory | `cache` |
+| `cache.max_size` | Cover cache budget, with unit `MB`, `GB`, `MiB` or `GiB` | `30GB` |
+| `cache.parallel` / `cache.threads` | Concurrent cover jobs, and decode threads per job | `2` / `2` |
+| `cache.percent` | Position of the cover frame as a percentage of the duration, in `[0, 100)` | `10` |
+| `log.level` / `log.format` | `debug`, `info`, `warn` or `error` / `json` or `text` | `info` / `json` |
+| `log.output` / `log.file` | `stdout`, `stderr` or `file`; `log.file` is required for, and only accepted with, `file` | `stdout` |
 
-The Go module is at the repository root: `cmd/vvideo/`, `internal/` and `tests/`; schema SQL is built into `internal/storage/schema.go`. Android has one tool root `android/`, two production modules `:app`/`:core:media`, and the actual `:benchmark` test module. `configs/`, `deploy/`, `scripts/` and `docs/` have distinct responsibilities. Runtime secrets, SDK paths, build products and test reports are ignored. Back up private configuration and a consistent SQLite snapshot; covers and disposable staging are rebuildable.
+Paths in the YAML file resolve against the file's directory; paths from environment variables and defaults resolve against the working directory. Writable directories (`storage`, `cache.path`, `log.file`) must stay outside the media roots. Concurrency values accept 1–1024; they bound VVideo's own workers, not the process's thread count. Log files are appended to and never rotated, so use logrotate with `copytruncate`. While covers are being generated, a `thumbnail_progress` event every five minutes reports progress, throughput and an ETA; an idle queue logs nothing.
 
-Read [AGENTS.md](AGENTS.md), [Go directory baseline](目录规范.md), [Android conventions](安卓目录规范.md), [layout decision](docs/decisions/2026-10-08-project-layout.md), [design](docs/DESIGN.md), [PERF rules](docs/IMPLEMENTATION.md), and the [server test plan](docs/plans/2026-10-09-server-performance.md). Apply installed `use-modern-go` before Go changes and `open-code-review` after applicable validation. Do not manufacture a Git repository or successful OCR result to conceal an unavailable review environment.
+Libraries keep their IDs across restarts and reordering. Changing a root's path creates a new library, and removing a root stops managing it without touching the files. Timeouts, retry limits, page sizes and other resource policies are built in; see the [design](docs/DESIGN.md) and the [HTTP API](docs/API.md).
 
-The temporary `video-rename/` reference copy is excluded from VVideo builds; its extracted mechanisms and historical limits are documented in the [performance decision](docs/decisions/2026-10-09-scan-storage-performance.md).
+## Deployment
+
+[deploy/vvideo.service](deploy/vvideo.service) is a hardened systemd unit for a binary in `/opt/vvideo` running as a `vvideo` service account. Before installing it:
+
+1. Create the account and the writable `/opt/vvideo/data` and `/opt/vvideo/cache` directories, and install the binary and `configs/config.local.yaml`.
+2. Adjust paths and the account to your system. The unit only allows writes to `data/` and `cache/`; with `log.output: file`, add the log directory to `ReadWritePaths` (or keep the default stdout, which goes to journald). Keep read access to the media mounts.
+3. Install it as `/etc/systemd/system/vvideo.service`, then run `systemctl daemon-reload` and `systemctl enable --now vvideo`.
+
+Mount media read-only where possible. The service writes only its data directory and cover cache, and a lock file stops a second process from opening the same database.
+
+**Backups and state.** Back up the private configuration and a consistent snapshot of `data/data.sqlite` (stop the service, or use SQLite's online backup). The cover cache and scan staging area can be rebuilt. Before the first stable release there are no schema migrations: if a new build reports a schema version mismatch, stop the service, delete the data directory and let it reindex. Media files are never affected.
+
+## Development
+
+```sh
+gofmt -l . && go vet ./...
+go test ./...
+android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
+```
+
+`scripts/generate-media.py <dir>` creates a small synthetic library (H.264, HEVC and AV1 in MP4, MKV, TS and MOV, plus photos) for local testing. Never commit real media, tokens or server addresses.
+
+See [CONTRIBUTING](docs/CONTRIBUTING.md) for the workflow, code style and checks expected in a pull request. Contributors using AI agents should also follow [AGENTS.md](AGENTS.md).
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [docs/DESIGN.md](docs/DESIGN.md) | Product behavior and performance targets (Chinese) |
+| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | Server scan, storage and performance rules PERF-01 to PERF-12 (Chinese) |
+| [docs/API.md](docs/API.md) | HTTP API and error codes (Chinese) |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment record of the test machine (Chinese) |
+| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | What was measured and verified, with limitations (Chinese) |
+| [docs/decisions/](docs/decisions/) and [docs/plans/](docs/plans/) | Design decisions and implementation plans |
+| [android/README.md](android/README.md) | Android build variants, device tests and measurement |
+
+## Security
+
+The API is designed for a trusted home network. Use a long random token, restrict the listening address and firewall to your LAN, and use HTTPS (for example behind a reverse proxy) if the network is not trusted. To report a vulnerability, follow [docs/SECURITY.md](docs/SECURITY.md); please do not open a public issue.
+
+## License
+
+Copyright 2026 jzx. Licensed under the [Apache License, Version 2.0](LICENSE).
