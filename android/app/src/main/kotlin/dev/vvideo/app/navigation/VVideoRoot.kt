@@ -39,7 +39,9 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  val graph=application.graph
  val ready by application.ready.collectAsStateWithLifecycle()
  val failure by application.failure.collectAsStateWithLifecycle()
- val connection by graph.settings.connection.collectAsStateWithLifecycle(initialValue=dev.vvideo.data.settings.Connection())
+ // Null until the stored connection is read, so a configured app never shows
+ // the setup form for a frame and a new install never shows anything else.
+ val stored by graph.settings.connection.collectAsStateWithLifecycle(initialValue=null)
  val loader by graph.cache.loader.collectAsStateWithLifecycle()
  val navigation:NavigationState=viewModel(factory=Factory{NavigationState()})
  val route=navigation.route
@@ -51,8 +53,11 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  val library:LibraryViewModel=viewModel(factory=Factory{LibraryViewModel(graph.api,graph.database.bookmarks(),graph.settings,graph.scope,timeLabels)})
  val settings:SettingsViewModel=viewModel(factory=Factory{SettingsViewModel(graph.settings,graph.cache,graph.api)})
  val player:PlayerViewModel=viewModel(factory=Factory{PlayerViewModel(graph.api)})
- if(!ready||loader==null){Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){if(failure){Button(onClick={application.initialize()}){Text(stringResource(R.string.retry))}}else{Column(horizontalAlignment=Alignment.CenterHorizontally){CircularProgressIndicator();Text(stringResource(R.string.initializing))}}};return}
+ if(!ready||loader==null||stored==null){Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){if(failure){Button(onClick={application.initialize()}){Text(stringResource(R.string.retry))}}else{Column(horizontalAlignment=Alignment.CenterHorizontally){CircularProgressIndicator();Text(stringResource(R.string.initializing))}}};return}
  val imageLoader=checkNotNull(loader)
+ val connection=checkNotNull(stored)
+ // Without a saved address and token the only page is the setup form.
+ val screen=if(connection.configured)route else "setup"
  val activity=androidx.activity.compose.LocalActivity.current
  val dark=dev.vvideo.ui.theme.LocalVV.current.isDark||route=="video"||route=="photo"
  SideEffect{activity?.let{androidx.core.view.WindowCompat.getInsetsController(it.window,it.window.decorView).apply{isAppearanceLightStatusBars=!dark;isAppearanceLightNavigationBars=!dark}}}
@@ -63,7 +68,7 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  albumDetails?.let{item->MediaDetailsSheet(item,library.state.value.path.joinToString(" › "){it.name},{albumDetails=null}){bulletin=copied}}
  val settingsBack={navigation.route="settings"}
  var predictive by remember{mutableFloatStateOf(0f)}
- val animations=dev.vvideo.ui.theme.animationsEnabled()
+ val animations=dev.vvideo.ui.theme.LocalAnimations.current
  // Draw order of the two pages in a transition, relative to the page left:
  // only a page slid back to lies beneath the one leaving it. A viewer and the
  // page behind it both enter on top, so a tap during the viewer's exit reaches
@@ -74,9 +79,10 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  }
  LaunchedEffect(route,connection.id,connection.token,mediaId){if(route=="video"||route=="photo")player.open(connection,directory,Sort(field,direction),mediaId,route=="photo")}
  Box(Modifier.fillMaxSize().background(Color.Black)){
- AnimatedContent(targetState=route,modifier=Modifier.graphicsLayer{translationX=size.width*predictive;alpha=1f-predictive*.15f},transitionSpec={
+ AnimatedContent(targetState=screen,modifier=Modifier.graphicsLayer{translationX=size.width*predictive;alpha=1f-predictive*.15f},transitionSpec={
   val viewer=targetState in setOf("video","photo")||initialState in setOf("video","photo")
-  val returning=targetState=="library"||initialState in setOf("storage","connection")&&targetState=="settings"
+  // Finishing the setup form moves forward into the library.
+  val returning=targetState=="library"&&initialState!="setup"||initialState in setOf("storage","connection")&&targetState=="settings"
   val ms=if(!animations)0 else if(viewer){if(returning)200 else 180} else if(returning)220 else 260
   val layer=if(initialState==targetState)layers[targetState]?:0f else (layers[initialState]?:0f)+if(returning&&!viewer)-1f else 1f
   layers[targetState]=layer
@@ -84,8 +90,8 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
   else if(viewer)(fadeIn(tween(ms))+scaleIn(tween(ms),initialScale=.92f)) togetherWith fadeOut(tween(ms))
   else (slideInHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)-it/4 else it}+fadeIn(tween(ms),initialAlpha=if(returning).85f else 1f)) togetherWith (slideOutHorizontally(tween(ms,easing=FastOutSlowInEasing)){if(returning)it else -it/4}+fadeOut(tween(ms),targetAlpha=if(returning)1f else .85f))
   ).apply{targetContentZIndex=layer}
- },label="route"){displayedRoute->val leaving=displayedRoute!=route;when {
-  !connection.configured->ConnectionForm(settings,connection,{navigation.route="library"})
+ },label="route"){displayedRoute->val leaving=displayedRoute!=screen;when {
+  displayedRoute=="setup"->ConnectionForm(settings,connection,{navigation.route="library"})
   displayedRoute=="connection"->ConnectionForm(settings,connection,settingsBack)
   displayedRoute=="storage"->StorageScreen(settings,connection,settingsBack)
   displayedRoute=="settings"->SettingsRoute(settings,connection,{navigation.route="library"},{navigation.route="storage"},{navigation.route="connection"})

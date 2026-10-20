@@ -43,7 +43,7 @@ class TelegramUiDeviceTest {
    delay(700);assertEquals(before?.anchor,app.graph.database.bookmarks().get(c.id,root)?.anchor)
    click("照片");val photos=withTimeout(10000){vm.state.first{!it.busy&&it.kind=="image"}};assertTrue(photos.albums.flatMap{it.items}.all{it.kind=="image"})
    click("全部");withTimeout(10000){vm.state.first{!it.busy&&it.kind.isEmpty()}}
-   device.pressBack();assertTrue(device.wait(Until.hasObject(By.text("最近浏览")),5000))
+   device.pressBack();assertTrue(device.wait(Until.hasObject(By.desc("设置")),5000));assertFalse(device.hasObject(By.text("最近浏览")))
    checkNotNull(device.wait(Until.findObject(By.desc("设置")),5000)).click()
    click("主题");click("深色");assertEquals("dark",withTimeout(3000){app.graph.settings.theme.first{it=="dark"}})
    click("存储用量");assertTrue(device.wait(Until.hasObject(By.text("缓存上限")),5000));assertTrue(device.hasObject(By.text("视频片段")))
@@ -52,7 +52,7 @@ class TelegramUiDeviceTest {
    click("主题");click("浅色");assertEquals("light",withTimeout(3000){app.graph.settings.theme.first{it=="light"}})
    delay(1000)
    device.takeScreenshot(java.io.File(app.getExternalFilesDir(null),"telegram-settings-light.png"))
-   device.pressBack();assertTrue(device.wait(Until.hasObject(By.text("最近浏览")),5000))
+   device.pressBack();assertTrue(device.wait(Until.hasObject(By.desc("设置")),5000));assertFalse(device.hasObject(By.text("最近浏览")))
    assertTrue(app.graph.database.bookmarks().recent(c.id).first().any{it.directory==root})
   }finally{app.graph.settings.setTheme(originalTheme);withContext(Dispatchers.Main){activity.finish()}}
  }

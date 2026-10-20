@@ -2,7 +2,7 @@
 
 # VVideo
 
-The Android UI follows the [channel-style redesign](docs/plans/2026-10-10-android-ui-telegram-style.md): library/recent home, blue light/dark themes, media tabs, album date labels, player gestures and separate storage/connection screens. Room v2 preserves old anchors while adding recent visits. Bounded windows and the single-player architecture remain in place. See [acceptance](docs/ACCEPTANCE.md) for the build-specific device results and limitations.
+The Android UI follows the [channel-style redesign](docs/plans/2026-10-10-android-ui-telegram-style.md): library home (recent folders are no longer listed), blue light/dark themes, media tabs, album date labels, player gestures and separate storage/connection screens. Room v2 preserves old anchors while adding recent visits. Bounded windows and the single-player architecture remain in place. See [acceptance](docs/ACCEPTANCE.md) for the build-specific device results and limitations.
 
 English | [简体中文](README.zh-CN.md)
 

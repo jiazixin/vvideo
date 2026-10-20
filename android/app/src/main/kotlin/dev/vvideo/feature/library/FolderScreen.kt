@@ -1,6 +1,8 @@
 package dev.vvideo.feature.library
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -16,14 +18,15 @@ import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.*
 import dev.vvideo.ui.component.*
-import dev.vvideo.ui.theme.LocalVV
+import androidx.compose.ui.graphics.graphicsLayer
+import dev.vvideo.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onSettings:()->Unit,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit={},onJump:()->Unit={},onHideRecent:(Long)->Unit={},onDetails:(Media)->Unit={},onConnection:()->Unit=onSettings) {
- if(state.directory==null){HomeScreen(state,onSettings,onOpen,onRetry,onHideRecent,onConnection);return}
+fun LibraryScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onSettings:()->Unit,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit={},onJump:()->Unit={},onDetails:(Media)->Unit={},onConnection:()->Unit=onSettings) {
+ if(state.directory==null){HomeScreen(state,onSettings,onOpen,onRetry,onConnection);return}
  FolderScreen(state,loader,connection,thumbnail,list,onBack,onOpen,onSort,onMore,onRetry,onMedia,onKind,onJump,onDetails)
 }
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,6 +47,12 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
  val showFab by remember(list,state.albums,state.hasPrevious){derivedStateOf{state.hasPrevious||state.albums.indexOfFirst{"album:${it.items.first().id}"==list.layoutInfo.visibleItemsInfo.firstOrNull{it.key.toString().startsWith("album:")}?.key}>2}}
  var floating by remember{mutableStateOf(false)}
  LaunchedEffect(list.isScrollInProgress){if(list.isScrollInProgress)floating=true else {delay(1200);floating=false}}
+ // A filter or sort change replaces the whole album list; the new list fades in
+ // once it is published. Opening, refreshing or returning to the page does not.
+ val reveal=remember{Animatable(1f)};val revealSpec=fade<Float>(Motion.CHANGE)
+ val shown=remember{object{var content:Any?=null}}
+ val content=if(state.busy)null else Triple(d.id,state.kind,state.sort)
+ LaunchedEffect(content){if(content==null)return@LaunchedEffect;val previous=shown.content;shown.content=content;if(previous!=null&&previous!=content){reveal.snapTo(.2f);reveal.animateTo(1f,revealSpec)}}
  Scaffold(containerColor=c.bgPage,topBar={Column(Modifier.background(c.bgSurface)){
   TopAppBar(expandedHeight=56.dp,title={Row(Modifier.clickable{sheet="info"},verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
    LetterAvatar(d.id.toString(),d.name,40.dp)
@@ -58,11 +67,11 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
     DropdownMenuItem(text={Text(stringResource(R.string.folder_info))},leadingIcon={Icon(painterResource(R.drawable.ic_info),null)},onClick={menu=false;sheet="info"})
    }
   }},colors=TopAppBarDefaults.topAppBarColors(containerColor=c.bgSurface))
-  if(!state.healthy||state.error)OfflineBanner(if(state.error)stringResource(R.string.offline_banner) else stringResource(R.string.library_offline),onRetry)
-  if(state.hasMedia)MediaTabs(state.kind,onKind)
-  if(state.albums.isNotEmpty()&&state.children.isNotEmpty())SubfolderBar(state){sheet="children"}
+  AnimatedVisibility(!state.healthy||state.error,enter=barEnter(),exit=barExit()){OfflineBanner(if(state.error)stringResource(R.string.offline_banner) else stringResource(R.string.library_offline),onRetry)}
+  AnimatedVisibility(state.hasMedia,enter=barEnter(),exit=barExit()){MediaTabs(state.kind,onKind)}
+  AnimatedVisibility(state.albums.isNotEmpty()&&state.children.isNotEmpty(),enter=barEnter(),exit=barExit()){SubfolderBar(state){sheet="children"}}
  }}){padding->Box(Modifier.fillMaxSize().padding(padding)){
-  LazyColumn(state=list,modifier=Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=24.dp)){
+  LazyColumn(state=list,modifier=Modifier.fillMaxSize().graphicsLayer{alpha=reveal.value},contentPadding=PaddingValues(bottom=24.dp)){
    // Zero-height key preserves a single mapping shared by restoration and pagination.
    if(state.albums.isNotEmpty()&&state.children.isNotEmpty())item("subfolder-bar"){Spacer(Modifier.height(0.dp))}
    if(state.albums.isEmpty())items(state.children,key={"folder:${it.id}"},contentType={"folder"}){dir->LibraryRow(dir.id.toString(),dir.name,onClick={onOpen(dir.id)})}
@@ -75,10 +84,11 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
   // The placeholder belongs to a page without content of its own; a reload
   // keeps what is already shown, and a failed load is not an empty folder.
   val blank=state.albums.isEmpty()&&state.children.isEmpty()
-  if(state.busy&&blank)Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}
-  else if(blank&&!state.error)EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)
-  androidx.compose.animation.AnimatedVisibility(floating&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=8.dp),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))){firstAlbum?.dayLabel?.let{DatePill(it)}}
-  if(showFab)SmallFloatingActionButton(onClick=jump,Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(R.string.jump_to_start))}
+  // Arriving content shows through the fading placeholder.
+  AnimatedVisibility(state.busy&&blank,enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}}
+  AnimatedVisibility(!state.busy&&blank&&!state.error,enter=fadeIn(fade(Motion.CHANGE)),exit=fadeOut(fade())){EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)}
+  androidx.compose.animation.AnimatedVisibility(floating&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=8.dp),enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){firstAlbum?.dayLabel?.let{DatePill(it)}}
+  AnimatedVisibility(showFab,Modifier.align(Alignment.BottomEnd),enter=fadeIn(fade())+scaleIn(move(),initialScale=.6f),exit=fadeOut(fade())+scaleOut(move(),targetScale=.6f)){SmallFloatingActionButton(onClick=jump,Modifier.navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(R.string.jump_to_start))}}
   BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
  }}
 }

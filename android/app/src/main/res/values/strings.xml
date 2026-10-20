@@ -77,10 +77,8 @@
  <string name="status_connecting">连接中…</string>
  <string name="status_waiting_network">等待网络…</string>
  <string name="status_bad_token">凭据无效</string>
- <string name="recent">最近浏览</string>
  <string name="library_online">在线</string>
  <string name="library_offline">离线 · 显示保留的索引</string>
- <string name="remove_from_recent">从最近浏览中移除</string>
  <string name="tab_all">全部</string>
  <string name="tab_video">视频</string>
  <string name="tab_photo">照片</string>

@@ -62,7 +62,7 @@ fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> U
         surfaceContainer = c.bgRaised, surfaceContainerHigh = c.bgRaised, surfaceContainerLow = c.bgSurface,
         surfaceTint = Color.Transparent, secondary = c.accentText, onSecondary = Color.White, secondaryContainer = c.accentSoft, onSecondaryContainer = c.accentText, outline = c.divider, outlineVariant = c.divider, error = c.error,
     )
-    CompositionLocalProvider(LocalVV provides c) {
+    CompositionLocalProvider(LocalVV provides c, LocalAnimations provides animationsEnabled()) {
         MaterialTheme(colorScheme = scheme, typography = VVTypography, content = content)
     }
 }

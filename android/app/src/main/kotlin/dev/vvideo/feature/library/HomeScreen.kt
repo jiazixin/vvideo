@@ -1,5 +1,6 @@
 package dev.vvideo.feature.library
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -13,30 +14,36 @@ import androidx.compose.ui.unit.dp
 import dev.vvideo.R
 import dev.vvideo.ui.component.*
 import dev.vvideo.ui.theme.LocalVV
+import dev.vvideo.ui.theme.Motion
+import dev.vvideo.ui.theme.fade
+import dev.vvideo.ui.theme.move
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(state:LibraryUiState,onSettings:()->Unit,onOpen:(Long)->Unit,onRetry:()->Unit,onHideRecent:(Long)->Unit={},onConnection:()->Unit=onSettings) {
+fun HomeScreen(state:LibraryUiState,onSettings:()->Unit,onOpen:(Long)->Unit,onRetry:()->Unit,onConnection:()->Unit=onSettings) {
  val c=LocalVV.current
- var removed by remember{mutableStateOf<RecentFolder?>(null)}
- val list=rememberLazyListState()
- // A lazy list keeps its first visible key in place, so library rows arriving
- // after the recent ones would land above an unscrolled viewport. The request
- // is made before the changed rows are measured and holds for that pass only.
- val shown=remember{object{var libraries=state.libraries}}
- SideEffect{if(shown.libraries!=state.libraries){shown.libraries=state.libraries;if(!list.canScrollBackward)list.requestScrollToItem(0)}}
- removed?.let{recent->VVBottomSheet(recent.bookmark.name,{removed=null}){VVButton(stringResource(R.string.remove_from_recent),{onHideRecent(recent.bookmark.directory);removed=null},Modifier.fillMaxWidth().padding(horizontal=20.dp),kind=ButtonKind.Danger)}}
- Scaffold(containerColor=c.bgSurface,topBar={TopAppBar(expandedHeight=56.dp,title={Row(Modifier.clickable{if(state.errorStatus==401)onConnection() else onRetry()},verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
-  if(state.busy)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=2.dp)
-  Text(stringResource(when{state.busy&&state.libraries.isEmpty()->R.string.status_connecting;state.error&&state.errorStatus==401->R.string.status_bad_token;state.error&&state.errorStatus==0->R.string.status_waiting_network;else->R.string.home_title}),color=if(state.errorStatus==401)c.warn else c.textPrimary)
+ val quick=fade<Float>();val slow=fade<Float>(Motion.CHANGE);val resize=move<androidx.compose.ui.unit.IntSize>()
+ val status=when{state.busy&&state.libraries.isEmpty()->R.string.status_connecting;state.error&&state.errorStatus==401->R.string.status_bad_token;state.error&&state.errorStatus==0->R.string.status_waiting_network;else->R.string.home_title}
+ // A refresh behind a shown list only gets a spinner once it is slow enough
+ // to notice, so a quick reload does not shift the title back and forth.
+ var spinner by remember{mutableStateOf(state.busy)}
+ LaunchedEffect(state.busy){if(state.busy){if(state.libraries.isNotEmpty())delay(300);spinner=true}else spinner=false}
+ // The title only acts while it reports a problem: retry, or fix the credential.
+ val action=if(!state.error||state.busy)null else if(state.errorStatus==401)onConnection else onRetry
+ Scaffold(containerColor=c.bgSurface,topBar={TopAppBar(expandedHeight=56.dp,title={Row(if(action!=null)Modifier.clickable(onClick=action) else Modifier,verticalAlignment=Alignment.CenterVertically){
+  AnimatedVisibility(spinner,enter=fadeIn(fade())+expandHorizontally(move()),exit=fadeOut(fade())+shrinkHorizontally(move())){CircularProgressIndicator(Modifier.padding(end=8.dp).size(16.dp),strokeWidth=2.dp)}
+  val color by animateColorAsState(if(state.errorStatus==401)c.warn else c.textPrimary,fade(),label="home-title-color")
+  AnimatedContent(status,transitionSpec={fadeIn(quick) togetherWith fadeOut(quick) using SizeTransform(clip=false){_,_->resize}},label="home-title"){Text(stringResource(it),color=color)}
  }},actions={ActionIcon(R.drawable.ic_settings,R.string.settings,onSettings)},colors=TopAppBarDefaults.topAppBarColors(containerColor=c.bgSurface))}){padding->
-  if(state.libraries.isEmpty()&&state.recent.isEmpty()&&!state.busy&&!state.error)EmptyState(stringResource(R.string.empty_roots),Modifier.padding(padding))
-  else LazyColumn(Modifier.fillMaxSize().padding(padding),list) {
-   items(state.libraries,key={it.id}){lib->
-    LibraryRow(lib.id,lib.name,stringResource(if(lib.healthy)R.string.library_online else R.string.library_offline),pinned=true,healthy=lib.healthy,onClick={onOpen(lib.directoryId)})
+  // The library list fades in once on arrival; its rows have no entrance animation of their own.
+  AnimatedContent(state.libraries.isEmpty(),Modifier.padding(padding),transitionSpec={fadeIn(slow) togetherWith fadeOut(slow)},label="home-content"){empty->
+   if(empty){if(!state.busy&&!state.error)EmptyState(stringResource(R.string.empty_roots)) else Box(Modifier.fillMaxSize())}
+   else LazyColumn(Modifier.fillMaxSize()){
+    items(state.libraries,key={it.id}){lib->
+     LibraryRow(lib.id,lib.name,stringResource(if(lib.healthy)R.string.library_online else R.string.library_offline),pinned=true,healthy=lib.healthy,onClick={onOpen(lib.directoryId)})
+    }
    }
-   if(state.recent.isNotEmpty())item("recent"){Text(stringResource(R.string.recent),Modifier.padding(horizontal=16.dp,vertical=14.dp),color=c.accentText,style=MaterialTheme.typography.labelLarge)}
-   items(state.recent,key={"recent:${it.bookmark.directory}"}){recent->val b=recent.bookmark;LibraryRow(b.directory.toString(),b.name,b.pathLabel,recent.timeLabel,onLongClick={removed=recent},onClick={onOpen(b.directory)})}
   }
  }
 }

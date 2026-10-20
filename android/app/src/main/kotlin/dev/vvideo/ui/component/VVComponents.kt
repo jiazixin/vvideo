@@ -1,5 +1,6 @@
 package dev.vvideo.ui.component
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
@@ -13,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vvideo.R
 import dev.vvideo.ui.theme.LocalVV
+import dev.vvideo.ui.theme.fade
+import dev.vvideo.ui.theme.move
 import kotlinx.coroutines.delay
 
 private val ButtonShape = RoundedCornerShape(12.dp)
@@ -45,7 +48,12 @@ fun Bulletin(message: String, modifier: Modifier = Modifier) {
 fun BulletinHost(message: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val dismiss by rememberUpdatedState(onDismiss)
     LaunchedEffect(message) { if (message != null) { delay(3000); dismiss() } }
-    if (message != null) Bulletin(message, modifier.navigationBarsPadding().padding(horizontal = 8.dp, vertical = 16.dp))
+    // The last message stays readable while the bulletin leaves.
+    val shown = remember { object { var text = "" } }
+    if (message != null) shown.text = message
+    AnimatedVisibility(message != null, modifier, enter = fadeIn(fade()) + slideInVertically(move()) { it / 2 }, exit = fadeOut(fade()) + slideOutVertically(move()) { it / 2 }) {
+        Bulletin(shown.text, Modifier.navigationBarsPadding().padding(horizontal = 8.dp, vertical = 16.dp))
+    }
 }
 @Composable
 fun OfflineBanner(message: String = stringResource(R.string.offline_banner), onRetry: () -> Unit) {

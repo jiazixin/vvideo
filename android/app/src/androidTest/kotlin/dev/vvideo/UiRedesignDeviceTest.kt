@@ -58,7 +58,7 @@ class UiRedesignDeviceTest {
   checkNotNull(device.wait(Until.findObject(By.desc("设置")),5000)).click()
   assertTrue(device.wait(Until.hasObject(By.textStartsWith("已连接 ·")),10000))
   device.pressBack()
-  assertTrue(device.wait(Until.hasObject(By.text("最近浏览")),5000))
+  assertTrue(device.wait(Until.hasObject(By.desc("设置")),5000));assertFalse(device.hasObject(By.text("最近浏览")))
   withContext(Dispatchers.Main){a.finish()}
  }
 }
