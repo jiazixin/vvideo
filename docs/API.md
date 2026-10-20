@@ -8,6 +8,7 @@
 | `GET /v1/directories/{id}/path` | 从根到当前目录的 ID/名称数组；校验祖先可见性，不返回源路径；最多1024层，工作量 O(深度) |
 | `GET /v1/directories/{id}/children` | 名称/ID 总序的子目录；`cursor` 翻页，`previous=true` 取前页，100 项上限；响应含 `items/next/previous` |
 | `GET /v1/directories/{id}/media` | 当前目录媒体；默认 `sort=capture&direction=desc`，`kind=video/image` 可筛选；默认 100、最大 200 项 |
+| `GET /v1/directories/{id}/search?q=...` | 按名称在该目录及全部可见子目录中搜索：`q` 为 1–100 个字符的子串（ASCII 不区分大小写，`%`、`_` 按字面匹配）；响应 `directories`（按名称，最多 50）、`items`（媒体，按名称，最多 200）、`truncated`（还有更多匹配，客户端提示缩小范围，不分页） |
 | `GET /v1/media/{id}` | 当前发布版本的元信息 |
 | `GET /v1/media/{id}/bytes?version=...` | 原件字节，GET 注册同时支持 HEAD、Range、ETag、条件请求；必须传当前版本 |
 | `GET /v1/media/{id}/index?version=...` | 同版本原文件 `ftyp/moov` 字节偏移提示；异常/其他容器可返回空范围，正常播放不依赖它 |

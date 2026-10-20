@@ -34,17 +34,18 @@ Scope of this release: home network only, original-quality playback, Android onl
 - Streaming, batched scans of large folder trees. A failed or offline scan keeps the previous index, and a file is only treated as deleted after two consecutive complete, healthy scans.
 - SQLite in WAL mode with one writer and four read-only connections; the database lives on local disk while media may sit on a network mount.
 - Durable background jobs for `ffprobe` metadata and one WebP cover per video, with bounded concurrency and a disk-budgeted LRU cover cache. Scans, probes and covers keep running during playback, limited by their worker counts.
-- Global sorting by capture time, modification time or name, with cursor paging and stable anchors so clients can restore a position deep inside a folder.
+- Global sorting by capture time, modification time or name, with cursor paging and stable anchors so clients can restore a position deep inside a folder. Name search covers a folder's whole subtree with bounded results.
 - Bearer-token API with HTTP Range, ETag and per-version checks, so a client never mixes bytes from an old and a new version of a file. Optional MP4 index hints let the client prefetch `moov` at its original offset.
 - Scheduled scans (cron), strict configuration validation, structured logs and graceful shutdown.
 
 **Android app (Kotlin, Compose, Media3)**
 
 - Folder navigation with ten-item, aspect-aware album blocks and per-folder sort and position that survive app restarts.
+- Name search across the open folder and all its subfolders, from a search box at the top of the folder page.
 - A vertical video feed driven by a single reused Media3 player, a versioned byte cache and bounded, cancellable prefetch of the next video.
 - Full-screen photos with zoom and horizontal paging; media details show where the sort time came from.
 - Media cache budgets of 1, 5 or 10 GB (decimal), separate from RAM buffering. Clearing the cache keeps settings and browsing positions.
-- Light and dark themes, high-refresh-rate scrolling and playback gestures (double-tap seek, hold for speed).
+- Light and dark themes, high-refresh-rate scrolling and playback gestures: double-tap seek, hold for 2× speed, and vertical swipes on the left or right edge for brightness or volume.
 
 The library size this was designed for (about 130,000 videos and 380,000 images) is the owner's estimate, not a measured count. Scale tests used a 510,000-row synthetic database, which is separate from indexing real media.
 
