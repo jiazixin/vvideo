@@ -1,4 +1,18 @@
 VVideo
 Copyright 2026 jzx
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+VVideo is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE for the full text.
+
+The Android album layout contains code ported from Telegram for Android
+(https://github.com/DrKLO/Telegram), licensed under the GNU GPL version 2 or
+later, Copyright Nikolai Kudashov, 2013-2018:
+
+  android/app/src/main/kotlin/dev/vvideo/feature/library/album/TelegramGroupedLayout.kt
+    MessageObject.GroupedMessages.calculate() and GroupedMessagePosition
+  android/app/src/main/kotlin/dev/vvideo/feature/library/album/AlbumGeometry.kt
+    cell sizing and corner radii from ChatMessageCell
+
+VVideo is not affiliated with Telegram and does not use its name or logo.

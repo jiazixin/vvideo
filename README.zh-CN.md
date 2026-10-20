@@ -40,7 +40,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 **安卓应用（Kotlin、Compose、Media3）**
 
-- 文件夹浏览，每十个媒体按宽高比组成一块相册；各文件夹的排序和浏览位置在重启应用后保留。
+- 文件夹浏览，每十个媒体组成一块相册，排版与 Telegram 频道相册相同（移植自 Telegram for Android）；各文件夹的排序和浏览位置在重启应用后保留。
 - 文件夹页顶部的搜索框可按名称搜索当前文件夹及其全部子文件夹。
 - 竖向视频流复用同一个 Media3 播放器，带版本化字节缓存，并有限量、可取消地预加载下一个视频。
 - 全屏查看照片，支持缩放和左右翻页；媒体详情显示排序时间的来源。
@@ -209,4 +209,6 @@ API 面向可信的家庭内网设计。请使用足够长的随机令牌，把�
 
 ## 许可证
 
-Copyright 2026 jzx。依据 [Apache License 2.0](LICENSE) 授权。
+Copyright 2026 jzx。依据 [GNU 通用公共许可证 v3.0 或更高版本](LICENSE) 授权。
+
+安卓相册排版移植自 [Telegram for Android](https://github.com/DrKLO/Telegram)（GPL-2.0 或更高版本），详见 [NOTICE](NOTICE)。VVideo 与 Telegram 没有关联。

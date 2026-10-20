@@ -40,7 +40,7 @@ Scope of this release: home network only, original-quality playback, Android onl
 
 **Android app (Kotlin, Compose, Media3)**
 
-- Folder navigation with ten-item, aspect-aware album blocks and per-folder sort and position that survive app restarts.
+- Folder navigation with ten-item albums laid out like Telegram channel albums (ported from Telegram for Android), and per-folder sort and position that survive app restarts.
 - Name search across the open folder and all its subfolders, from a search box at the top of the folder page.
 - A vertical video feed driven by a single reused Media3 player, a versioned byte cache and bounded, cancellable prefetch of the next video.
 - Full-screen photos with zoom and horizontal paging; media details show where the sort time came from.
@@ -209,4 +209,6 @@ The API is designed for a trusted home network. Use a long random token, restric
 
 ## License
 
-Copyright 2026 jzx. Licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright 2026 jzx. Licensed under the [GNU General Public License v3.0 or later](LICENSE).
+
+The Android album layout is ported from [Telegram for Android](https://github.com/DrKLO/Telegram) (GPL-2.0-or-later); see [NOTICE](NOTICE). VVideo is not affiliated with Telegram.
