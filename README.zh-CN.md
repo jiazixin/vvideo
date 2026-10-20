@@ -83,7 +83,9 @@ adb reverse tcp:19323 tcp:19323
 
 - 文件选择：`-c`/`--config`（也支持 `--config=<文件>`，重复时取最后一个）> `CONFIG_FILE` > 工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式选择的文件为空、缺失、不可读或无效时直接失败；只有隐式默认文件可以不存在，此时须由环境变量提供必填项。
 - 配置项优先级：`VVIDEO_*` 环境变量 > 选定 YAML > 默认值，与文件的选择方式无关。
-- 文件内路径相对配置目录，环境/默认路径相对工作目录。默认 `data/data.sqlite`、`.cache/thumbnails`。媒体根不能重叠，可写数据库/缓存不得进入原件树。`ignore` 指定精确文件或目录子树，不支持通配符。
+- `server.listen` 是主机名或 IP，不含端口（默认 `0.0.0.0`，IPv6 写作 `::`）；`server.port` 是 1–65535 的整数（默认 `8080`）。在 `server.listen` 中写 `host:port` 会被拒绝。
+- `storage` 是数据目录而不是文件：数据库为目录内的 `data.sqlite`，扫描暂存 `.scan-tmp/` 也在其中。该路径已是普通文件时报错。
+- 文件内路径相对配置目录，环境/默认路径相对工作目录。默认 `data`（数据库 `data/data.sqlite`）、`.cache/thumbnails`。媒体根不能重叠，可写数据库/缓存不得进入原件树。`ignore` 指定精确文件或目录子树，不支持通配符。
 - 环境变量为 `VVIDEO_` 加大写字段路径，以 `__` 分隔，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA`/`VVIDEO_IGNORE` 以 JSON `[{"path":"..."}]` 整体替换列表。未知/旧字段、重复键、别名、标签、类型错误及必填空值失败；不加载 `.env` 或插值 YAML 变量。
 - `scan.cron` 为五段 cron，默认 `*/30 * * * *`，可带 `CRON_TZ=...`。空值只关闭周期扫描，仍保留启动扫描；正在运行时不积压 cron 触发。并发/线程是正整数，防御性上限 1024，不是进程总线程限制。
 - 封面配置包括 `cache.path`、正数 `cache.max_size`（`MB/GB/MiB/GiB`）、`cache.parallel`、`cache.threads` 与 `[0,100)` 内有限单值 `cache.percent`。默认容量 `30GB`、2 工作者、2 解码线程、10% 取图；容量是内容预算，不预占空间。

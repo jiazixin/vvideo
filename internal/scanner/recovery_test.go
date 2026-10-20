@@ -24,7 +24,7 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		db, err := storage.Open(t.Context(), c.Storage)
+		db, err := storage.Open(t.Context(), c.Database())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +131,7 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 			if err = cmd.Wait(); err == nil {
 				t.Fatal("helper exited normally instead of being killed")
 			}
-			db, err := storage.Open(t.Context(), s.Config.Storage)
+			db, err := storage.Open(t.Context(), s.Config.Database())
 			if err != nil {
 				t.Fatal("OS ownership lock survived crash", err)
 			}

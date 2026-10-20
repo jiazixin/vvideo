@@ -41,7 +41,7 @@ func setup(t *testing.T) (*library.Index, *scanner.Scanner, string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	db, e := storage.Open(t.Context(), c.Storage)
+	db, e := storage.Open(t.Context(), c.Database())
 	if e != nil {
 		t.Fatal(e)
 	}

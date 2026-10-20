@@ -34,8 +34,11 @@ func TestExplicitFileAndEmptyOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Storage != filepath.Join(d, "data/data.sqlite") || c.Scan.Parallel != 2 || c.Cache.MaxSize != 30_000_000_000 {
+	if c.Storage != filepath.Join(d, "data") || c.Database() != filepath.Join(d, "data/data.sqlite") || c.Scan.Parallel != 2 || c.Cache.MaxSize != 30_000_000_000 {
 		t.Fatalf("wrong defaults: %s %d %d", c.Storage, c.Scan.Parallel, c.Cache.MaxSize)
+	}
+	if c.Address() != "0.0.0.0:8080" {
+		t.Fatalf("wrong default address %s", c.Address())
 	}
 }
 func TestStrictYAML(t *testing.T) {
@@ -94,19 +97,19 @@ func TestOriginsAndEnvironment(t *testing.T) {
 	d, e := envFor(t)
 	p := filepath.Join(d, "configs", "instance.yaml")
 	os.MkdirAll(filepath.Dir(p), 0700)
-	os.WriteFile(p, []byte("storage: ../db/index.sqlite\ncache: {path: ../thumbs, percent: 0}\nscan: {cron: ''}\n"), 0600)
+	os.WriteFile(p, []byte("storage: ../db\ncache: {path: ../thumbs, percent: 0}\nscan: {cron: ''}\n"), 0600)
 	c, err := Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE=configs/instance.yaml")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Storage != filepath.Join(d, "db/index.sqlite") || c.Cache.Path != filepath.Join(d, "thumbs") || c.Cache.Percent != 0 || c.Scan.Cron != "" {
+	if c.Database() != filepath.Join(d, "db/data.sqlite") || c.Cache.Path != filepath.Join(d, "thumbs") || c.Cache.Percent != 0 || c.Scan.Cron != "" {
 		t.Fatal("file origins or zero values lost")
 	}
-	c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env.sqlite", "VVIDEO_IGNORE=[]")})
+	c, err = Load(Source{WorkDir: d, Env: append(e, "CONFIG_FILE="+p, "VVIDEO_STORAGE=env", "VVIDEO_IGNORE=[]")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Storage != filepath.Join(d, "env.sqlite") || len(c.Ignore) != 0 {
+	if c.Storage != filepath.Join(d, "env") || len(c.Ignore) != 0 {
 		t.Fatal("environment did not replace file")
 	}
 }
@@ -120,14 +123,14 @@ func TestInvalidValuesAndBoundaries(t *testing.T) {
 		})
 	}
 	d, e := envFor(t)
-	for _, v := range []string{`VVIDEO_STORAGE=media/db.sqlite`, `VVIDEO_CACHE__PATH=media/thumbs`, `VVIDEO_MEDIA=[{"path":"media"},{"path":"media/child"}]`, `VVIDEO_IGNORE=[{"path":"media2"}]`, `VVIDEO_IGNORE=[{"path":"media"}]`} {
+	for _, v := range []string{`VVIDEO_STORAGE=media/db`, `VVIDEO_CACHE__PATH=media/thumbs`, `VVIDEO_MEDIA=[{"path":"media"},{"path":"media/child"}]`, `VVIDEO_IGNORE=[{"path":"media2"}]`, `VVIDEO_IGNORE=[{"path":"media"}]`} {
 		if _, err := Load(Source{WorkDir: d, Env: append(e, v)}); err == nil {
 			t.Errorf("boundary accepted: %s", v)
 		}
 	}
 	os.MkdirAll(filepath.Join(d, "media"), 0700)
 	os.Symlink(filepath.Join(d, "media"), filepath.Join(d, "link"))
-	if _, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_STORAGE=link/db.sqlite")}); err == nil {
+	if _, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_STORAGE=link/db")}); err == nil {
 		t.Fatal("symlink write overlap accepted")
 	}
 	c, err := Load(Source{WorkDir: d, Env: append(e, `VVIDEO_IGNORE=[{"path":"media/absent"}]`)})
@@ -136,6 +139,60 @@ func TestInvalidValuesAndBoundaries(t *testing.T) {
 	}
 	if !c.IsIgnored(filepath.Join(d, "media/absent/file.mp4")) || c.IsIgnored(filepath.Join(d, "media/absent2/file.mp4")) {
 		t.Fatal("ignore component boundary wrong")
+	}
+}
+
+func TestListenAndPort(t *testing.T) {
+	for _, tc := range []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"VVIDEO_SERVER__LISTEN=127.0.0.1", "VVIDEO_SERVER__PORT=9000"}, "127.0.0.1:9000"},
+		{[]string{"VVIDEO_SERVER__LISTEN=::1"}, "[::1]:8080"},
+		{[]string{"VVIDEO_SERVER__LISTEN=localhost"}, "localhost:8080"},
+		{[]string{"VVIDEO_SERVER__LISTEN=fe80::1%en0"}, "[fe80::1%en0]:8080"},
+	} {
+		d, e := envFor(t)
+		c, err := Load(Source{WorkDir: d, Env: append(e, tc.env...)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Address() != tc.want {
+			t.Errorf("%v: address %s, want %s", tc.env, c.Address(), tc.want)
+		}
+	}
+	for _, v := range []string{"VVIDEO_SERVER__LISTEN=0.0.0.0:8080", "VVIDEO_SERVER__LISTEN=[::1]", "VVIDEO_SERVER__LISTEN=", "VVIDEO_SERVER__LISTEN= 127.0.0.1", "VVIDEO_SERVER__PORT=0", "VVIDEO_SERVER__PORT=65536", "VVIDEO_SERVER__PORT=http"} {
+		d, e := envFor(t)
+		if _, err := Load(Source{WorkDir: d, Env: append(e, v)}); err == nil {
+			t.Errorf("invalid listen setting accepted: %s", v)
+		}
+	}
+	d, e := envFor(t)
+	p := filepath.Join(d, "port.yaml")
+	if err := os.WriteFile(p, []byte("server: {port: '8080'}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(Source{WorkDir: d, Env: e, File: p}); err == nil || !strings.Contains(err.Error(), "server.port must be an integer") {
+		t.Fatalf("quoted port accepted or unexplained: %v", err)
+	}
+}
+
+func TestStorageIsADirectory(t *testing.T) {
+	d, e := envFor(t)
+	file := filepath.Join(d, "data.sqlite")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_STORAGE=data.sqlite")})
+	if err == nil || !strings.Contains(err.Error(), "must be a directory") {
+		t.Fatalf("storage file accepted or unexplained: %v", err)
+	}
+	c, err := Load(Source{WorkDir: d, Env: append(e, "VVIDEO_STORAGE=state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Database() != filepath.Join(d, "state", DatabaseFile) || StageDir(c.Storage) != filepath.Join(d, "state", ".scan-tmp") {
+		t.Fatalf("database %s or staging directory outside storage", c.Database())
 	}
 }
 
@@ -149,7 +206,7 @@ func TestFileSelectionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, token := range map[string]string{"config.local.yaml": "default-token", "environment.yaml": "environment-token", "selected.yaml": "selected-token"} {
-		data := "auth: {token: " + token + "}\nmedia: [{path: ../media}]\nstorage: ../db/index.sqlite\n"
+		data := "auth: {token: " + token + "}\nmedia: [{path: ../media}]\nstorage: ../db\n"
 		if err = os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +232,7 @@ func TestFileSelectionPrecedence(t *testing.T) {
 			if c.Auth.Token != tc.token {
 				t.Fatal("wrong configuration precedence")
 			}
-			if c.Storage != filepath.Join(d, "db/index.sqlite") || c.Media[0].Path != filepath.Join(d, "media") {
+			if c.Storage != filepath.Join(d, "db") || c.Media[0].Path != filepath.Join(d, "media") {
 				t.Fatal("file paths did not resolve against the selected file's directory")
 			}
 		})
@@ -216,5 +273,27 @@ func TestErrorsNameTheProblem(t *testing.T) {
 				t.Fatal("credential leaked")
 			}
 		})
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	d, err := Canonical(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	example, err := filepath.Abs("../../configs/config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(Source{WorkDir: d, Env: []string{"VVIDEO_AUTH__TOKEN=example"}, File: example})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Canonical(filepath.Dir(filepath.Dir(example)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Address() != "0.0.0.0:8080" || c.Database() != filepath.Join(repo, "data", DatabaseFile) {
+		t.Fatalf("example resolves to %s and %s", c.Address(), c.Database())
 	}
 }

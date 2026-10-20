@@ -1,11 +1,12 @@
 # 服务端配置示例；已实现严格加载器。相对路径以本文件所在目录为基准。
 server:
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0"             # 监听地址：主机名或 IP，不含端口；IPv6 直接写 "::"
+  port: 8080                    # 监听端口，1-65535
 
 auth:
   token: ""                     # 必填；也可用 VVIDEO_AUTH__TOKEN 注入
 
-storage: "../data/data.sqlite"   # SQLite 文件；默认文件名 data.sqlite，放本机磁盘
+storage: "../data"              # 数据目录，内含 data.sqlite 与扫描暂存 .scan-tmp/；放本机磁盘
 
 media:
   - path: "/mnt/media"

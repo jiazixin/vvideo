@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,9 @@ import (
 // directory, when neither --config nor CONFIG_FILE selects one.
 const DefaultFile = "configs/config.local.yaml"
 
+// DatabaseFile is the SQLite file name inside the storage directory.
+const DatabaseFile = "data.sqlite"
+
 const (
 	maxFileSize = 1 << 20
 	maxWorkers  = 1024
@@ -36,8 +40,12 @@ type Path struct {
 }
 
 type Config struct {
-	Server        struct{ Listen string }
-	Auth          struct{ Token string }
+	Server struct {
+		Listen string // host or IP address, without a port
+		Port   int
+	}
+	Auth struct{ Token string }
+	// Storage is the directory holding DatabaseFile and the scan staging area.
 	Storage       string
 	Media, Ignore []Path
 	Scan          struct {
@@ -73,6 +81,7 @@ const (
 
 var fields = map[string]fieldKind{
 	"server.listen":  stringField,
+	"server.port":    intField,
 	"auth.token":     stringField,
 	"storage":        stringField,
 	"media":          pathListField,
@@ -89,8 +98,9 @@ var fields = map[string]fieldKind{
 var sections = []string{"server", "auth", "scan", "cache"}
 
 var defaults = map[string]string{
-	"server.listen":  "0.0.0.0:8080",
-	"storage":        "data/data.sqlite",
+	"server.listen":  "0.0.0.0",
+	"server.port":    "8080",
+	"storage":        "data",
 	"ignore":         "[]",
 	"scan.cron":      "*/30 * * * *",
 	"scan.parallel":  "2",
@@ -366,12 +376,19 @@ func (s *settings) build(cwd string) (Config, error) {
 	if err = validateListen(c.Server.Listen); err != nil {
 		return c, err
 	}
+	c.Server.Port, err = strconv.Atoi(s.values["server.port"])
+	if err != nil || c.Server.Port < 1 || c.Server.Port > 65535 {
+		return c, errors.New("server.port must be an integer from 1 to 65535")
+	}
 	c.Auth.Token = s.values["auth.token"]
 	if strings.TrimSpace(c.Auth.Token) == "" {
 		return c, fmt.Errorf("auth.token: %w", errRequired)
 	}
 	if c.Storage, err = s.path("storage", cwd); err != nil {
 		return c, err
+	}
+	if info, err := os.Stat(c.Storage); err == nil && !info.IsDir() {
+		return c, fmt.Errorf("storage %s must be a directory; the database is %s inside it", c.Storage, DatabaseFile)
 	}
 	if c.Cache.Path, err = s.path("cache.path", cwd); err != nil {
 		return c, err
@@ -410,15 +427,25 @@ func (s *settings) build(cwd string) (Config, error) {
 	return c, c.validatePaths()
 }
 
+// validateListen accepts a host name or IP address; the port is server.port.
 func validateListen(listen string) error {
-	_, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return fmt.Errorf("server.listen %q must be host:port", listen)
+	if strings.TrimSpace(listen) != listen || listen == "" {
+		return errors.New("server.listen must be a nonempty host or IP address")
 	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("server.listen %q has an invalid port", listen)
+	if _, err := netip.ParseAddr(listen); strings.Contains(listen, ":") && err != nil {
+		return fmt.Errorf("server.listen %q must be a host or IP address without a port; set the port in server.port", listen)
 	}
 	return nil
+}
+
+// Address is the host:port the service listens on.
+func (c Config) Address() string {
+	return net.JoinHostPort(c.Server.Listen, strconv.Itoa(c.Server.Port))
+}
+
+// Database is the SQLite file inside the storage directory.
+func (c Config) Database() string {
+	return filepath.Join(c.Storage, DatabaseFile)
 }
 
 // validatePaths keeps writable state out of the read-only media trees.
@@ -426,7 +453,7 @@ func (c Config) validatePaths() error {
 	if Contains(c.Cache.Path, c.Storage) || Contains(c.Storage, c.Cache.Path) {
 		return fmt.Errorf("storage %s and cache.path %s must not contain each other", c.Storage, c.Cache.Path)
 	}
-	writable := map[string]string{"storage": c.Storage, "cache.path": c.Cache.Path, "scan staging directory": StageDir(c.Storage)}
+	writable := map[string]string{"storage": c.Storage, "cache.path": c.Cache.Path}
 	for i, root := range c.Media {
 		for _, other := range c.Media[:i] {
 			if Contains(root.Path, other.Path) || Contains(other.Path, root.Path) {
@@ -450,9 +477,9 @@ func (c Config) validatePaths() error {
 	return nil
 }
 
-// StageDir is the disposable scan staging directory beside the database.
+// StageDir is the disposable scan staging directory inside the storage directory.
 func StageDir(storage string) string {
-	return filepath.Join(filepath.Dir(storage), ".scan-tmp")
+	return filepath.Join(storage, ".scan-tmp")
 }
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)

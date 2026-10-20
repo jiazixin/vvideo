@@ -72,7 +72,7 @@ func serve(configFile string) error {
 		return err
 	}
 	// Bind before starting background work so a busy port fails fast.
-	listener, err := net.Listen("tcp", c.Server.Listen)
+	listener, err := net.Listen("tcp", c.Address())
 	if err != nil {
 		a.Close()
 		return err

@@ -63,7 +63,7 @@ func New(ctx context.Context, c config.Config) (*App, error) {
 	if err := os.MkdirAll(c.Cache.Path, 0700); err != nil {
 		return nil, fmt.Errorf("thumbnail cache: %w", err)
 	}
-	s, err := storage.Open(ctx, c.Storage)
+	s, err := storage.Open(ctx, c.Database())
 	if err != nil {
 		return nil, err
 	}
