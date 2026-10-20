@@ -21,7 +21,7 @@ scan:
   probe_parallel: 2             # 同时运行的 ffprobe 元信息探测任务数；抽帧要等探测拿到时长
 
 cache:
-  path: "../.cache/thumbnails"   # 服务端缩略图目录，与安卓媒体缓存分开
+  path: "../cache"              # 服务端缩略图目录，与安卓媒体缓存分开
   max_size: "30GB"              # 服务端缩略图缓存上限，按可用磁盘空间调整
   parallel: 2                   # 同时运行的抽帧任务数，包含前台和后台任务
   threads: 2                    # 单个抽帧任务的解码线程数，不是进程总线程上限

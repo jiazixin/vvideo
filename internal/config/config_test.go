@@ -37,8 +37,8 @@ func TestExplicitFileAndEmptyOverride(t *testing.T) {
 	if c.Storage != filepath.Join(d, "data") || c.Database() != filepath.Join(d, "data/data.sqlite") || c.Scan.Parallel != 2 || c.Scan.ProbeParallel != 2 || c.Cache.MaxSize != 30_000_000_000 {
 		t.Fatalf("wrong defaults: %s %d %d %d", c.Storage, c.Scan.Parallel, c.Scan.ProbeParallel, c.Cache.MaxSize)
 	}
-	if c.Address() != "0.0.0.0:8080" {
-		t.Fatalf("wrong default address %s", c.Address())
+	if c.Address() != "0.0.0.0:8080" || c.Cache.Path != filepath.Join(d, "cache") {
+		t.Fatalf("wrong default address %s or cache path %s", c.Address(), c.Cache.Path)
 	}
 }
 func TestStrictYAML(t *testing.T) {
@@ -294,7 +294,7 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Address() != "0.0.0.0:8080" || c.Database() != filepath.Join(repo, "data", DatabaseFile) {
-		t.Fatalf("example resolves to %s and %s", c.Address(), c.Database())
+	if c.Address() != "0.0.0.0:8080" || c.Database() != filepath.Join(repo, "data", DatabaseFile) || c.Cache.Path != filepath.Join(repo, "cache") {
+		t.Fatalf("example resolves to %s, %s and %s", c.Address(), c.Database(), c.Cache.Path)
 	}
 }

@@ -107,7 +107,7 @@ var defaults = map[string]string{
 	"scan.cron":           "*/30 * * * *",
 	"scan.parallel":       "2",
 	"scan.probe_parallel": "2",
-	"cache.path":          ".cache/thumbnails",
+	"cache.path":          "cache",
 	"cache.max_size":      "30GB",
 	"cache.parallel":      "2",
 	"cache.threads":       "2",

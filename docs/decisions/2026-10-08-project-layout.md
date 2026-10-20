@@ -26,6 +26,7 @@
 | 第 4 节非 Go 发布输出与测试报告 | Android 输出保留在所属 Gradle 工程 / 模块的 `build/`，不另拷源码或构建目录 | 使用 Gradle/AGP 的默认输出和报告发现机制；不声称路径不可配置 | Android 构建及报告 | 实际工具配置更改输出位置 |
 | 第 7 节运行配置、`data/` 与 `.cache/` | 手机上使用 Android 应用私有持久目录、数据库、DataStore 与缓存目录；不创建源码树内的手机状态副本 | 应用沙箱和平台存储 API；可回收媒体缓存与持久配置/历史分开 | Android 安装后的运行状态 | 存储模式、离线下载功能或系统备份策略改变 |
 | 第 7、8 节依赖工具和本地配置 | `android/gradle/`、Gradle Wrapper、版本目录；忽略 `android/.gradle/`、`android/.kotlin/`、`android/local.properties` 及适用的本地 IDE 配置 | Kotlin DSL / Gradle 的项目配置方式；本机 SDK 路径和缓存不进入版本控制 | Android 工程 | 工具链或团队 IDE 策略改变 |
+| 第 7 节服务端缓存根 `.cache/` | 服务端缩略图缓存默认 `cache/`（配置 `cache.path`），systemd 可写路径与 Git 忽略同步；不再用 `.cache/thumbnails` | 用户于2026-10-20明确要求，使默认目录与 `data/` 对称、可见；内容仍只是可重建封面，与持久数据分开 | 本项目Go服务端运行缓存；不改变通用目录基线 | 服务端新增其他类别缓存或用户要求调整 |
 | 第 4 节数据库迁移默认目录 | 初始化 SQL 作为常量内置于 `internal/storage/schema.go`，不创建独立迁移目录或包 | 用户于2026-10-09明确要求；SQL与SQLite初始化职责共置，编入二进制，保留事务与数据库版本检查 | 本项目Go数据库schema；不改变通用目录基线 | schema版本或用户要求调整 |
 
 ## 取舍

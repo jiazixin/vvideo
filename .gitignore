@@ -10,6 +10,7 @@
 
 # Server runtime state and rebuildable caches
 /data/
+/cache/
 /.cache/
 
 # Generated verification output and temporary read-only reference project

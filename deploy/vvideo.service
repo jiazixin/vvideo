@@ -16,7 +16,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/vvideo/data /opt/vvideo/.cache
+ReadWritePaths=/opt/vvideo/data /opt/vvideo/cache
 
 [Install]
 WantedBy=multi-user.target
