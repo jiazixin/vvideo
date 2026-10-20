@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.svg" width="96" height="96" alt="VVideo logo"></p>
+
 # VVideo
 
 The Android UI follows the [channel-style redesign](docs/plans/2026-10-10-android-ui-telegram-style.md): library/recent home, blue light/dark themes, media tabs, album date labels, player gestures and separate storage/connection screens. Room v2 preserves old anchors while adding recent visits. Bounded windows and the single-player architecture remain in place. See [acceptance](docs/ACCEPTANCE.md) for the build-specific device results and limitations.

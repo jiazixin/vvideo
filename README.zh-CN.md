@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.svg" width="96" height="96" alt="VVideo logo"></p>
+
 # VVideo
 
 安卓 UI 已按 [频道式重设计规范](docs/plans/2026-10-10-android-ui-telegram-style.md) 实现媒体库/最近浏览首页、深浅蓝主题、媒体标签、相册日期、播放器手势及独立存储/连接页。Room v2 保留旧锚点并增加最近访问记录；有界窗口和单播放器架构继续沿用。各构建的真机结果与限制见 [验证记录](docs/ACCEPTANCE.md)。
