@@ -37,19 +37,15 @@ type Queue struct {
 // writer only revalidates and leases the one selected job.
 const currentJob = `EXISTS(SELECT 1 FROM entries e JOIN directories d ON d.id=e.directory_id JOIN libraries l ON l.id=d.library_id WHERE e.media_id=j.media_id AND e.version=j.version AND e.generation=d.generation AND e.state='visible' AND l.active=1 AND NOT EXISTS(WITH RECURSIVE ancestry(id,parent_id,state,depth) AS (SELECT d.id,d.parent_id,d.state,0 UNION ALL SELECT p.id,p.parent_id,p.state,a.depth+1 FROM directories p JOIN ancestry a ON p.id=a.parent_id WHERE a.depth<1023) SELECT 1 FROM ancestry WHERE state!='visible' OR (depth=1023 AND parent_id IS NOT NULL)))`
 
-func (q *Queue) Claim(ctx context.Context, kind string, foregroundOnly bool) (Job, error) {
+func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
 	var j Job
-	extra := ""
-	if foregroundOnly {
-		extra = " AND j.priority>0"
-	}
-	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM jobs j WHERE j.kind=? AND j.state='queued' AND j.due<=?`+extra+` AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, q.Now().UnixMilli()).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
+	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM jobs j WHERE j.kind=? AND j.state='queued' AND j.due<=? AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, q.Now().UnixMilli()).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
 	if err != nil {
 		return j, err
 	}
 	err = q.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		var eligible bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.id=? AND j.state='queued' AND j.due<=?`+extra+` AND `+currentJob+`)`, j.ID, q.Now().UnixMilli()).Scan(&eligible); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.id=? AND j.state='queued' AND j.due<=? AND `+currentJob+`)`, j.ID, q.Now().UnixMilli()).Scan(&eligible); err != nil {
 			return err
 		}
 		if !eligible {
@@ -114,12 +110,12 @@ func (q *Queue) EnqueueThumbnail(ctx context.Context, e library.Entry, parameter
 	})
 }
 
-// Worker claims and runs jobs of one kind until ctx is cancelled. Probes run
-// only while no media is playing; covers then run only for foreground requests.
-func (q *Queue) Worker(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) {
+// Worker claims and runs jobs of one kind until ctx is cancelled. It does not
+// yield to media playback; the worker count bounds its I/O instead.
+func (q *Queue) Worker(ctx context.Context, kind string, run func(context.Context, Job) error) {
 	wait := idlePoll
 	for ctx.Err() == nil {
-		claimed, err := q.runNext(ctx, kind, priority, run)
+		claimed, err := q.runNext(ctx, kind, run)
 		if claimed {
 			wait = idlePoll
 			continue
@@ -140,12 +136,8 @@ func (q *Queue) Worker(ctx context.Context, kind string, priority *Priority, run
 
 // runNext reports whether it claimed a job, or the claim error other than
 // "nothing to do".
-func (q *Queue) runNext(ctx context.Context, kind string, priority *Priority, run func(context.Context, Job) error) (bool, error) {
-	background := priority.Ready()
-	if kind == "probe" && !background {
-		return false, nil
-	}
-	j, err := q.Claim(ctx, kind, !background)
+func (q *Queue) runNext(ctx context.Context, kind string, run func(context.Context, Job) error) (bool, error) {
+	j, err := q.Claim(ctx, kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

@@ -3,25 +3,25 @@ package jobs
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// Priority never holds its mutex while waiting, doing IO, or acquiring a writer.
+// Priority tracks active media transfers. Only list reordering (capture-time
+// sort keys and album anchors) waits for it, so the feed being watched does not
+// shift; scans, probes and covers keep running during playback. It never holds
+// its mutex while waiting, doing IO, or acquiring a writer.
 type Priority struct {
 	mu      sync.Mutex
 	active  int
 	lastEnd time.Time
 	Now     func() time.Time
 	changed chan struct{}
-	serial  atomic.Int64
 }
 
 func NewPriority() *Priority { return &Priority{Now: time.Now, changed: make(chan struct{})} }
 func (p *Priority) Begin() func() {
 	p.mu.Lock()
 	p.active++
-	p.serial.Add(1)
 	p.signal()
 	p.mu.Unlock()
 	var once sync.Once
@@ -57,6 +57,3 @@ func (p *Priority) Wait(ctx context.Context) error {
 		}
 	}
 }
-
-// Serial changes when foreground media invalidates a background observation.
-func (p *Priority) Serial() int64 { return p.serial.Load() }

@@ -15,14 +15,14 @@ import (
 // Reconcile is one bounded background pass. Request-time statistics never walk
 // the cache directory. Only this service's hex-named covers and old temp files
 // are reclaimed; publication/deletion guards prevent races with current work.
-func (e *Engine) Reconcile(ctx context.Context, pause func(context.Context) error) error {
+func (e *Engine) Reconcile(ctx context.Context) error {
 	directory, err := os.Open(e.Config.Cache.Path)
 	if err != nil {
 		return err
 	}
 	defer directory.Close()
 	for {
-		if err = pause(ctx); err != nil {
+		if err = ctx.Err(); err != nil {
 			return err
 		}
 		items, readErr := directory.ReadDir(storage.BatchSize)
@@ -76,7 +76,7 @@ func (e *Engine) Reconcile(ctx context.Context, pause func(context.Context) erro
 	}
 	cursor := ""
 	for {
-		if err = pause(ctx); err != nil {
+		if err = ctx.Err(); err != nil {
 			return err
 		}
 		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT 128", cursor)

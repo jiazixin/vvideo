@@ -84,7 +84,7 @@ func New(ctx context.Context, c config.Config) (*App, error) {
 		Priority:     priority,
 		Queue:        queue,
 		Thumbnails:   thumbnail.New(c, queue),
-		Scanner:      &scanner.Scanner{Config: c, Index: index, Priority: priority},
+		Scanner:      &scanner.Scanner{Config: c, Index: index},
 		Stream:       streaming.New(index, priority),
 		scanRequests: make(chan bool, 1),
 	}, nil
@@ -135,7 +135,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.wg.Go(func() { a.scanLoop(ctx) })
 	a.Trigger(false)
 	a.wg.Go(func() {
-		if err := a.Thumbnails.Reconcile(ctx, a.Priority.Wait); err != nil && ctx.Err() == nil {
+		if err := a.Thumbnails.Reconcile(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("thumbnail_reconcile_failed", "error", err.Error())
 		}
 	})
@@ -143,10 +143,10 @@ func (a *App) Start(ctx context.Context) error {
 	a.wg.Go(func() { a.sortLoop(ctx) })
 	prober := &probe.Worker{Queue: a.Queue, Parameters: a.Thumbnails.Parameters, Now: time.Now, Rescan: func() { a.Trigger(false) }}
 	for range a.Config.Scan.ProbeParallel {
-		a.wg.Go(func() { a.Queue.Worker(ctx, "probe", a.Priority, timed(&a.probeNS, prober.Run)) })
+		a.wg.Go(func() { a.Queue.Worker(ctx, "probe", timed(&a.probeNS, prober.Run)) })
 	}
 	for range a.Config.Cache.Parallel {
-		a.wg.Go(func() { a.Queue.Worker(ctx, "thumbnail", a.Priority, timed(&a.thumbnailNS, a.Thumbnails.Run)) })
+		a.wg.Go(func() { a.Queue.Worker(ctx, "thumbnail", timed(&a.thumbnailNS, a.Thumbnails.Run)) })
 	}
 	if a.cron != nil {
 		a.cron.Start()

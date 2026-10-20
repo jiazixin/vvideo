@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 	"vvideo/internal/config"
-	"vvideo/internal/jobs"
 	"vvideo/internal/library"
 	"vvideo/internal/mediafs"
 	"vvideo/internal/storage"
@@ -23,14 +22,13 @@ import (
 // Scanner walks media roots and publishes per-directory index generations.
 // Only one Run is active at a time.
 type Scanner struct {
-	Config   config.Config
-	Index    *library.Index
-	Priority *jobs.Priority
-	Metrics  Metrics
-	running  atomic.Bool
-	Now      func() time.Time
-	Fault    func(string) error
-	Stat     func(*os.File, string) (fs.FileInfo, error)
+	Config  config.Config
+	Index   *library.Index
+	Metrics Metrics
+	running atomic.Bool
+	Now     func() time.Time
+	Fault   func(string) error
+	Stat    func(*os.File, string) (fs.FileInfo, error)
 }
 
 func (s *Scanner) Run(ctx context.Context, force bool) error {
@@ -193,9 +191,6 @@ func Kind(name string) string {
 	return ""
 }
 func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Root, d library.Directory, round int64, force bool) error {
-	if err := s.Priority.Wait(ctx); err != nil {
-		return err
-	}
 	cleanupStarted := time.Now()
 	if err := s.Index.Cleanup(ctx, d.ID); err != nil {
 		return err
@@ -205,7 +200,6 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 	}
 	s.Metrics.CleanupNS.Add(time.Since(cleanupStarted).Nanoseconds())
 	for attempt := range 2 {
-		serial := s.Priority.Serial()
 		if err := st.Reset(ctx); err != nil {
 			return err
 		}
@@ -278,9 +272,6 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 			}
 			after = ""
 			for {
-				if err = s.Priority.Wait(ctx); err != nil {
-					return err
-				}
 				batch, err := st.merged(ctx, after)
 				if err != nil {
 					return err
@@ -305,9 +296,6 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 				}
 			}
 			start = time.Now()
-			if s.Priority.Serial() != serial {
-				return errors.New("foreground playback interrupted the observation; retry on next scan")
-			}
 			if err = s.Index.Publish(ctx, d, gen, mediafs.Fingerprint(original), round, func() error { return root.ValidateDirectory(d.Relative, original) }); err != nil {
 				return err
 			}
@@ -336,9 +324,6 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 }
 func (s *Scanner) observe(ctx context.Context, st *stage, root *mediafs.Root, d library.Directory, file *os.File, pass int, original fs.FileInfo) error {
 	for {
-		if err := s.Priority.Wait(ctx); err != nil {
-			return err
-		}
 		if err := root.ValidateDirectory(d.Relative, original); err != nil {
 			return err
 		}

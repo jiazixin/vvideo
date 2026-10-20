@@ -44,13 +44,13 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 			})
 		case "claim":
 			q := &jobs.Queue{Store: db, Index: index, Now: time.Now}
-			_, err = q.Claim(t.Context(), "probe", false)
+			_, err = q.Claim(t.Context(), "probe")
 			if err == nil {
 				ready()
 			}
 		case "build":
 			batches := 0
-			s := &Scanner{Config: c, Index: index, Priority: jobs.NewPriority(), Now: time.Now, Fault: func(at string) error {
+			s := &Scanner{Config: c, Index: index, Now: time.Now, Fault: func(at string) error {
 				if at == "build" {
 					batches++
 					if batches == 2 {
@@ -162,7 +162,7 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 			}
 			if mode == "claim" {
 				q := jobs.Queue{Store: db, Index: index, Now: time.Now}
-				j, err := q.Claim(t.Context(), "probe", false)
+				j, err := q.Claim(t.Context(), "probe")
 				if err != nil || j.MediaID != original.ID || j.Version != original.Version || j.Attempts != 2 {
 					t.Fatal("running lease was not recovered", err, j)
 				}

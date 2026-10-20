@@ -17,7 +17,7 @@ VVideo indexes an existing folder-organized media library with a Go service on L
 - A vertical video feed using one active Media3 player, versioned byte caches and bounded cancellable next-video prefetch. Images support full-screen viewing, zoom and horizontal swiping between the photos of a folder; media details identify the sorting time source.
 - SQLite WAL/FULL, one writer and four read connections, streaming scans with 128-entry batches, isolated disk staging and atomic directory publication. Failed/offline scans preserve the previous index; absence requires two consecutive complete healthy scans.
 - Durable delayed metadata/cover jobs, bounded ffprobe/FFmpeg execution, one WebP cover per video, and disk-budgeted thumbnail LRU.
-- Bearer-authenticated APIs, HTTP Range/ETag/version checks, optional original-offset MP4 index hints, foreground playback priority and scheduled scans.
+- Bearer-authenticated APIs, HTTP Range/ETag/version checks, optional original-offset MP4 index hints and scheduled scans. Scans, probes and covers keep running during playback, bounded by their worker counts.
 - Shared Android media cache budgets of **1/5/10 GB** (decimal bytes); disk quotas are independent of RAM buffering.
 
 The user's estimated 130,000 videos and 380,000 images are not verified filesystem counts. A 510,000-row synthetic database test is separate from real-media indexing. Public-network service, transcoding, iOS and recommendations are outside this release.

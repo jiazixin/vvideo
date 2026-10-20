@@ -142,7 +142,7 @@
 | T-23 `TestCleanupIndependentOfUnrelatedLibrary` | 一个目录 50 万条，另 100 个空目录轮流清理 | 大表有效数据零误删；计划不为每空目录扫描大表；记录 SQL 次数和耗时 |
 | T-24 `TestProbeSortAndScanPublicationInterleave` | 新探测结果更新排序键期间扫描构建/发布、分页请求和锚点恢复 | 不覆盖新结果；排序与修订一致；旧游标有明确恢复路径；不逐项复制目录代 |
 | T-25 `TestPlaybackPausesNewBackgroundWork` | 媒体/预取开始，最后请求结束，假时钟推进 9/10 秒 | 不派发新后台批次，在途可收尾；未满冷却不恢复；异常/取消不漏活动计数 |
-| T-26 `TestResumeRevalidatesAndCronDoesNotOverlap` | 播放暂停扫描期间源目录变更，多次 cron 触发 | 唯一轮次无积压；恢复不发布过时快照；没有锁/事务跨暂停 |
+| T-26 `TestResumeRevalidatesAndCronDoesNotOverlap` | 播放暂停扫描期间源目录变更，多次 cron 触发（2026-10-20 起扫描不因播放暂停，暂停部分不再适用） | 唯一轮次无积压；恢复不发布过时快照；没有锁/事务跨暂停 |
 | T-27 `TestScaleMixedLibrary` | 下表 S1/S2/S3，首次/未变/小改三种轮次 | 精确数量、无重复任务、版本正确；多次失败恢复后 integrity_check=ok、foreign_key_check 无结果 |
 | T-28 `TestScaleRangeDuringBackgroundWork` | 后台扫描/工具/清理，与首段、尾段、seek Range 请求并发 | 字节、206/416/取消/版本匹配正确；延迟与吞吐报告完整，实际播放另做真机验收 |
 

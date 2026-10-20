@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 	"vvideo/internal/config"
-	"vvideo/internal/jobs"
 	"vvideo/internal/library"
 	"vvideo/internal/mediafs"
 	"vvideo/internal/storage"
@@ -39,7 +38,7 @@ func fixture(t *testing.T) (*Scanner, string) {
 	if e = index.Register(t.Context(), c); e != nil {
 		t.Fatal(e)
 	}
-	return &Scanner{Config: c, Index: index, Priority: jobs.NewPriority(), Now: time.Now}, root
+	return &Scanner{Config: c, Index: index, Now: time.Now}, root
 }
 func count(t *testing.T, s *Scanner) int {
 	t.Helper()

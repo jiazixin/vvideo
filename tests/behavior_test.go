@@ -50,7 +50,7 @@ func setup(t *testing.T) (*library.Index, *scanner.Scanner, string) {
 	if e = i.Register(t.Context(), c); e != nil {
 		t.Fatal(e)
 	}
-	return i, &scanner.Scanner{Config: c, Index: i, Priority: jobs.NewPriority(), Now: time.Now}, root
+	return i, &scanner.Scanner{Config: c, Index: i, Now: time.Now}, root
 }
 func first(t *testing.T, i *library.Index) library.Entry {
 	t.Helper()
@@ -162,23 +162,23 @@ func TestDurableTaskDueRetryAndObsoleteVersion(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return now }}
-	if _, e := q.Claim(t.Context(), "probe", false); !errors.Is(e, sql.ErrNoRows) {
+	if _, e := q.Claim(t.Context(), "probe"); !errors.Is(e, sql.ErrNoRows) {
 		t.Fatal("probe ran before 60 seconds", e)
 	}
 	now = now.Add(60 * time.Second)
-	j, e := q.Claim(t.Context(), "probe", false)
+	j, e := q.Claim(t.Context(), "probe")
 	if e != nil {
 		t.Fatal(e)
 	}
 	if e = q.Finish(t.Context(), j, "retry", "fixture"); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = q.Claim(t.Context(), "probe", false); !errors.Is(e, sql.ErrNoRows) {
+	if _, e = q.Claim(t.Context(), "probe"); !errors.Is(e, sql.ErrNoRows) {
 		t.Fatal("retry ran before delay")
 	}
 	for range 2 {
 		now = now.Add(30 * time.Second)
-		j, e = q.Claim(t.Context(), "probe", false)
+		j, e = q.Claim(t.Context(), "probe")
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -203,7 +203,7 @@ func TestDurableTaskDueRetryAndObsoleteVersion(t *testing.T) {
 		t.Fatal(e)
 	}
 	now = now.Add(60 * time.Second)
-	newJob, e := q.Claim(t.Context(), "probe", false)
+	newJob, e := q.Claim(t.Context(), "probe")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -415,7 +415,7 @@ func TestProbePublicationInterleavingAndLateOldResult(t *testing.T) {
 	}
 	now = now.Add(time.Minute)
 	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return now }}
-	j, e := q.Claim(t.Context(), "probe", false)
+	j, e := q.Claim(t.Context(), "probe")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -454,7 +454,7 @@ func TestProbePublicationInterleavingAndLateOldResult(t *testing.T) {
 	// The old tool finishes after a rescan published a replacement. Neither its
 	// metadata nor thumbnail intent may be attached to that replacement version.
 	now = now.Add(time.Minute)
-	late, e := q.Claim(t.Context(), "probe", false)
+	late, e := q.Claim(t.Context(), "probe")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -540,14 +540,14 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	if e = q.EnqueueThumbnail(t.Context(), p.Items[0], engine.Parameters, true); e != nil {
 		t.Fatal(e)
 	}
-	task, e := q.Claim(t.Context(), "thumbnail", true)
+	task, e := q.Claim(t.Context(), "thumbnail")
 	if e != nil || task.Attempts != 1 {
 		t.Fatal("on-demand regeneration retains old retry count", e, task.Attempts)
 	}
 	q.Finish(t.Context(), task, "done", "")
 	orphan := filepath.Join(c.Cache.Path, "0123456789012345678901234567890123456789012345678901234567890123.webp")
 	os.WriteFile(orphan, []byte("orphan"), 0600)
-	if e = engine.Reconcile(t.Context(), s.Priority.Wait); e != nil {
+	if e = engine.Reconcile(t.Context()); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = os.Stat(orphan); !errors.Is(e, os.ErrNotExist) {
@@ -560,54 +560,55 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	}
 }
 
-func TestPlaybackCooldownAndInterruptedPublication(t *testing.T) {
-	i, s, root := setup(t)
-	os.WriteFile(filepath.Join(root, "old.mp4"), []byte("old"), 0600)
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	old := first(t, i)
+// TestPlaybackCooldown covers the gate list reordering still waits on; scans,
+// probes and covers no longer consult it.
+func TestPlaybackCooldown(t *testing.T) {
+	p := jobs.NewPriority()
 	now := time.Now()
-	s.Priority.Now = func() time.Time { return now }
-	end := s.Priority.Begin()
-	if s.Priority.Ready() {
-		t.Fatal("background ready during playback")
+	p.Now = func() time.Time { return now }
+	end := p.Begin()
+	if p.Ready() {
+		t.Fatal("list reordering ready during playback")
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if e := s.Priority.Wait(ctx); !errors.Is(e, context.Canceled) {
+	if e := p.Wait(ctx); !errors.Is(e, context.Canceled) {
 		t.Fatal(e)
 	}
 	end()
 	end()
 	now = now.Add(9 * time.Second)
-	if s.Priority.Ready() {
+	if p.Ready() {
 		t.Fatal("early cooldown")
 	}
 	now = now.Add(time.Second)
-	if !s.Priority.Ready() {
+	if !p.Ready() {
 		t.Fatal("cooldown did not finish")
 	}
-	os.WriteFile(filepath.Join(root, "new.mp4"), []byte("new"), 0600)
+}
+
+// TestChangeDuringPublicationIsRescanned: a file rewritten after observation
+// but before publication is published as observed and corrected next round.
+func TestChangeDuringPublicationIsRescanned(t *testing.T) {
+	i, s, root := setup(t)
+	path := filepath.Join(root, "new.mp4")
+	os.WriteFile(path, []byte("new"), 0600)
 	s.Fault = func(at string) error {
 		if at == "publish" {
-			stop := s.Priority.Begin()
-			os.WriteFile(filepath.Join(root, "new.mp4"), []byte("changed while playback paused background"), 0600)
-			stop()
-			now = now.Add(10 * time.Second)
+			os.WriteFile(path, []byte("changed between observation and publication"), 0600)
 		}
 		return nil
 	}
-	if e := s.Run(t.Context(), false); e == nil {
-		t.Fatal("stale snapshot published after playback")
+	if e := s.Run(t.Context(), false); e != nil {
+		t.Fatal(e)
 	}
-	kept := first(t, i)
-	if kept.ID != old.ID || kept.Version != old.Version {
-		t.Fatal("old complete generation lost")
-	}
+	observed := first(t, i)
 	s.Fault = nil
 	if e := s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
+	}
+	if current := first(t, i); current.ID != observed.ID || current.Version == observed.Version {
+		t.Fatal("rewrite during publication was not picked up by the next scan")
 	}
 }
 
@@ -639,7 +640,7 @@ func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
 			t.Fatal(err)
 		}
 		commits := i.Store.Metrics.Commits.Load()
-		if _, err := q.Claim(t.Context(), "probe", false); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := q.Claim(t.Context(), "probe"); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatal("claimed through unavailable ancestor", state, err)
 		}
 		if i.Store.Metrics.Commits.Load() != commits {
@@ -652,7 +653,7 @@ func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	j, err := q.Claim(t.Context(), "probe", false)
+	j, err := q.Claim(t.Context(), "probe")
 	if err != nil || j.Attempts != 1 {
 		t.Fatal("reappearance lost task or consumed retries", err, j)
 	}
@@ -691,7 +692,7 @@ func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
 	}
 	commits := i.Store.Metrics.Commits.Load()
 	began := time.Now()
-	if _, err = q.Claim(t.Context(), "probe", false); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = q.Claim(t.Context(), "probe"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("unpublished job claimed", err)
 	}
 	t.Logf("unpublished_candidates=%d read_search=%s writer_commits=%d", n, time.Since(began), i.Store.Metrics.Commits.Load()-commits)
@@ -701,7 +702,7 @@ func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
 	if err = i.Publish(t.Context(), d, gen, "fixture", 1, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = q.Claim(t.Context(), "probe", false); err != nil {
+	if _, err = q.Claim(t.Context(), "probe"); err != nil {
 		t.Fatal("published job remained unavailable", err)
 	}
 }
@@ -717,7 +718,7 @@ func TestShutdownInterruptedJobKeepsItsAttempts(t *testing.T) {
 	for round := range 5 {
 		ctx, cancel := context.WithCancel(t.Context())
 		ran := false
-		q.Worker(ctx, "probe", jobs.NewPriority(), func(ctx context.Context, j jobs.Job) error {
+		q.Worker(ctx, "probe", func(ctx context.Context, j jobs.Job) error {
 			ran = true
 			cancel() // shutdown arrives while the tool runs
 			return ctx.Err()
@@ -755,7 +756,7 @@ func TestManyProbesChangeDirectoryRevisionOnce(t *testing.T) {
 		t.Fatal(e)
 	}
 	for range 20 {
-		j, e := q.Claim(t.Context(), "probe", false)
+		j, e := q.Claim(t.Context(), "probe")
 		if e != nil {
 			t.Fatal(e)
 		}
