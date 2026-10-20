@@ -32,7 +32,6 @@ import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.feature.library.album.AlbumLayoutCalculator
 import dev.vvideo.model.*
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.mediaDuration

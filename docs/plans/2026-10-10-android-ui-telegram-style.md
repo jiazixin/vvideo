@@ -257,7 +257,7 @@ fun VVideoTheme(mode: ThemeMode, content: @Composable () -> Unit) {
 - **只有子文件夹、没有媒体**：不显示条，正文直接是首页同款列表行（头像 52、行高 72），滚动到底自动 `moreChildren(false)`，到顶自动 `moreChildren(true)`，去掉“更多目录/前面的文件夹”按钮，改为列表边界的 24dp 转圈。
 
 **相册流**：
-- 每个十项组渲染为一个“相册气泡”：外轮廓 16dp 圆角裁切，内部格子 2dp 缝隙，格子本身不加圆角。行划分沿用 `AlbumLayoutCalculator`，宽度 = 屏宽 − 16。
+- 每个十项组渲染为一个“相册气泡”：外轮廓 16dp 圆角裁切，内部格子 2dp 缝隙，格子本身不加圆角。行划分沿用 `AlbumLayoutCalculator`，宽度 = 屏宽 − 16。（2026-10-20 已被取代：排版改为移植 Telegram 频道相册，外角 15dp、内角 4dp，见 [DESIGN.md](../DESIGN.md#ui-与流畅度)；`AlbumLayoutCalculator` 已删除。）
 - 角标：
   - 视频格左上：▶ + 时长（`m:ss`，≥1 小时 `h:mm:ss`；无时长时显示“…”而不是 0:00）。
   - 视频格中央 40dp 播放钮，仅当格子短边 ≥ 96dp。
