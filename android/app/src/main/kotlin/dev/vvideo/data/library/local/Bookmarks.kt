@@ -1,8 +1,6 @@
 package dev.vvideo.data.library.local
 
 import androidx.room.*
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName="bookmarks",primaryKeys=["connection","directory"],indices=[Index(value=["connection","hiddenFromRecent","visitedAt"])])
@@ -27,19 +25,7 @@ data class BookmarkEntity(
  @Query("SELECT * FROM bookmarks WHERE connection=:connection AND hiddenFromRecent=0 AND name!='' ORDER BY visitedAt DESC LIMIT 30") fun recent(connection:String):Flow<List<BookmarkEntity>>
  @Query("UPDATE bookmarks SET hiddenFromRecent=1 WHERE connection=:connection AND directory=:directory") suspend fun hide(connection:String,directory:Long)
 }
-val BrowseMigration1To2=object:Migration(1,2){override fun migrate(db:SupportSQLiteDatabase){
- db.execSQL("ALTER TABLE bookmarks ADD COLUMN name TEXT NOT NULL DEFAULT ''")
- db.execSQL("ALTER TABLE bookmarks ADD COLUMN pathLabel TEXT NOT NULL DEFAULT ''")
- db.execSQL("ALTER TABLE bookmarks ADD COLUMN visitedAt INTEGER NOT NULL DEFAULT 0")
- db.execSQL("ALTER TABLE bookmarks ADD COLUMN hiddenFromRecent INTEGER NOT NULL DEFAULT 0")
- db.execSQL("CREATE INDEX IF NOT EXISTS index_bookmarks_connection_hiddenFromRecent_visitedAt ON bookmarks(connection,hiddenFromRecent,visitedAt)")
-}}
-// The default became oldest first. A visited folder stored the default it was
-// opened with and cannot be told apart from an explicit "newest first", so
-// every newest-first capture sort moves to the new default once; its anchor
-// and offset belonged to the other direction and are dropped.
-val BrowseMigration2To3=object:Migration(2,3){override fun migrate(db:SupportSQLiteDatabase){
- db.execSQL("UPDATE bookmarks SET direction='asc',anchor='',neighbor='',fallback='',pixelOffset=0,width=0 WHERE sort='capture' AND direction='desc'")
-}}
+// No migrations before the first release: a database of any other version is
+// dropped and recreated (see AppGraph); these are only local browse positions.
 @Database(entities=[BookmarkEntity::class],version=3,exportSchema=true)
 abstract class BrowseDatabase:RoomDatabase(){abstract fun bookmarks():BookmarkDao}

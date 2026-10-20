@@ -15,7 +15,7 @@ class AppGraph(val application:Application) {
  val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
  val settings=SettingsRepository(application)
  val api=LibraryApi()
- val database=Room.databaseBuilder(application,BrowseDatabase::class.java,"browse.db").addMigrations(dev.vvideo.data.library.local.BrowseMigration1To2,dev.vvideo.data.library.local.BrowseMigration2To3).build()
+ val database=Room.databaseBuilder(application,BrowseDatabase::class.java,"browse.db").fallbackToDestructiveMigration(dropAllTables=true).fallbackToDestructiveMigrationOnDowngrade(dropAllTables=true).build()
  val cache=CacheCoordinator(application)
  suspend fun initialize(){withContext(Dispatchers.IO){database.openHelper.writableDatabase};cache.configure(settings.connection.first().budget)}
 }
