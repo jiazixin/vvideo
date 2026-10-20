@@ -1,5 +1,7 @@
 package dev.vvideo.feature.library
 
+import dev.vvideo.model.MediaPage
+
 fun libraryKeys(state: LibraryUiState): List<String> = buildList {
     if(state.albums.isEmpty()) addAll(state.children.map { "folder:${it.id}" })
     else {
@@ -17,3 +19,6 @@ fun restoreIndex(keys: List<String>, albums: List<Album>, key: String, anchor: S
     if(exact>=0)return exact
     return keys.indexOf(anchorKey(albums,anchor)).coerceAtLeast(0)
 }
+// A saved position that is gone is only worth a notice when the page shows
+// something near it; an empty folder has no nearby position.
+fun anchorMoved(saved: String, page: MediaPage): Boolean = saved.isNotEmpty() && !page.anchorFound && page.items.isNotEmpty()

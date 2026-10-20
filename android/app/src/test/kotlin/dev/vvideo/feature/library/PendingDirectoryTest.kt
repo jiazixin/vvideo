@@ -36,11 +36,13 @@ class PendingDirectoryTest {
  }
  @Test fun unknownDestinationKeepsTheCurrentPage(){assertNull(pendingDirectory(home,42));assertNull(pendingDirectory(inWide,42))}
  @Test fun restoredPageKeepsItsContentAndTakesLiveLists(){
-  val left=inWide.copy(pageBusy=true,childBusy=true,restoreSerial=4)
+  val left=inWide.copy(pageBusy=true,childBusy=true,restoreSerial=4,anchorMissing=true)
   val newer=RecentFolder(BookmarkEntity("c",3,"lib",name="folder-0001",pathLabel="media › wide"),"今天")
   val failed=checkNotNull(pendingDirectory(left,3)).copy(busy=false,error=true,recent=listOf(newer),restoreSerial=6)
   val back=restoredPage(left,failed)
   assertEquals(wide,back.directory);assertEquals(left.albums,back.albums);assertEquals(left.children,back.children);assertEquals(left.path,back.path);assertEquals("video",back.kind)
   assertEquals(listOf(newer),back.recent);assertEquals(6,back.restoreSerial);assertFalse(back.pageBusy);assertFalse(back.childBusy);assertFalse(back.busy)
+  // The notice belonged to the load that missed; going back to the page does not repeat it.
+  assertFalse(back.anchorMissing)
  }
 }

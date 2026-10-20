@@ -100,7 +100,7 @@ fun LibraryRoute(vm:LibraryViewModel,thumbnail:(Connection,Media)->String,c:Conn
    val page=remember{object{var latest=state;var shownList=list}}
    if(state.directory?.id==id){page.latest=state;page.shownList=list}
    val screen=page.latest
-   LibraryScreen(screen,loader,c,thumbnail,page.shownList,onSettings,vm::back,vm::openDirectory,vm::sort,vm::moreChildren,{screen.directory?.let{vm.open(it.id,refresh=true,kind=screen.kind)}?:vm.connect(c.copy(lastDirectory=0),refresh=true)},onMedia,vm::filter,vm::jumpToStart,onDetails,onConnection)
+   LibraryScreen(screen,loader,c,thumbnail,page.shownList,onSettings,vm::back,vm::openDirectory,vm::sort,vm::moreChildren,{screen.directory?.let{vm.open(it.id,refresh=true,kind=screen.kind)}?:vm.connect(c.copy(lastDirectory=0),refresh=true)},onMedia,vm::filter,vm::jumpToStart,onDetails,onConnection,vm::anchorNoticeShown)
   }
  }
 

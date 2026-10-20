@@ -25,18 +25,18 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onSettings:()->Unit,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit={},onJump:()->Unit={},onDetails:(Media)->Unit={},onConnection:()->Unit=onSettings) {
+fun LibraryScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onSettings:()->Unit,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit={},onJump:()->Unit={},onDetails:(Media)->Unit={},onConnection:()->Unit=onSettings,onAnchorNotice:()->Unit={}) {
  if(state.directory==null){HomeScreen(state,onSettings,onOpen,onRetry,onConnection);return}
- FolderScreen(state,loader,connection,thumbnail,list,onBack,onOpen,onSort,onMore,onRetry,onMedia,onKind,onJump,onDetails)
+ FolderScreen(state,loader,connection,thumbnail,list,onBack,onOpen,onSort,onMore,onRetry,onMedia,onKind,onJump,onDetails,onAnchorNotice)
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit,onJump:()->Unit,onDetails:(Media)->Unit) {
+fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,thumbnail:(Connection,Media)->String,list:LazyListState,onBack:()->Unit,onOpen:(Long)->Unit,onSort:(Sort)->Unit,onMore:(Boolean)->Unit,onRetry:()->Unit,onMedia:(Media)->Unit,onKind:(String)->Unit,onJump:()->Unit,onDetails:(Media)->Unit,onAnchorNotice:()->Unit={}) {
  val c=LocalVV.current;val d=checkNotNull(state.directory)
  var menu by remember(d.id){mutableStateOf(false)};var sheet by remember(d.id){mutableStateOf("")}
  var bulletin by remember{mutableStateOf<String?>(null)}
  val moved=stringResource(R.string.anchor_moved)
- LaunchedEffect(state.restoreSerial){if(state.anchorMissing)bulletin=moved}
+ LaunchedEffect(state.restoreSerial){if(state.anchorMissing){bulletin=moved;onAnchorNotice()}}
  val scope=rememberCoroutineScope()
  val jump={if(state.hasPrevious)onJump() else {scope.launch{list.animateScrollToItem(0)};Unit}}
  BackHandler(menu||sheet.isNotEmpty()){if(menu)menu=false else sheet=""}
@@ -90,9 +90,13 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
   // The placeholder belongs to a page without content of its own; a reload
   // keeps what is already shown, and a failed load is not an empty folder.
   val blank=state.albums.isEmpty()&&state.children.isEmpty()
+  // An empty folder is content too: reloading it keeps the empty state
+  // instead of swapping in the placeholder and back.
+  val settled=remember(d.id){object{var empty=false}}
+  if(!state.busy)settled.empty=blank&&!state.error
   // Arriving content shows through the fading placeholder.
-  AnimatedVisibility(state.busy&&blank,enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}}
-  AnimatedVisibility(!state.busy&&blank&&!state.error,enter=fadeIn(fade(Motion.CHANGE)),exit=fadeOut(fade())){EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)}
+  AnimatedVisibility(state.busy&&blank&&!settled.empty,enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}}
+  AnimatedVisibility(blank&&!state.error&&(!state.busy||settled.empty),enter=fadeIn(fade(Motion.CHANGE)),exit=fadeOut(fade())){EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)}
   androidx.compose.animation.AnimatedVisibility(floating&&!dateRowAtTop&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=12.dp),enter=fadeIn(fade()),exit=if(dateRowAtTop)ExitTransition.None else fadeOut(fade(Motion.CHANGE))){firstAlbum?.dayLabel?.let{DatePill(it)}}
   AnimatedVisibility(showFab,Modifier.align(Alignment.BottomEnd),enter=fadeIn(fade())+scaleIn(move(),initialScale=.6f),exit=fadeOut(fade())+scaleOut(move(),targetScale=.6f)){SmallFloatingActionButton(onClick=jump,Modifier.navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(jumpLabel(state.sort)))}}
   BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))

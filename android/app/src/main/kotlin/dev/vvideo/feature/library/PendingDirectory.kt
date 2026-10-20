@@ -32,4 +32,4 @@ fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
  * paging requests of the kept page were cancelled when it was left.
  */
 fun restoredPage(kept: LibraryUiState, current: LibraryUiState): LibraryUiState =
-    kept.copy(recent = current.recent, libraries = current.libraries, pageBusy = false, childBusy = false, restoreSerial = current.restoreSerial)
+    kept.copy(recent = current.recent, libraries = current.libraries, pageBusy = false, childBusy = false, restoreSerial = current.restoreSerial, anchorMissing = false)

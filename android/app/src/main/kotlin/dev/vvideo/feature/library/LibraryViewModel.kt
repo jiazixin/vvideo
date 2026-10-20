@@ -59,6 +59,9 @@ class LibraryViewModel(private val api:LibraryApi,private val bookmarks:Bookmark
  fun resume(){val s=mutable.value;if(blocked)return;val b=bookmark
   mutable.value=s.copy(restoreKey=viewportKey,restoreAnchor=b?.anchor.orEmpty(),restoreOffset=if(viewportKey.isNotEmpty())viewportOffset else b?.pixelOffset?:0,restoreWidth=if(viewportKey.isNotEmpty())viewportWidth else b?.width?:0,restoreSerial=s.restoreSerial+1)
  }
+ // The notice belongs to the load that missed the anchor; resuming the page or
+ // coming back from a viewer does not repeat it.
+ fun anchorNoticeShown(){if(mutable.value.anchorMissing)mutable.value=mutable.value.copy(anchorMissing=false)}
  fun viewport(key:String,offset:Int,width:Int){if(blocked)return;viewportKey=key;viewportOffset=offset;viewportWidth=width;val index=mutable.value.albums.indexOfFirst{"album:${it.items.first().id}"==key};if(index>=0)save(index,offset,width)}
  fun back(){val d=mutable.value.directory?:return;if(d.parentId!=0L)open(d.parentId)else roots()}
  fun roots(){flush();cancelRequests();viewportKey="";bookmark=null;kept=null;windowDirectory=0;mutable.value=LibraryUiState(libraries=mutable.value.libraries,recent=mutable.value.recent);viewModelScope.launch{settings.recent(0)}}
@@ -106,7 +109,7 @@ class LibraryViewModel(private val api:LibraryApi,private val bookmarks:Bookmark
    window.reset(initial);childrenWindow.reset(children);windowDirectory=id;kept=null;loadedNext=true;loadedPrevious=initial.previous.isNotEmpty()
    bookmark=if(override==null&&saved!=null)saved else BookmarkEntity(connection.id,id,initial.directory.libraryId,sort.field,sort.direction)
    loading=false
-   mutable.value=mutable.value.copy(directory=initial.directory,kind=kind,children=children.items,childNext=children.next,childPrevious=children.previous,childBusy=false,pageBusy=false,path=path,pathLabel=pathLabel(path),sort=sort,hasMedia=initial.items.isNotEmpty()||(kind.isNotEmpty()&&mutable.value.hasMedia),hasPrevious=window.previous.isNotEmpty(),albums=preparedAlbums,busy=false,error=false,errorStatus=0,healthy=initial.healthy,restoreKey="",restoreAnchor=if(restore)saved?.anchor.orEmpty() else "",restoreOffset=if(restore)saved?.pixelOffset?:0 else 0,restoreWidth=saved?.width?:0,restoreSerial=mutable.value.restoreSerial+1,anchorMissing=restore&&saved?.anchor?.isNotEmpty()==true&&!initial.anchorFound)
+   mutable.value=mutable.value.copy(directory=initial.directory,kind=kind,children=children.items,childNext=children.next,childPrevious=children.previous,childBusy=false,pageBusy=false,path=path,pathLabel=pathLabel(path),sort=sort,hasMedia=initial.items.isNotEmpty()||(kind.isNotEmpty()&&mutable.value.hasMedia),hasPrevious=window.previous.isNotEmpty(),albums=preparedAlbums,busy=false,error=false,errorStatus=0,healthy=initial.healthy,restoreKey="",restoreAnchor=if(restore)saved?.anchor.orEmpty() else "",restoreOffset=if(restore)saved?.pixelOffset?:0 else 0,restoreWidth=saved?.width?:0,restoreSerial=mutable.value.restoreSerial+1,anchorMissing=restore&&anchorMoved(saved?.anchor.orEmpty(),initial))
    val record=checkNotNull(bookmark).copy(name=initial.directory.name,pathLabel=pathLabel(path),visitedAt=System.currentTimeMillis(),hiddenFromRecent=false)
    bookmark=record
    bookmarks.visit(record)
