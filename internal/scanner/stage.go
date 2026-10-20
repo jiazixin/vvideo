@@ -23,8 +23,8 @@ type stage struct {
 }
 
 // newStage opens a stage under the storage directory. The namespace hashes the
-// database path, as it did when storage named the database file, so stages
-// left by an interrupted scan of an existing data/data.sqlite are still found.
+// database path, so only stages left by an interrupted scan of this database
+// are removed.
 func newStage(ctx context.Context, storage string) (*stage, error) {
 	database := filepath.Join(storage, config.DatabaseFile)
 	dir := filepath.Join(config.StageDir(storage), fmt.Sprintf("%x", sha256.Sum256([]byte(database))))

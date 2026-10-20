@@ -92,21 +92,12 @@ func open(ctx context.Context, path string) (*Store, error) {
 	if err = w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 		return fail(fmt.Errorf("read schema version: %w", err))
 	}
-	if v > schemaVersion {
-		return fail(fmt.Errorf("schema version %d is newer than this build supports (%d)", v, schemaVersion))
-	}
-	if v < 0 {
-		return fail(fmt.Errorf("schema version %d is not a vvideo database", v))
+	if v != 0 && v != schemaVersion {
+		return fail(fmt.Errorf("schema version %d does not match this build (%d); there are no migrations before release, so stop the service and delete the storage directory to rebuild the index", v, schemaVersion))
 	}
 	if v == 0 {
 		if err = execTx(ctx, w, schemaSQL); err != nil {
 			return fail(fmt.Errorf("initialize schema: %w", err))
-		}
-		v = schemaVersion
-	}
-	for ; v < schemaVersion; v++ {
-		if err = execTx(ctx, w, migrations[v-1]); err != nil {
-			return fail(fmt.Errorf("migrate schema from version %d: %w", v, err))
 		}
 	}
 	if err = os.Chmod(path, 0600); err != nil {
@@ -129,7 +120,7 @@ func open(ctx context.Context, path string) (*Store, error) {
 	return &Store{Reader: r, Writer: w, Path: path, gate: make(chan struct{}, 1), lock: lock}, nil
 }
 
-// execTx runs a schema script atomically, including its user_version update.
+// execTx runs the schema script atomically, including its user_version update.
 func execTx(ctx context.Context, w *sql.DB, script string) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {

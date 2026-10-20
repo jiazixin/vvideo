@@ -1,28 +1,9 @@
 package storage
 
-// schemaVersion is the PRAGMA user_version written by schemaSQL.
+// schemaVersion is the PRAGMA user_version written by schemaSQL. Until the
+// first release the schema changes without migrations: a database with any
+// other version is refused and its storage directory must be rebuilt.
 const schemaVersion = 3
-
-// migrations[v-1] upgrades a version v database to v+1 in one transaction.
-// schemaSQL already contains every step, so new databases skip them.
-var migrations = []string{
-	// 2: on-demand covers claim ahead of the background backlog.
-	jobForegroundSQL + "PRAGMA user_version=2;",
-	// 3: file fingerprints drop the device number ("f2:dev:rest" -> "f3:rest"),
-	// so unchanged files keep matching after the upgrade and after remounts.
-	dropDeviceSQL("versions", "fingerprint") + dropDeviceSQL("jobs", "fingerprint") +
-		dropDeviceSQL("directories", "identity") + "PRAGMA user_version=3;",
-}
-
-// dropDeviceSQL rewrites one column from the f2 fingerprint layout, which
-// started with the device number, to the f3 layout without it.
-func dropDeviceSQL(table, column string) string {
-	return "UPDATE " + table + " SET " + column + "='f3:'||substr(" + column + ",4+instr(substr(" + column + ",4),':')) WHERE " + column + " LIKE 'f2:%';\n"
-}
-
-// jobForegroundSQL indexes only queued foreground jobs, so claiming them does
-// not scan the background backlog and finished jobs leave the index.
-const jobForegroundSQL = "CREATE INDEX job_foreground ON jobs(kind,due,id) WHERE state='queued' AND priority>0;\n"
 
 // schemaSQL initializes the schema atomically, only for an uninitialized database.
 const schemaSQL = `CREATE TABLE libraries (
@@ -86,7 +67,9 @@ CREATE TABLE jobs (
  FOREIGN KEY(media_id,version) REFERENCES versions(media_id,version)
 );
 CREATE INDEX job_claim ON jobs(kind,state,due,id);
-` + jobForegroundSQL + `CREATE INDEX job_version ON jobs(media_id,version,state);
+-- Only queued foreground jobs, so claiming them skips the background backlog.
+CREATE INDEX job_foreground ON jobs(kind,due,id) WHERE state='queued' AND priority>0;
+CREATE INDEX job_version ON jobs(media_id,version,state);
 CREATE TABLE thumbnails (
  key TEXT PRIMARY KEY, media_id TEXT NOT NULL, version TEXT NOT NULL,
  size INTEGER NOT NULL, accessed INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'ready',
