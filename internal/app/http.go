@@ -34,6 +34,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/directories/{id}/path", a.directoryPath)
 	mux.HandleFunc("GET /v1/directories/{id}/children", a.directoryChildren)
 	mux.HandleFunc("GET /v1/directories/{id}/media", a.directoryMedia)
+	mux.HandleFunc("GET /v1/directories/{id}/search", a.directorySearch)
 	mux.HandleFunc("GET /v1/media/{id}", a.media)
 	mux.Handle("GET /v1/media/{id}/bytes", a.Stream)
 	mux.HandleFunc("GET /v1/media/{id}/index", a.indexHints)
@@ -106,6 +107,16 @@ func (a *App) directoryMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v, err := a.Index.List(r.Context(), id, o)
+	respond(w, r, v, err)
+}
+
+func (a *App) directorySearch(w http.ResponseWriter, r *http.Request) {
+	id, err := directoryID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	v, err := a.Index.Search(r.Context(), id, r.URL.Query().Get("q"))
 	respond(w, r, v, err)
 }
 

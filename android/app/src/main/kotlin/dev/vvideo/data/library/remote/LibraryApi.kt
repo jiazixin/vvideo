@@ -147,6 +147,15 @@ class LibraryApi {
         )
     }
 
+    suspend fun search(c: Connection, dir: Long, query: String): SearchResult = withContext(Dispatchers.IO) {
+        val j = JSONObject(get(c, "/v1/directories/$dir/search", mapOf("q" to query)))
+        SearchResult(
+            j.getJSONArray("directories").objects().map(::directory),
+            j.getJSONArray("items").objects().map(::media),
+            j.optBoolean("truncated")
+        )
+    }
+
     suspend fun media(c: Connection, id: String): Media =
         withContext(Dispatchers.IO) { media(JSONObject(get(c, "/v1/media/$id"))) }
 

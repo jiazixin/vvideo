@@ -44,7 +44,8 @@ fun LibraryScreen(
     onJump: () -> Unit = {},
     onDetails: (Media) -> Unit = {},
     onConnection: () -> Unit = onSettings,
-    onAnchorNotice: () -> Unit = {}
+    onAnchorNotice: () -> Unit = {},
+    onSearch: (String) -> Unit = {}
 ) {
     if (state.directory == null) {
         HomeScreen(state, onSettings, onOpen, onRetry, onConnection)
@@ -65,7 +66,8 @@ fun LibraryScreen(
         onKind,
         onJump,
         onDetails,
-        onAnchorNotice
+        onAnchorNotice,
+        onSearch
     )
 }
 
@@ -89,7 +91,8 @@ fun FolderScreen(
     onKind: (String) -> Unit,
     onJump: () -> Unit,
     onDetails: (Media) -> Unit,
-    onAnchorNotice: () -> Unit = {}
+    onAnchorNotice: () -> Unit = {},
+    onSearch: (String) -> Unit = {}
 ) {
     val c = LocalVV.current
     val d = checkNotNull(state.directory)
@@ -112,6 +115,8 @@ fun FolderScreen(
         }
     }
     BackHandler(menuOpen || sheet != null) { if (menuOpen) menuOpen = false else sheet = null }
+    // Back first ends a search and returns to the folder's albums.
+    BackHandler(state.search.active && !menuOpen && sheet == null) { onSearch("") }
     FolderSheetHost(sheet, state, { sheet = null }, onSort, onMore, onOpen)
     val reveal = rememberListReveal(if (state.busy) null else Triple(d.id, state.kind, state.sort))
     Scaffold(containerColor = c.bgPage, topBar = {
@@ -124,9 +129,18 @@ fun FolderScreen(
             onBack,
             jump,
             onRetry,
-            onKind
+            onKind,
+            onSearch
         )
     }) { padding ->
+        if (state.search.active) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                FolderSearchResults(state.search, loader, connection, thumbnail, onOpen, onMedia) {
+                    onSearch(state.search.query)
+                }
+            }
+            return@Scaffold
+        }
         Box(Modifier.fillMaxSize().padding(padding)) {
             FolderContentList(
                 list,
@@ -220,9 +234,11 @@ private fun FolderTopBar(
     onBack: () -> Unit,
     onJump: () -> Unit,
     onRetry: () -> Unit,
-    onKind: (String) -> Unit
+    onKind: (String) -> Unit,
+    onSearch: (String) -> Unit
 ) {
     val c = LocalVV.current
+    val searching = state.search.active
     Column(Modifier.background(c.bgSurface)) {
         TopAppBar(
             expandedHeight = 56.dp,
@@ -231,6 +247,7 @@ private fun FolderTopBar(
             actions = { FolderMenu(menuOpen, onMenuOpen, state.sort, onSheet, onJump, onRetry) },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgSurface)
         )
+        FolderSearchField(state.search.query, onSearch)
         AnimatedVisibility(
             !state.healthy || state.error,
             enter = barEnter(),
@@ -242,14 +259,14 @@ private fun FolderTopBar(
                 ), onRetry
             )
         }
-        AnimatedVisibility(state.hasMedia, enter = barEnter(), exit = barExit()) {
+        AnimatedVisibility(state.hasMedia && !searching, enter = barEnter(), exit = barExit()) {
             MediaTabs(
                 state.kind,
                 onKind
             )
         }
         AnimatedVisibility(
-            state.albums.isNotEmpty() && state.children.isNotEmpty(),
+            state.albums.isNotEmpty() && state.children.isNotEmpty() && !searching,
             enter = barEnter(),
             exit = barExit()
         ) { SubfolderBar(state) { onSheet(FolderSheet.Children) } }

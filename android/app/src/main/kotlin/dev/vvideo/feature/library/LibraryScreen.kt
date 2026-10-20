@@ -215,7 +215,8 @@ fun LibraryRoute(
                 vm::jumpToStart,
                 onDetails,
                 onConnection,
-                vm::anchorNoticeShown
+                vm::anchorNoticeShown,
+                vm::search
             )
         }
     }

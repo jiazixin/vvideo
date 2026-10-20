@@ -20,6 +20,19 @@ import org.json.JSONObject
 // the destination with its placeholder. Tuning value, not a measured threshold.
 private const val REVEAL_DELAY_MS = 120L
 
+/** Typing pauses this long before a search request is sent. */
+private const val SEARCH_DEBOUNCE_MS = 300L
+
+/** A name search within the open folder and its subfolders; an empty query shows the folder. */
+data class SearchState(
+    val query: String = "",
+    val result: SearchResult? = null,
+    val busy: Boolean = false,
+    val error: Boolean = false
+) {
+    val active: Boolean get() = query.isNotBlank()
+}
+
 // Row geometry depends on the measured width and is settled by the album item.
 data class Album(
     val items: List<Media>,
@@ -54,7 +67,8 @@ data class LibraryUiState(
     val restoreOffset: Int = 0,
     val restoreWidth: Int = 0,
     val restoreSerial: Long = 0,
-    val anchorMissing: Boolean = false
+    val anchorMissing: Boolean = false,
+    val search: SearchState = SearchState()
 )
 
 class LibraryViewModel(
@@ -98,11 +112,14 @@ class LibraryViewModel(
     )
 
     private var kept: KeptPage? = null
+    private var searchRequest: Job? = null
+
     private fun cancelRequests() {
         generation++
         request?.cancel()
         pageRequest?.cancel()
         childRequest?.cancel()
+        searchRequest?.cancel()
         paginating = false
         loading = false
     }
@@ -193,6 +210,31 @@ class LibraryViewModel(
         if (d.parentId != 0L) open(d.parentId) else roots()
     }
 
+    /** Searches the open folder for [query] after a short pause; a blank query ends the search. */
+    fun search(query: String) {
+        val directory = mutable.value.directory ?: return
+        searchRequest?.cancel()
+        if (query.isBlank()) {
+            mutable.value = mutable.value.copy(search = SearchState(query))
+            return
+        }
+        mutable.value = mutable.value.copy(search = mutable.value.search.copy(query = query, busy = true, error = false))
+        val c = connection
+        searchRequest = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            val outcome = try {
+                SearchState(query, api.search(c, directory.id, query.trim()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                mutable.value.search.copy(busy = false, error = true)
+            }
+            if (mutable.value.directory?.id == directory.id && mutable.value.search.query == query) {
+                mutable.value = mutable.value.copy(search = outcome)
+            }
+        }
+    }
+
     fun roots() {
         flush()
         cancelRequests()
@@ -218,6 +260,8 @@ class LibraryViewModel(
         flush()
         cancelRequests()
         viewportKey = ""
+        // Opening any folder, including one found by a search, ends the search.
+        if (mutable.value.search != SearchState()) mutable.value = mutable.value.copy(search = SearchState())
         kept?.let { page ->
             if (page.state.directory?.id == id && override == null && !refresh && kind.isEmpty() && !fromStart) {
                 restore(page)

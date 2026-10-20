@@ -70,6 +70,13 @@
     <string name="last_video">已经是最后一个视频</string>
     <string name="seek_back">« %1$d 秒</string>
     <string name="seek_forward">%1$d 秒 »</string>
+    <string name="search_hint">搜索此文件夹及子文件夹</string>
+    <string name="clear_search">清除搜索</string>
+    <string name="search_folders">文件夹</string>
+    <string name="search_media">媒体</string>
+    <string name="search_empty">没有名称匹配的文件夹或媒体</string>
+    <string name="search_failed">搜索失败</string>
+    <string name="search_truncated">匹配项较多，只显示了一部分。请输入更具体的名称。</string>
     <string name="brightness_level">亮度 %1$d%%</string>
     <string name="volume_level">音量 %1$d%%</string>
     <string name="speed_hold">2× 快进中</string>

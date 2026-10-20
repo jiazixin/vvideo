@@ -152,7 +152,7 @@ fun AlbumBubble(
 }
 
 @Composable
-private fun Thumbnail(
+internal fun Thumbnail(
     item: Media,
     c: Connection,
     loader: ImageLoader,
