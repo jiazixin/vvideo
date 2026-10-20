@@ -92,6 +92,7 @@
  <string name="name_asc">A → Z</string>
  <string name="name_desc">Z → A</string>
  <string name="jump_to_start">回到最新</string>
+ <string name="jump_to_oldest">回到最早</string>
  <string name="jump_to_beginning">回到开头</string>
  <string name="folder_info">文件夹信息</string>
  <string name="empty_media">这里还没有媒体</string>
@@ -102,9 +103,6 @@
  <string name="seek_back">« %1$d 秒</string>
  <string name="seek_forward">%1$d 秒 »</string>
  <string name="speed_hold">2× 快进中</string>
- <string name="loop">循环播放</string>
- <string name="copy_name">复制文件名</string>
- <string name="copied">已复制</string>
  <string name="cannot_decode">这台手机无法解码此视频</string>
  <string name="connect_title">连接你的媒体服务</string>
  <string name="connect_body">填写 NAS 上 vvideo 服务的地址和访问令牌。媒体只在局域网内传输。</string>
@@ -153,9 +151,14 @@
  <string name="cover_generating">生成中</string>
  <string name="unknown_duration">…</string>
  <string name="speed_value">%1$s×</string>
+ <string name="speed_normal">倍速</string>
+ <string name="detail_resolution">分辨率</string>
+ <string name="detail_resolution_rotated">分辨率 · 旋转 %1$d°</string>
+ <string name="detail_duration">时长</string>
+ <string name="detail_size">大小</string>
+ <string name="detail_time_source">来自%1$s</string>
  <string name="dash">—</string>
  <string name="confirm_clear">清除缓存</string>
  <string name="captured_raw_label">原始时间字段</string>
-    <string name="media_resolution">%1$d × %2$d</string>
-    <string name="media_rotation">旋转 %1$d°</string>
+    <string name="media_resolution">%1$d×%2$d</string>
 </resources>

@@ -236,7 +236,6 @@ class DevicePlaybackTest {
    val session=active();assertFalse(withTimeout(15000){session.state.first{it.firstFrame||it.error}}.error)
    Log.i("VVideoValidation","ui_click_first_frame_ms=${SystemClock.elapsedRealtime()-began}")
    checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.desc("媒体详情")),5000)).click()
-   checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text("媒体详情")),5000)).click()
    assertTrue(device.wait(androidx.test.uiautomator.Until.hasObject(androidx.test.uiautomator.By.text("所在文件夹")),5000))
    assertTrue(device.hasObject(androidx.test.uiautomator.By.text(selected.name)))
    checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.desc("关闭")),5000)).click()
@@ -253,6 +252,7 @@ class DevicePlaybackTest {
    val speedSelector=androidx.test.uiautomator.By.desc("播放速度")
    for(expected in listOf(1.5f,2f,.5f,1f,1.5f)) {
     checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(speedSelector),3000)).click()
+    checkNotNull(device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text(dev.vvideo.feature.player.speedLabel(expected)+"×")),3000)).click()
     withTimeout(2000){while(withContext(Dispatchers.Main){session.player.playbackParameters.speed!=expected})delay(20)}
    }
    val down=SystemClock.uptimeMillis()

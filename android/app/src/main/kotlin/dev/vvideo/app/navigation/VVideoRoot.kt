@@ -47,7 +47,7 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  val route=navigation.route
  var selectionBeganMs by remember{mutableLongStateOf(0L)}
  var mediaId by rememberSaveable{mutableStateOf("")};var directory by rememberSaveable{mutableLongStateOf(0L)}
- var field by rememberSaveable{mutableStateOf("capture")};var direction by rememberSaveable{mutableStateOf("desc")}
+ var field by rememberSaveable{mutableStateOf("capture")};var direction by rememberSaveable{mutableStateOf("asc")}
  val resources=androidx.compose.ui.platform.LocalContext.current.resources
  val timeLabels=remember(androidx.compose.ui.platform.LocalConfiguration.current){TimeLabels(resources.getString(R.string.today),resources.getString(R.string.yesterday),resources.getString(R.string.date_pattern),resources.getString(R.string.date_year_pattern),resources.getString(R.string.recent_date_pattern),resources.getString(R.string.recent_old_pattern),resources.getString(R.string.weekday_pattern))}
  val library:LibraryViewModel=viewModel(factory=Factory{LibraryViewModel(graph.api,graph.database.bookmarks(),graph.settings,graph.scope,timeLabels)})
@@ -62,10 +62,8 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
  val dark=dev.vvideo.ui.theme.LocalVV.current.isDark||route=="video"||route=="photo"
  SideEffect{activity?.let{androidx.core.view.WindowCompat.getInsetsController(it.window,it.window.decorView).apply{isAppearanceLightStatusBars=!dark;isAppearanceLightNavigationBars=!dark}}}
  val back={player.leave();navigation.route="library";onInteraction(false)}
- var bulletin by remember{mutableStateOf<String?>(null)}
- val copied=stringResource(R.string.copied)
  var albumDetails by remember{mutableStateOf<dev.vvideo.model.Media?>(null)}
- albumDetails?.let{item->MediaDetailsSheet(item,library.state.value.path.joinToString(" › "){it.name},{albumDetails=null}){bulletin=copied}}
+ albumDetails?.let{item->MediaDetailsSheet(item,library.state.value.path.joinToString(" › "){it.name},){albumDetails=null}}
  val settingsBack={navigation.route="settings"}
  var predictive by remember{mutableFloatStateOf(0f)}
  val animations=dev.vvideo.ui.theme.LocalAnimations.current
@@ -104,6 +102,5 @@ fun VVideoRoot(application:VVideoApplication,onInteraction:(Boolean)->Unit){
   else->LibraryRoute(library,{c,item->"${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}"},connection,imageLoader,{library.flush();navigation.route="settings"},{item->selectionBeganMs=android.os.SystemClock.elapsedRealtime();library.flush();directory=item.directoryId;val sort=library.state.value.sort;field=sort.field;direction=sort.direction;mediaId=item.id;navigation.route=if(item.kind=="video")"video" else "photo"},onInteraction,{albumDetails=it},{library.flush();navigation.route="connection"})
  }
 }
- dev.vvideo.ui.component.BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
 }
 }

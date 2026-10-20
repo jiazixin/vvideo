@@ -7,4 +7,4 @@ data class Media(val id: String, val version: String, val libraryId: String, val
 }
 data class MediaPage(val directory: Directory, val items: List<Media>, val next: String, val previous: String, val anchor: String, val anchorFound: Boolean, val healthy: Boolean)
 data class ChildrenPage(val items: List<Directory>, val next: String, val previous: String = "")
-data class Sort(val field: String = "capture", val direction: String = "desc")
+data class Sort(val field: String = "capture", val direction: String = "asc")

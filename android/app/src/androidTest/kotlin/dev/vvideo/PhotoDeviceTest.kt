@@ -118,30 +118,31 @@ class PhotoDeviceTest {
    val reduced=coloredPixels()
    Log.i("VVideoValidation","photo_zoom_close enlarged=$enlarged reduced=$reduced")
    assertTrue("pinch did not reduce rendered image: $enlarged -> $reduced",reduced<enlarged*.85)
-   // Paging follows the folder's image order. A vertical pinch travels along
-   // the paging axis and must still zoom; an enlarged photo pans under one
-   // finger instead of handing the drag to the pager.
+   // Paging follows the folder's image order, left and right. A horizontal pinch
+   // travels along the paging axis and must still zoom; an enlarged photo pans
+   // under one finger instead of handing the drag to the pager.
    val queue=app.graph.api.page(connection,directory,Sort("name","asc"),anchor=image.id,kind="image").items
    val following=queue[queue.indexOfFirst{it.id==image.id}+1]
-   device.swipe(cx,cy+far,cx,cy-far,12)
-   assertNotNull("swipe up did not show the next photo",device.wait(Until.findObject(By.desc(following.name)),5000))
-   device.swipe(cx,cy-far,cx,cy+far,12)
-   assertNotNull("swipe down did not return to the photo",device.wait(Until.findObject(By.desc(image.name)),5000))
+   device.swipe(cx+far,cy,cx-far,cy,12)
+   assertNotNull("swipe left did not show the next photo",device.wait(Until.findObject(By.desc(following.name)),5000))
+   device.swipe(cx-far,cy,cx+far,cy,12)
+   assertNotNull("swipe right did not return to the photo",device.wait(Until.findObject(By.desc(image.name)),5000))
    delay(500)
-   assertTrue(gesture.performTwoPointerGesture(Point(cx,cy-near),Point(cx,cy+near),Point(cx,cy-far),Point(cx,cy+far),100))
+   device.swipe(cx,cy+far,cx,cy-far,12);delay(500)
+   assertTrue("a vertical swipe paged photos",device.hasObject(By.desc(image.name)))
+   assertTrue(gesture.performTwoPointerGesture(Point(cx-near,cy),Point(cx+near,cy),Point(cx-far,cy),Point(cx+far,cy),100))
    delay(500)
-   assertTrue("vertical pinch paged instead of zooming",device.hasObject(By.desc(image.name)))
-   val tall=coloredPixels()
-   assertTrue("vertical pinch did not enlarge rendered image: $reduced -> $tall",tall>reduced*1.5)
-   device.swipe(cx,cy+near,cx,cy-near,12);delay(500)
+   assertTrue("horizontal pinch paged instead of zooming",device.hasObject(By.desc(image.name)))
+   val wide=coloredPixels()
+   assertTrue("horizontal pinch did not enlarge rendered image: $reduced -> $wide",wide>reduced*1.5)
+   device.swipe(cx+near,cy,cx-near,cy,12);delay(500)
    assertTrue("an enlarged photo paged under a one-finger drag",device.hasObject(By.desc(image.name)))
-   assertTrue(gesture.performTwoPointerGesture(Point(cx,cy-far),Point(cx,cy+far),Point(cx,cy-near),Point(cx,cy+near),100))
+   assertTrue(gesture.performTwoPointerGesture(Point(cx-far,cy),Point(cx+far,cy),Point(cx-near,cy),Point(cx+near,cy),100))
    delay(500)
    val restored=coloredPixels()
-   assertTrue("vertical pinch did not reduce rendered image: $tall -> $restored",restored<tall*.85)
-   Log.i("VVideoValidation","photo_paging next=${following.name} vertical_pinch_pixels=$tall restored_pixels=$restored")
+   assertTrue("horizontal pinch did not reduce rendered image: $wide -> $restored",restored<wide*.85)
+   Log.i("VVideoValidation","photo_paging next=${following.name} paging_axis_pinch_pixels=$wide restored_pixels=$restored")
    checkNotNull(device.wait(Until.findObject(By.desc("媒体详情")),3000)).click()
-   checkNotNull(device.wait(Until.findObject(By.text("媒体详情")),3000)).click()
    assertTrue(device.wait(Until.hasObject(By.text(image.name)),3000))
    assertTrue(device.hasObject(By.text("所在文件夹")))
    checkNotNull(device.wait(Until.findObject(By.desc("关闭")),3000)).click()

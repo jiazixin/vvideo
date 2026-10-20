@@ -25,7 +25,7 @@ fun SortSheet(state:LibraryUiState,onDismiss:()->Unit,onSort:(Sort)->Unit){
   }
   Text(stringResource(R.string.order),Modifier.padding(20.dp),color=LocalVV.current.accentText,style=MaterialTheme.typography.labelLarge)
   Row(Modifier.fillMaxWidth().padding(horizontal=20.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-   val directions=if(state.sort.field=="name")listOf("asc" to R.string.name_asc,"desc" to R.string.name_desc)else listOf("desc" to R.string.newest_first,"asc" to R.string.oldest_first)
+   val directions=if(state.sort.field=="name")listOf("asc" to R.string.name_asc,"desc" to R.string.name_desc)else listOf("asc" to R.string.oldest_first,"desc" to R.string.newest_first)
    directions.forEach{(direction,label)->VVButton((if(state.sort.direction==direction)"✓ " else "")+stringResource(label),{onSort(state.sort.copy(direction=direction))},Modifier.weight(1f),kind=ButtonKind.Secondary)}
   }
  }

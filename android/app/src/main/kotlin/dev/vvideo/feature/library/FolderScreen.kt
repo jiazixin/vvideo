@@ -46,6 +46,12 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
  val firstAlbum by remember(list,state.albums){derivedStateOf{list.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull{visible->state.albums.firstOrNull{"album:${it.items.first().id}"==visible.key}}}}
  val showFab by remember(list,state.albums,state.hasPrevious){derivedStateOf{state.hasPrevious||state.albums.indexOfFirst{"album:${it.items.first().id}"==list.layoutInfo.visibleItemsInfo.firstOrNull{it.key.toString().startsWith("album:")}?.key}>2}}
  var floating by remember{mutableStateOf(false)}
+ // The floating date covers the top of the list. Wherever an in-list date row
+ // passes through that band, the two would show the same day twice (or two days
+ // on top of each other), so the floating one gives way at once, without fading.
+ val density=androidx.compose.ui.platform.LocalDensity.current
+ val dateBand=with(density){48.dp.roundToPx()}
+ val dateRowAtTop by remember(list,dateBand){derivedStateOf{list.layoutInfo.visibleItemsInfo.any{it.contentType=="date"&&it.offset<dateBand&&it.offset+it.size>0}}}
  LaunchedEffect(list.isScrollInProgress){if(list.isScrollInProgress)floating=true else {delay(1200);floating=false}}
  // A filter or sort change replaces the whole album list; the new list fades in
  // once it is published. Opening, refreshing or returning to the page does not.
@@ -61,7 +67,7 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
    ActionIcon(R.drawable.ic_more,R.string.sort,{menu=true})
    DropdownMenu(menu,{menu=false},Modifier.width(236.dp),shape=RoundedCornerShape(10.dp),containerColor=c.bgRaised){
     DropdownMenuItem(text={Column{Text(stringResource(R.string.sort_title));Text(sortLabel(state.sort),style=MaterialTheme.typography.bodySmall,color=c.textSecondary)}},leadingIcon={Icon(painterResource(R.drawable.ic_sort),null)},onClick={menu=false;sheet="sort"})
-    DropdownMenuItem(text={Text(stringResource(if(state.sort.field=="name")R.string.jump_to_beginning else R.string.jump_to_start))},leadingIcon={Icon(painterResource(R.drawable.ic_arrow_up),null)},onClick={menu=false;jump()})
+    DropdownMenuItem(text={Text(stringResource(jumpLabel(state.sort)))},leadingIcon={Icon(painterResource(R.drawable.ic_arrow_up),null)},onClick={menu=false;jump()})
     DropdownMenuItem(text={Text(stringResource(R.string.refresh))},leadingIcon={Icon(painterResource(R.drawable.ic_refresh),null)},onClick={menu=false;onRetry()})
     HorizontalDivider()
     DropdownMenuItem(text={Text(stringResource(R.string.folder_info))},leadingIcon={Icon(painterResource(R.drawable.ic_info),null)},onClick={menu=false;sheet="info"})
@@ -87,11 +93,13 @@ fun FolderScreen(state:LibraryUiState,loader:ImageLoader,connection:Connection,t
   // Arriving content shows through the fading placeholder.
   AnimatedVisibility(state.busy&&blank,enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){Column(Modifier.fillMaxSize().padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){repeat(2){Box(Modifier.fillMaxWidth().height(260.dp).background(c.bgPlaceholder,RoundedCornerShape(16.dp)))}}}
   AnimatedVisibility(!state.busy&&blank&&!state.error,enter=fadeIn(fade(Motion.CHANGE)),exit=fadeOut(fade())){EmptyState(stringResource(R.string.empty_media),action=stringResource(R.string.refresh),onAction=onRetry)}
-  androidx.compose.animation.AnimatedVisibility(floating&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=8.dp),enter=fadeIn(fade()),exit=fadeOut(fade(Motion.CHANGE))){firstAlbum?.dayLabel?.let{DatePill(it)}}
-  AnimatedVisibility(showFab,Modifier.align(Alignment.BottomEnd),enter=fadeIn(fade())+scaleIn(move(),initialScale=.6f),exit=fadeOut(fade())+scaleOut(move(),targetScale=.6f)){SmallFloatingActionButton(onClick=jump,Modifier.navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(R.string.jump_to_start))}}
+  androidx.compose.animation.AnimatedVisibility(floating&&!dateRowAtTop&&firstAlbum?.dayLabel!=null,Modifier.align(Alignment.TopCenter).padding(top=12.dp),enter=fadeIn(fade()),exit=if(dateRowAtTop)ExitTransition.None else fadeOut(fade(Motion.CHANGE))){firstAlbum?.dayLabel?.let{DatePill(it)}}
+  AnimatedVisibility(showFab,Modifier.align(Alignment.BottomEnd),enter=fadeIn(fade())+scaleIn(move(),initialScale=.6f),exit=fadeOut(fade())+scaleOut(move(),targetScale=.6f)){SmallFloatingActionButton(onClick=jump,Modifier.navigationBarsPadding().padding(end=16.dp,bottom=24.dp).size(48.dp),shape=CircleShape,containerColor=c.bgRaised,contentColor=c.icon){Icon(painterResource(R.drawable.ic_arrow_up),stringResource(jumpLabel(state.sort)))}}
   BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
  }}
 }
+// The start of the list is the oldest or newest media depending on the direction.
+private fun jumpLabel(sort:Sort)=when{sort.field=="name"->R.string.jump_to_beginning;sort.direction=="asc"->R.string.jump_to_oldest;else->R.string.jump_to_start}
 @Composable
 fun DatePill(label:String){Text(label,Modifier.background(LocalVV.current.datePill,RoundedCornerShape(12.dp)).padding(horizontal=10.dp,vertical=3.dp),color=LocalVV.current.datePillText,style=MaterialTheme.typography.labelSmall)}
 @Composable

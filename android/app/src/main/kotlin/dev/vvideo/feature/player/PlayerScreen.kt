@@ -84,7 +84,6 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
  var seekForward by remember{mutableStateOf(true)}
  var seekAt by remember{mutableLongStateOf(0L)}
  var bulletin by remember{mutableStateOf<String?>(null)}
- val copied=stringResource(R.string.copied)
  val lastVideo=stringResource(R.string.last_video)
  val accessibility=LocalAccessibilityManager.current
  val active=session
@@ -110,7 +109,13 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
    }
   }}
   val currentItem=state.items.getOrNull(pager.settledPage)
-  if(detailsOpen&&currentItem!=null)MediaDetailsSheet(currentItem,state.pathLabel,{detailsOpen=false}){bulletin=copied}
+  // Controls describe one page. While pages move they step aside, and after the
+  // pager rests they name the new page even before the player has switched to it,
+  // so nothing from the previous video stays on screen.
+  val swiping=pager.isScrollInProgress
+  val currentKey=currentItem?.playback(c)?.cacheKey
+  val live=currentKey!=null&&playback.id==currentKey
+  if(detailsOpen&&currentItem!=null)MediaDetailsSheet(currentItem,state.pathLabel){detailsOpen=false}
   Box(Modifier.fillMaxSize().background(Color.Black)){
    // The video Surface belongs to the session, not a pager item. Recreating it
    // for every settled page forces compositor transactions and decoder output
@@ -120,31 +125,38 @@ fun PlayerRoute(vm:PlayerViewModel,c:Connection,loader:ImageLoader,create:suspen
      val now=android.os.SystemClock.elapsedRealtime();seekSeconds=if(now-seekAt<=600&&seekForward==forward)seekSeconds+10 else 10;seekForward=forward;seekAt=now
      active.player.seekTo((active.player.currentPosition+if(forward)10000 else -10000).coerceIn(0,active.player.duration.coerceAtLeast(0)));interactionSerial++
    })){index->val item=state.items[index];val activePage=pager.settledPage==index;val selected=activePage&&!pager.isScrollInProgress
-    Box(Modifier.fillMaxSize()){
-     if(!selected||playback.id!=item.playback(c).cacheKey||!playback.firstFrame){val context=LocalContext.current;val request=remember(item.id,item.version,c.token){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()};AsyncImage(request,item.name,imageLoader=loader,contentScale=ContentScale.Fit,modifier=Modifier.fillMaxSize())}
-     if(selected&&playback.error){val unsupported=active.player.playerError?.errorCode in listOf(androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES)
+    val covered=!selected||playback.id!=item.playback(c).cacheKey||!playback.firstFrame
+    // A covered page is opaque: the shared Surface behind it may still hold the
+    // previous video's last frame, which would show through letterboxing or a
+    // cover that has not loaded yet.
+    Box(Modifier.fillMaxSize().then(if(covered)Modifier.background(Color.Black)else Modifier)){
+     if(covered){val context=LocalContext.current;val request=remember(item.id,item.version,c.token){ImageRequest.Builder(context).data("${c.address}/v1/media/${item.id}/thumbnail?version=${item.version}").httpHeaders(NetworkHeaders.Builder().set("Authorization","Bearer ${c.token}").build()).build()};AsyncImage(request,item.name,imageLoader=loader,contentScale=ContentScale.Fit,modifier=Modifier.fillMaxSize())}
+     if(selected&&playback.error&&playback.id==item.playback(c).cacheKey){val unsupported=active.player.playerError?.errorCode in listOf(androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES)
       Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.8f)).padding(20.dp),horizontalAlignment=Alignment.CenterHorizontally){Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_video_off),null,Modifier.size(48.dp),tint=Color.White);Text(stringResource(if(unsupported)R.string.cannot_decode else R.string.playback_error),color=Color.White);Text(active.player.playerError?.errorCodeName.orEmpty(),color=Color.White.copy(alpha=.6f));dev.vvideo.ui.component.VVButton(stringResource(if(unsupported)R.string.media_details else R.string.retry),{if(unsupported)detailsOpen=true else {vm.retry(item.id);active.select(item.playback(c))}},kind=dev.vvideo.ui.component.ButtonKind.Secondary)}
      }
 
     }
    }
-   androidx.compose.animation.AnimatedVisibility(controlsVisible,Modifier.align(Alignment.TopCenter),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(150))){PlayerChrome(currentItem,active.player,onBack,{detailsOpen=true},{bulletin=copied},onMenuChanged={menuOpen=it})}
-   Box(Modifier.align(Alignment.BottomCenter).then(if(controlsVisible)Modifier.background(BottomViewerGradient).padding(top=40.dp)else Modifier).navigationBarsPadding()){
-    SeekBar(active.player,playback.id,!pager.isScrollInProgress&&playback.firstFrame&&!playback.error,controlsVisible,currentItem?.displayRatio?.let{it>1f}==true,{activity?.requestedOrientation=if(isLandscape)android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE},Modifier.onFocusChanged{controlFocused=it.hasFocus},leaving){dragging=it;interactionSerial++}
+   androidx.compose.animation.AnimatedVisibility(controlsVisible&&!swiping,Modifier.align(Alignment.TopCenter),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))){PlayerChrome(currentItem,onBack,{detailsOpen=true})}
+   androidx.compose.animation.AnimatedVisibility(!swiping,Modifier.align(Alignment.BottomCenter),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))){
+    Box(Modifier.then(if(controlsVisible)Modifier.background(BottomViewerGradient).padding(top=40.dp)else Modifier).navigationBarsPadding()){
+     SeekBar(active.player,currentKey.orEmpty(),live,currentItem?.durationMs?:0L,live&&playback.firstFrame&&!playback.error,controlsVisible,currentItem?.displayRatio?.let{it>1f}==true,{activity?.requestedOrientation=if(isLandscape)android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE},Modifier.onFocusChanged{controlFocused=it.hasFocus},leaving,{menuOpen=it}){dragging=it;interactionSerial++}
+    }
    }
-   if(!playing&&playback.firstFrame&&!playback.error&&!playback.buffering&&!pager.isScrollInProgress)dev.vvideo.ui.component.ActionIcon(R.drawable.ic_play,R.string.play,{active.player.play()},Modifier.align(Alignment.Center).size(64.dp).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),Color.White)
+   if(live&&!playing&&playback.firstFrame&&!playback.error&&!playback.buffering&&!pager.isScrollInProgress)dev.vvideo.ui.component.ActionIcon(R.drawable.ic_play,R.string.play,{active.player.play()},Modifier.align(Alignment.Center).size(64.dp).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),Color.White)
    if(holding)Text(stringResource(R.string.speed_hold),Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=72.dp).background(Color.Black.copy(alpha=.5f),androidx.compose.foundation.shape.CircleShape).padding(12.dp),color=Color.White)
    if(seekSeconds>0)Box(Modifier.align(if(seekForward)Alignment.CenterEnd else Alignment.CenterStart).fillMaxHeight(.5f).fillMaxWidth(.4f).background(Color.White.copy(alpha=.13f),androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center){Text(stringResource(if(seekForward)R.string.seek_forward else R.string.seek_back,seekSeconds),color=Color.White)}
    dev.vvideo.ui.component.BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
-   if(!state.error&&(playback.buffering||!playback.firstFrame&&!playback.error))Box(Modifier.align(Alignment.Center).size(64.dp).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center){CircularProgressIndicator(Modifier.size(48.dp),color=Color.White)}
+   if(!state.error&&!swiping&&(playback.buffering||!playback.firstFrame&&!playback.error))Box(Modifier.align(Alignment.Center).size(64.dp).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center){CircularProgressIndicator(Modifier.size(48.dp),color=Color.White)}
    if(state.error&&state.items.isEmpty())Text(stringResource(R.string.playback_error),color=Color.White,modifier=Modifier.align(Alignment.Center))
   }
  }
 }
 fun Media.playback(c:Connection)=PlaybackItem(c.id,libraryId,id,version,"${c.address}/v1/media/$id/bytes?version=$version","${c.address}/v1/media/$id/index?version=$version",c.token,size,durationMs)
-// Photos page through the folder's image queue the way videos do. Zoom belongs
-// to the page in front: the pager stands still while it is enlarged, and
-// one-finger drags pan the photo instead.
+// Photos page left and right through the folder's image queue, like a phone
+// gallery; videos keep the vertical feed. Zoom belongs to the page in front:
+// the pager stands still while it is enlarged, and one-finger drags pan the
+// photo instead.
 @Composable
 fun PhotoScreen(state:PlayerUiState,c:Connection,loader:ImageLoader,onBack:()->Unit,onRetry:()->Unit,onSelected:(String)->Unit,onPage:(Boolean)->Unit,leaving:Boolean=false){
  // Sized from the loaded queue so the first frame is already the tapped photo.
@@ -160,26 +172,25 @@ fun PhotoScreen(state:PlayerUiState,c:Connection,loader:ImageLoader,onBack:()->U
  val latest by rememberUpdatedState(state)
  var offset by remember(item?.id){mutableStateOf(Offset.Zero)}
  var controls by remember{mutableStateOf(true)};var details by remember{mutableStateOf(false)}
- var bulletin by remember{mutableStateOf<String?>(null)};val copied=stringResource(R.string.copied)
  val transform=rememberTransformableState{zoom,pan,_->scale=(scale*zoom).coerceIn(1f,4f);offset=if(scale==1f)Offset.Zero else offset+pan}
  // A pinch released a hair above full view would keep the pager locked with
  // nothing visibly enlarged, so it settles back to full view.
  LaunchedEffect(transform.isTransformInProgress){if(!transform.isTransformInProgress&&scale<1.1f){scale=1f;offset=Offset.Zero}}
  LaunchedEffect(pager,state.items.size,leaving){if(leaving)return@LaunchedEffect;snapshotFlow{pager.settledPage}.distinctUntilChanged().collect{index->latest.items.getOrNull(index)?.let{onSelected(it.id)};if(index>=latest.items.size-3)onPage(false);if(index<2&&latest.items.isNotEmpty())onPage(true)}}
- if(details&&item!=null)MediaDetailsSheet(item,state.pathLabel,{details=false}){bulletin=copied}
+ if(details&&item!=null)MediaDetailsSheet(item,state.pathLabel){details=false}
  Box(Modifier.fillMaxSize().background(Color.Black)){
   // Neighbours are composed ahead with their thumbnail only, so a swipe never
   // drags in an empty page. The original is fetched once a page comes in front
   // and kept until the pager rests on another page: one original at rest, two
   // while a swipe is under way.
   val resting=!pager.isScrollInProgress
-  VerticalPager(state=pager,key={state.items[it].id},beyondViewportPageCount=1,userScrollEnabled=!zoomed,modifier=Modifier.fillMaxSize()){index->val photo=state.items[index];val front=photo.id==item?.id
+  // The gap keeps two photos apart while a swipe shows both.
+  HorizontalPager(state=pager,key={state.items[it].id},beyondViewportPageCount=1,pageSpacing=16.dp,userScrollEnabled=!zoomed,modifier=Modifier.fillMaxSize()){index->val photo=state.items[index];val front=photo.id==item?.id
    PhotoPage(photo,c,loader,front,resting,if(front){{scaleX=scale;scaleY=scale;translationX=offset.x;translationY=offset.y}}else null,
     Modifier.pointerInput(photo.id,front){detectTapGestures(onTap={controls=!controls},onDoubleTap={point->if(front){if(scale>1f){scale=1f;offset=Offset.Zero}else{scale=2.5f;offset=Offset((size.width/2f-point.x)*1.5f,(size.height/2f-point.y)*1.5f)}}})}.then(if(front)Modifier.transformable(transform,canPan={scale>1f})else Modifier))
   }
   if(state.error&&state.items.isEmpty())Column(Modifier.align(Alignment.Center).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(stringResource(R.string.photo_failed),color=Color.White);Button(onClick=onRetry){Text(stringResource(R.string.retry))}}
-  if(controls)PlayerChrome(item,null,onBack,{details=true},{bulletin=copied},Modifier.align(Alignment.TopCenter))
-  dev.vvideo.ui.component.BulletinHost(bulletin,{bulletin=null},Modifier.align(Alignment.BottomCenter))
+  androidx.compose.animation.AnimatedVisibility(controls&&!pager.isScrollInProgress,Modifier.align(Alignment.TopCenter),enter=androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),exit=androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100))){PlayerChrome(item,onBack,{details=true})}
  }
 }
 @Composable

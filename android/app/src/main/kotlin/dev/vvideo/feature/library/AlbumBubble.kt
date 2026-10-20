@@ -49,11 +49,10 @@ fun AlbumBubble(album:Album,loader:ImageLoader,connection:Connection,thumbnail:(
  val textStyle=MaterialTheme.typography.labelMedium
  val pending=stringResource(R.string.unknown_duration)
  val labels=remember(album.items,pending){album.items.map{if(it.durationMs>0)mediaDuration(it.durationMs)else pending}}
- val minWidths=remember(labels,album.timeLabel,density.fontScale,textStyle){labels.mapIndexed{index,label->
-  val durationWidth=with(density){measurer.measure("▶ "+label,textStyle).size.width.toDp().value}+26f
-  val timeWidth=if(index==album.items.lastIndex&&album.timeLabel!=null)with(density){measurer.measure(album.timeLabel,textStyle).size.width.toDp().value}+26f else 0f
-  maxOf(durationWidth,timeWidth)
- }}
+ // Only video cells carry a label (their duration). The group's capture time
+ // is no longer drawn in the last cell: on a photo it read as the photo's own
+ // time or duration, and the date row above the group already names the day.
+ val minWidths=remember(labels,density.fontScale,textStyle){labels.map{label->with(density){measurer.measure("▶ "+label,textStyle).size.width.toDp().value}+26f}}
  BoxWithConstraints(Modifier.fillMaxWidth().padding(start=8.dp,end=8.dp,bottom=6.dp)){
   val width=maxWidth
   // Settled in the item's first composition: the row split depends on the
@@ -68,7 +67,6 @@ fun AlbumBubble(album:Album,loader:ImageLoader,connection:Connection,thumbnail:(
      BoxWithConstraints(Modifier.weight(row.weights[position]).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant).combinedClickable(onClick={onMedia(item)},onLongClick={onDetails(item)})){
       Thumbnail(item,connection,loader,thumbnail){coverLoaded=it}
       if(coverLoaded&&item.kind=="video"&&minOf(maxWidth,maxHeight)>=96.dp)Box(Modifier.size(40.dp).align(Alignment.Center).background(Color.Black.copy(alpha=.45f),androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center){Icon(painterResource(R.drawable.ic_play),null,tint=Color.White,modifier=Modifier.size(24.dp))}
-      if(index==album.items.lastIndex&&album.timeLabel!=null)Text(album.timeLabel,color=Color.White,style=textStyle,maxLines=1,modifier=Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color.Black.copy(alpha=.5f),RoundedCornerShape(10.dp)).padding(horizontal=7.dp,vertical=2.dp))
       if(item.kind=="video")Text("▶ "+labels[index],color=Color.White,style=textStyle,maxLines=1,modifier=Modifier.align(Alignment.TopStart).padding(6.dp).background(Color.Black.copy(alpha=.5f),RoundedCornerShape(10.dp)).padding(horizontal=7.dp,vertical=2.dp))
      }
     }

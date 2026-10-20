@@ -34,7 +34,6 @@ data class TimeLabels(
     companion object {
         fun instant(nanos: Long): Instant = Instant.ofEpochSecond(Math.floorDiv(nanos, 1_000_000_000L), Math.floorMod(nanos, 1_000_000_000L))
         fun timestamp(nanos:Long,pattern:String,zone:ZoneId=ZoneId.systemDefault(),locale:Locale=Locale.getDefault()):String=instant(nanos).atZone(zone).format(DateTimeFormatter.ofPattern(pattern,locale))
-        fun time(nanos: Long, zone: ZoneId = ZoneId.systemDefault()): String = instant(nanos).atZone(zone).format(DateTimeFormatter.ofPattern("HH:mm"))
     }
 }
 

@@ -14,7 +14,7 @@ VVideo indexes an existing folder-organized media library with a Go service on L
 
 - Folder navigation, ten-item aspect-aware albums, global server sorting by capture time, modification time or name, with stable ID ties.
 - Persistent per-folder sort and media anchors; bounded bidirectional metadata windows. Cache clearing preserves settings and browsing records.
-- A vertical video feed using one active Media3 player, versioned byte caches and bounded cancellable next-video prefetch. Images support full-screen viewing, zoom and vertical swiping between the photos of a folder; media details identify the sorting time source.
+- A vertical video feed using one active Media3 player, versioned byte caches and bounded cancellable next-video prefetch. Images support full-screen viewing, zoom and horizontal swiping between the photos of a folder; media details identify the sorting time source.
 - SQLite WAL/FULL, one writer and four read connections, streaming scans with 128-entry batches, isolated disk staging and atomic directory publication. Failed/offline scans preserve the previous index; absence requires two consecutive complete healthy scans.
 - Durable delayed metadata/cover jobs, bounded ffprobe/FFmpeg execution, one WebP cover per video, and disk-budgeted thumbnail LRU.
 - Bearer-authenticated APIs, HTTP Range/ETag/version checks, optional original-offset MP4 index hints, foreground playback priority and scheduled scans.

@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName="bookmarks",primaryKeys=["connection","directory"],indices=[Index(value=["connection","hiddenFromRecent","visitedAt"])])
 data class BookmarkEntity(
- val connection:String,val directory:Long,val library:String,val sort:String="capture",val direction:String="desc",
+ val connection:String,val directory:Long,val library:String,val sort:String="capture",val direction:String="asc",
  val anchor:String="",val neighbor:String="",val fallback:String="",val pixelOffset:Int=0,val width:Int=0,val revision:Long=0,val savedAt:Long=0,val formatVersion:Int=1,
  @ColumnInfo(defaultValue="''") val name:String="",
  @ColumnInfo(defaultValue="''") val pathLabel:String="",
@@ -34,5 +34,12 @@ val BrowseMigration1To2=object:Migration(1,2){override fun migrate(db:SupportSQL
  db.execSQL("ALTER TABLE bookmarks ADD COLUMN hiddenFromRecent INTEGER NOT NULL DEFAULT 0")
  db.execSQL("CREATE INDEX IF NOT EXISTS index_bookmarks_connection_hiddenFromRecent_visitedAt ON bookmarks(connection,hiddenFromRecent,visitedAt)")
 }}
-@Database(entities=[BookmarkEntity::class],version=2,exportSchema=true)
+// The default became oldest first. A visited folder stored the default it was
+// opened with and cannot be told apart from an explicit "newest first", so
+// every newest-first capture sort moves to the new default once; its anchor
+// and offset belonged to the other direction and are dropped.
+val BrowseMigration2To3=object:Migration(2,3){override fun migrate(db:SupportSQLiteDatabase){
+ db.execSQL("UPDATE bookmarks SET direction='asc',anchor='',neighbor='',fallback='',pixelOffset=0,width=0 WHERE sort='capture' AND direction='desc'")
+}}
+@Database(entities=[BookmarkEntity::class],version=3,exportSchema=true)
 abstract class BrowseDatabase:RoomDatabase(){abstract fun bookmarks():BookmarkDao}
