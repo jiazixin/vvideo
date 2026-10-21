@@ -620,3 +620,28 @@ ADB 主机命令 exit 0 不代表测试成功：这是主动停止冻结 runner 
 最终 APK 深浅首页/相册截图在 `delivery-home-{dark,light}.png`、`delivery-album-{dark,light}.png`，已查看确认主题、可见文字/角标与系统栏；仅覆盖截图状态。手机已恢复跟随系统、字号 1.0、动画倍率 1.0，安装摘要再次核对一致，停在首页。保留合成服务 19092 和对应 USB reverse 供继续查看，停止本轮无用服务与日志采集。没有真机性能全通过结论。
 
 未完成的受控首帧/seek、真实 NAS/4K/竞争、完整 TalkBack/预测返回/全部长文本与冷启动白闪，以及原样人工清单，集中见 [实施记录](plans/2026-10-10-android-ui-execution.md)。此处数值与历史其他 APK 验收严格分开。
+
+## 2026-10-21：上线前安卓代码整理与回归
+
+整理只改代码组织（命名、拆分、服务端字符串转枚举、`LibraryRepository`、常量与主题色），不改产品行为；同时修复一个查看器手势缺陷，并补上设备间传输的数据排除规则。条件：iQOO 12 Pro（Android 15，120 Hz），本机 macOS 合成 fixture 服务经 `adb reverse` 回环访问（`media` 根 14 个视频、`large` 约 1000 张图片），不是 Linux/NAS 实测。原始结果在被忽略的 `test-results/release-refactor-2026-10-21/`。
+
+- **构建与静态检查**：`testDebugUnitTest` 70 项通过（新增 12 项：封面重试、Retry-After 解析、查看器翻页边界、服务端取值映射、字节格式）；`lintDebug` 剩 4 条警告，均在整理前已存在。只动 import 的步骤以各类 `javap -c -p` 归一化输出逐类比对，结果一致。
+- **设备行为测试**（`device` 变体）：整理前 6 项失败，整理后失败项相同。随后逐项排查：
+  - `invalidConnectionReportsConnectionError` 是测试过时：2026-10-20 起任意主机均可用 HTTP，`http://example.org` 已是合法地址，现改用带路径的无效地址后通过。
+  - `realUiBidirectionalWindowAndRestoration` 是测试过时：Telegram 式相册更高，固定 55 次滑动只加载满 300 项、未淘汰首页；改为滑到窗口越过首页为止（上限 200 次）后通过，窗口与恢复断言不变。
+  - `PhotoDeviceTest#originalPhotoPinchAndReturn` 暴露真实缺陷：`detectTapGestures` 不看位移，照片横向分页后竖滑不被消费，被当成单击切掉顶栏（视频纵向翻页时横滑同理）。两个查看器改为位移超过 touch slop 不算单击，修复后两项照片测试通过。
+  - `codecContainerMatrixSeekAndCacheClear` 仍失败：只有下载样本 `nile-falls.webm`（VP9 1080p、11 s、仅 0 s 一个关键帧）seek 到 3/4 后 885–906 ms 才 READY，超过 800 ms 断言；其余 13 个文件通过。原因是精确 seek 须从唯一关键帧解码约 8 s；门槛未放宽，是否把这类单关键帧样本移出该断言待定。
+  - `unsupportedVideoShowsErrorAndNextRecovers`、`feedWindowCancellationAndReverse` 需要的 `negative`、`feed` 目录不在本 fixture，未执行到断言。
+- **帧表现**（`profile`，整理前 `d01124cb…`、整理后 `a2af3f2d…` 交替安装各 6 次，每次预热后 3 轮；修复后 `ae2a54d5…` 视频 3 轮）：
+
+| 场景 | 构建 | 轮数 | 超限比例中位数 | 超 1% 的轮 | CPU p95 中位数 | 最差超限 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `large` 相册滚动 | 整理前 | 18 | 0.45% | 0 | 6.68 ms | 6.2 ms |
+| `large` 相册滚动 | 整理后 | 18 | 0.53% | 2（3.18%、3.62%） | 6.84 ms | 12.0 ms |
+| 全屏视频翻页 | 整理前 | 6 | 0.04% | 1（1.85%） | 4.31 ms | 12.2 ms |
+| 全屏视频翻页 | 整理后 | 6 | 0.08% | 1（3.56%） | 4.42 ms | 7.7 ms |
+| 全屏视频翻页 | 手势修复后 | 3 | 0.00% | 0 | 4.35 ms | 11.1 ms |
+
+整理后相册两轮超过 1% 门槛，未达标，如实保留。trace 对比显示超标轮与同一安装的正常轮 Compose 工作量相同（recompose 188 ms 对 188.8 ms，预取测量 80 对 74 ms），只有 `draw-VRI` 合计变慢（883 对 762 ms），更像设备侧波动；但整理前 18 轮未出现，不能据此宣称相册帧表现已通过。
+- **数据外移**：`allowBackup="false"` 外新增 `dataExtractionRules`（云备份与设备间传输均排除全部域）和 Android 11 及以下的 `fullBackupContent`；仅经 lint 验证，未实际做换机传输。
+- **手机状态**：测试会改写连接，测试前用 debug 包在应用沙箱内备份连接与书签，测试后还原并核对 md5 一致、删除备份，最后装回修复后的 `profile` 包。

@@ -145,12 +145,23 @@ class DevicePlaybackTest {
                         "VVideoValidation",
                         "matrix=${item.name} first_frame_ms=${SystemClock.elapsedRealtime() - began} decoder=${decoder.get()}"
                     )
+                    val seekBegan = SystemClock.elapsedRealtime()
                     withContext(Dispatchers.Main) { session.player.seekTo(item.durationMs * 3 / 4) }
                     delay(800)
-                    withContext(Dispatchers.Main) {
+                    val readyAt800 = withContext(Dispatchers.Main) {
                         assertNull("seek failed ${item.name}", session.player.playerError)
                         assertTrue(session.player.currentPosition >= item.durationMs / 2)
-                        assertEquals(Player.STATE_READY, session.player.playbackState)
+                        session.player.playbackState == Player.STATE_READY
+                    }
+                    if (!readyAt800) {
+                        // Diagnostic only: how long the seek really took. The 800 ms check stands.
+                        val readyMs = withTimeoutOrNull(10000) {
+                            while (withContext(Dispatchers.Main) { session.player.playbackState } != Player.STATE_READY) {
+                                delay(20)
+                            }
+                            SystemClock.elapsedRealtime() - seekBegan
+                        }
+                        fail("not ready 800 ms after seeking ${item.name}; ready after ${readyMs ?: ">10000"} ms")
                     }
                 }
             } finally {
@@ -360,7 +371,11 @@ class DevicePlaybackTest {
             }
             withTimeout(15000) { vm.state.first { it.directory?.id == large.id && !it.busy && it.albums.isNotEmpty() } }
             val first = vm.state.value.albums.first().items.first().id
-            repeat(55) {
+            // Albums are as tall as the device's grouped layout makes them, so swipe until
+            // the window has dropped its first page rather than a fixed number of times.
+            var swipes = 0
+            while (swipes < 200 && vm.state.value.albums.first().items.first().id == first) {
+                swipes++
                 device.swipe(
                     device.displayWidth / 2,
                     device.displayHeight * 3 / 4,
@@ -373,11 +388,14 @@ class DevicePlaybackTest {
                 assertTrue(items.size <= 300)
                 assertEquals(items.size, items.map { it.id }.toSet().size)
             }
+            val shown = vm.state.value
             assertNotEquals(
-                "did not cross retained window",
+                "did not cross retained window after $swipes swipes: items=${shown.albums.sumOf { it.items.size }} " +
+                    "hasPrevious=${shown.hasPrevious} pageBusy=${shown.pageBusy} error=${shown.error}",
                 first,
                 vm.state.value.albums.first().items.first().id
             )
+            Log.i("VVideoValidation", "ui_window_crossed_after_swipes=$swipes")
             delay(800)
             saved = graph.database.bookmarks().get(c.id, large.id)
             assertTrue(saved?.anchor?.isNotEmpty() == true)
@@ -1158,7 +1176,8 @@ class DevicePlaybackTest {
                 graph.cache,
                 graph.library
             )
-            vm.connect("http://example.org", "synthetic-unused")
+            // A server root only: a path makes the address invalid before any request.
+            vm.connect("http://example.org/library", "synthetic-unused")
         }
         val result = withTimeout(5000) { vm.state.first { it.message != null && !it.busy } }
         assertEquals(dev.vvideo.feature.settings.SettingsMessage.InvalidAddress, result.message)
