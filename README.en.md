@@ -100,7 +100,7 @@ Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规
 
 | Component | Version |
 | --- | --- |
-| Go | **1.27.1** or newer, as declared in [go.mod](go.mod) |
+| Go | **1.27.3** or newer, as declared in [go.mod](go.mod) |
 | FFmpeg | `ffmpeg` and `ffprobe` on `PATH`; `ffmpeg` must include the `libwebp` encoder |
 | JDK (Android) | 21 |
 | Android SDK | Platform 36 and Build-Tools 35.0.0; devices running Android 9 (API 28) or later |

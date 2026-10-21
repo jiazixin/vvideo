@@ -100,7 +100,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 | 组件 | 版本 |
 | --- | --- |
-| Go | **1.27.1** 或更高，以 [go.mod](go.mod) 为准 |
+| Go | **1.27.3** 或更高，以 [go.mod](go.mod) 为准 |
 | FFmpeg | `PATH` 中有 `ffmpeg` 和 `ffprobe`；`ffmpeg` 必须带 `libwebp` 编码器 |
 | JDK（安卓） | 21 |
 | Android SDK | Platform 36、Build-Tools 35.0.0；设备需 Android 9（API 28）及以上 |
