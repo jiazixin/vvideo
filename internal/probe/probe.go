@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -102,6 +103,11 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// An FFmpeg too old for HEIF still leaves the item properties.
+		r := Result{Width: 1, Height: 1, EffectiveTime: e.Mtime, CapturedSource: "mtime"}
+		if e.Kind == "image" && IsHEIF(e.Name) && applyHEIF(&r, f, e) {
+			return r, nil
+		}
 		return Result{}, stderr.Wrap("ffprobe", err)
 	}
 	var data struct {
@@ -155,7 +161,9 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 			r.CapturedSource = "container_creation_time"
 		}
 	}
-	if e.Kind == "image" {
+	if e.Kind == "image" && IsHEIF(e.Name) {
+		applyHEIF(&r, f, e)
+	} else if e.Kind == "image" {
 		if _, err = f.Seek(0, io.SeekStart); err != nil {
 			return r, err
 		}
@@ -169,6 +177,30 @@ func Run(ctx context.Context, f *os.File, e library.Entry) (Result, error) {
 		}
 	}
 	return r, nil
+}
+
+// IsHEIF reports whether name is a HEIF or AVIF image by its extension.
+func IsHEIF(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".heic", ".heif", ".avif":
+		return true
+	}
+	return false
+}
+
+// applyHEIF takes the size, rotation and capture time of e's primary image
+// from its HEIF item properties, reporting whether they could be read.
+func applyHEIF(r *Result, f *os.File, e library.Entry) bool {
+	h, err := ReadHEIF(f, e.Size)
+	if err != nil {
+		return false
+	}
+	r.Width, r.Height, r.Rotation = h.Width, h.Height, h.Rotation
+	if h.CapturedRaw != "" {
+		r.CapturedRaw = h.CapturedRaw
+		r.EffectiveTime, r.CapturedSource = CapturedTime(h.CapturedRaw, h.Offset, e.Mtime)
+	}
+	return true
 }
 
 // Worker runs probe jobs. Tool and Rescan are optional: Tool replaces Run in

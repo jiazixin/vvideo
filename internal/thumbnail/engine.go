@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -228,6 +229,19 @@ func (e *Engine) Evict(ctx context.Context, reserve int64) error {
 	}
 }
 
+// rotation returns the filters that turn an image clockwise by degrees.
+func rotation(degrees int) string {
+	switch degrees {
+	case 90:
+		return "transpose=clock,"
+	case 180:
+		return "hflip,vflip,"
+	case 270:
+		return "transpose=cclock,"
+	}
+	return ""
+}
+
 // Run generates one cover and records its outcome in Metrics.
 func (e *Engine) Run(ctx context.Context, j jobs.Job) error {
 	err := e.run(ctx, j, time.Now())
@@ -266,11 +280,32 @@ func (e *Engine) run(ctx context.Context, j jobs.Job, start time.Time) error {
 	timeout, cancel := context.WithTimeout(ctx, coverTimeout)
 	defer cancel()
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", strconv.Itoa(e.Config.Cache.Threads)}
+	filter := coverFilter
+	var grid probe.Grid
+	tiled := false
 	if item.Kind == "video" {
 		seconds := float64(item.DurationMS) / 1000 * e.Config.Cache.Percent / 100
 		args = append(args, "-ss", strconv.FormatFloat(seconds, 'f', 3, 64))
+	} else {
+		// FFmpeg versions differ on applying EXIF/irot rotation to images, so
+		// the probed rotation is applied explicitly, matching the size the
+		// client lays out.
+		args = append(args, "-noautorotate")
+		filter = rotation(item.Rotation) + filter
+		if probe.IsHEIF(item.Name) {
+			grid, tiled = probe.TileGrid(ctx, f)
+			if _, err = f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+		}
 	}
-	args = append(args, "-i", probe.ExtraFilePath(), "-map", "0:v:0", "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-vf", coverFilter, "-c:v", Encoder, "-threads:v", "1", "-quality", coverQuality, "-y", temp)
+	args = append(args, "-i", probe.ExtraFilePath())
+	if tiled {
+		args = append(args, "-filter_complex", grid.Filter()+","+filter+"[cover]", "-map", "[cover]")
+	} else {
+		args = append(args, "-map", "0:v:0", "-vf", filter)
+	}
+	args = append(args, "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-c:v", Encoder, "-threads:v", "1", "-quality", coverQuality, "-y", temp)
 	cmd := exec.CommandContext(timeout, "ffmpeg", args...)
 	cmd.ExtraFiles = []*os.File{f}
 	var stderr probe.Diagnostics
