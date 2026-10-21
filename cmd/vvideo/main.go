@@ -24,6 +24,11 @@ const (
 	exitUsage   = 2
 
 	shutdownTimeout = 30 * time.Second
+	// httpDrain is how long in-flight requests may finish after a stop
+	// signal. Connections still open then, such as a stream to a client that
+	// stopped reading, are closed so background work gets the rest of
+	// shutdownTimeout.
+	httpDrain = 10 * time.Second
 )
 
 func main() {
@@ -121,11 +126,17 @@ func serve(c config.Config) error {
 	return errors.Join(err, shutdown(server, a))
 }
 
-// shutdown drains HTTP requests and background work within shutdownTimeout.
+// shutdown drains HTTP requests within httpDrain and background work within
+// shutdownTimeout.
 func shutdown(server *http.Server, a *app.App) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	server.Shutdown(ctx)
+	drain, stopDrain := context.WithTimeout(ctx, httpDrain)
+	defer stopDrain()
+	if server.Shutdown(drain) != nil {
+		slog.Warn("http_drain_incomplete", "outcome", "remaining connections closed")
+		server.Close()
+	}
 	closed := make(chan error, 1)
 	go func() { closed <- a.Close() }()
 	select {
