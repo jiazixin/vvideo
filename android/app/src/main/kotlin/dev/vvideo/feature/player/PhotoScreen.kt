@@ -68,13 +68,17 @@ fun PhotoScreen(
     onPage: (PageEdge) -> Unit,
     leaving: Boolean = false
 ) {
+    // The page count is read when the pager measures, so it must come from the
+    // latest queue: a count captured with an earlier queue outlives a shrunken or
+    // emptied one and indexes past it.
+    val latest by rememberUpdatedState(state)
     // Sized from the loaded queue so the first frame is already the tapped photo.
     val pager = key(
         state.initialId,
         state.items.isEmpty()
     ) {
         rememberPagerState(initialPage = state.items.indexOfFirst { it.id == state.initialId }
-            .coerceAtLeast(0), pageCount = { state.items.size })
+            .coerceAtLeast(0), pageCount = { latest.items.size })
     }
     // The laid-out key names the page in front even in the one composition where
     // pages arrived ahead of it and its index has not been matched again yet.
@@ -90,7 +94,6 @@ fun PhotoScreen(
     // Composition follows only the enlarged/full-view flip; the scale itself is
     // read while drawing, so a pinch does not recompose the pager every frame.
     val zoomed by remember(scaleState) { derivedStateOf { scaleState.floatValue > 1f } }
-    val latest by rememberUpdatedState(state)
     var offset by remember(item?.id) { mutableStateOf(Offset.Zero) }
     var controls by remember { mutableStateOf(true) }
     var details by remember { mutableStateOf(false) }
@@ -123,13 +126,13 @@ fun PhotoScreen(
         // The gap keeps two photos apart while a swipe shows both.
         HorizontalPager(
             state = pager,
-            key = { state.items[it].id },
+            key = { latest.items[it].id },
             beyondViewportPageCount = 1,
             pageSpacing = 16.dp,
             userScrollEnabled = !zoomed,
             modifier = Modifier.fillMaxSize()
         ) { index ->
-            val photo = state.items[index]
+            val photo = latest.items[index]
             val front = photo.id == item?.id
             PhotoPage(
                 photo, connection, loader, front, resting, if (front) {
