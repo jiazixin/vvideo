@@ -802,3 +802,10 @@ device APK `95b97169e89e4688dfbc53608fd8a07327bba795c92160570d82191314de2d66`（
 - 已索引的 HEIC 与在旧 FFmpeg 上生成的 JPEG 封面不会自动重算，需文件变化或强制扫描（`POST /v1/scan?force=true`）。
 - 根目录被换成另一个文件系统（相同路径、不同 inode/挂载）时扫描持续失败并保留旧索引，这是既有安全设计；更换磁盘后需删除数据目录重建。
 - 测试前在应用沙箱内备份用户连接与书签，结束后还原并核对 md5 一致、删除备份，最后装回 profile 包；`adb reverse` 与 fixture 服务已停止。
+
+### 2026-10-22 代码质量专项（不改行为）
+
+- 工具：staticcheck 2026.2.2、`deadcode`（按 Linux 构建）、golangci-lint 2.15（dupl、unparam、gocognit、nestif、revive、gocritic 等）、detekt 1.23.8、jscpd 4。Go 与 Kotlin 均无未使用的函数、变量、参数或导入；jscpd 查出 Go 重复 0 处，Kotlin 4 处全部是相似的 import 列表。
+- Go 改动：新增 `storage.Collect` 统一“查询—逐行扫描—检查 `rows.Err`—关闭”，替换 17 处手写循环；目录列名与扫描集中为 `directoryColumns`/`scanDirectory`；`RebuildGroups` 拆出按序遍历（认知复杂度 99→36，时间键改用整数绑定，比较语义不变）；`stage.merge` 拆为基线对比、单项观察与新增文件（59→阈值以下）；`Reconcile` 拆为清理孤立文件与清理缺文件台账（72→阈值以下），`Evict` 的删除抽成 `evictCover`；封面 FFmpeg 参数抽成 `coverArgs`；HEIF `readItem` 改用字段读取器；内建名 `close`、`open`/`Open` 同名、裸 return、无格式参数的 `fmt.Errorf` 等命名与可读性问题修正。净减少 89 行。
+- 未改：Kotlin 的长 Compose 函数（`PlayerRoute`、`LibraryRoute` 等）已在 d814486 拆分过，继续拆会改变重组范围、可能影响帧表现；`TelegramGroupedLayout` 为 Telegram 移植，保持与上游对照；`ST1005` 报的是以专有名词开头的错误信息。
+- 验证：macOS 与 Linux `go test -race` 通过；51 万行分组与深处定位 212 秒、搜索最慢 114 ms，与重构前（222 秒、116 ms）持平；Linux 黑盒端到端 345 项全部通过；HEIF 模糊测试 60 秒无发现。Kotlin 未改动，未重跑设备测试。`open-code-review-delegate` 审查 18/18 个 Go 文件，重构中自引入的一处 `sql.ErrNoRows` 误返回已在提交前修正。

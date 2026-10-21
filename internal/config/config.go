@@ -361,10 +361,7 @@ func (s *settings) path(name, cwd string) (string, error) {
 func (s *settings) pathList(name, cwd string) ([]Path, error) {
 	raw := s.values[name]
 	var list []Path
-	if !strings.HasPrefix(strings.TrimSpace(raw), "[") {
-		return nil, fmt.Errorf("%s must be a JSON array of {\"path\": ...} objects", name)
-	}
-	if err := json.Unmarshal([]byte(raw), &list, json.RejectUnknownMembers(true)); err != nil {
+	if !strings.HasPrefix(strings.TrimSpace(raw), "[") || json.Unmarshal([]byte(raw), &list, json.RejectUnknownMembers(true)) != nil {
 		return nil, fmt.Errorf("%s must be a JSON array of {\"path\": ...} objects", name)
 	}
 	for i := range list {
@@ -494,7 +491,11 @@ func validateListen(listen string) error {
 	if strings.TrimSpace(listen) != listen || listen == "" {
 		return errors.New("server.listen must be a nonempty host or IP address")
 	}
-	if _, err := netip.ParseAddr(listen); strings.Contains(listen, ":") && err != nil {
+	// A colon can only belong to an IPv6 address; anything else carries a port.
+	if !strings.Contains(listen, ":") {
+		return nil
+	}
+	if _, err := netip.ParseAddr(listen); err != nil {
 		return fmt.Errorf("server.listen %q must be a host or IP address without a port; set the port in server.port", listen)
 	}
 	return nil
@@ -564,8 +565,8 @@ func ParseSize(s string) (int64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("cache.max_size %q must be a number followed by MB, GB, MiB or GiB", s)
 	}
-	v, err := strconv.ParseFloat(m[1], 64)
-	v *= units[m[2]]
+	n, err := strconv.ParseFloat(m[1], 64)
+	v := n * units[m[2]]
 	if err != nil || math.IsInf(v, 0) || v < 1 || v >= math.MaxInt64 {
 		return 0, fmt.Errorf("cache.max_size %q is outside the supported positive range", s)
 	}

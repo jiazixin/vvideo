@@ -240,93 +240,83 @@ func parseIpma(b []byte, associations map[uint32][]int) {
 
 // readItem returns the data of item id when iloc places it in one extent of
 // the file itself, bounded by maxExifSize; otherwise nil.
-func readItem(r io.ReaderAt, size int64, b []byte, id uint32) []byte {
-	if len(b) < 8 {
+func readItem(r io.ReaderAt, size int64, iloc []byte, id uint32) []byte {
+	if len(iloc) < 4 {
 		return nil
 	}
-	version := b[0]
-	offsetSize, lengthSize := int(b[4]>>4), int(b[4]&15)
-	baseSize, indexSize := int(b[5]>>4), 0
+	version := iloc[0]
+	f := fields{b: iloc, p: 4, ok: true} // after the FullBox header
+	sizes := f.uint(1)
+	offsetSize, lengthSize := int(sizes>>4), int(sizes&15)
+	sizes = f.uint(1)
+	baseSize, indexSize := int(sizes>>4), 0
 	if version == 1 || version == 2 {
-		indexSize = int(b[5] & 15)
+		indexSize = int(sizes & 15)
 	}
-	p := 6
-	var count uint32
-	if version < 2 {
-		if p+2 > len(b) {
-			return nil
-		}
-		count, p = uint32(binary.BigEndian.Uint16(b[p:])), p+2
-	} else {
-		if p+4 > len(b) {
-			return nil
-		}
-		count, p = binary.BigEndian.Uint32(b[p:]), p+4
+	idSize := 2 // item_count and item_ID widths
+	if version >= 2 {
+		idSize = 4
 	}
-	read := func(n int) (uint64, bool) {
-		if n > 8 || p+n > len(b) {
-			return 0, false
-		}
-		var v uint64
-		for _, c := range b[p : p+n] {
-			v = v<<8 | uint64(c)
-		}
-		p += n
-		return v, true
-	}
+	count := f.uint(idSize)
 	for range min(count, 1<<16) {
-		itemSize := 2
-		if version >= 2 {
-			itemSize = 4
-		}
-		item, ok := read(itemSize)
-		if !ok {
-			return nil
-		}
-		method := uint64(0)
+		item := f.uint(idSize)
+		var method uint64
 		if version == 1 || version == 2 {
-			if method, ok = read(2); !ok {
-				return nil
-			}
-			method &= 15
+			method = f.uint(2) & 15 // construction_method
 		}
-		if _, ok = read(2); !ok { // data_reference_index
-			return nil
-		}
-		base, ok := read(baseSize)
-		if !ok {
-			return nil
-		}
-		extents, ok := read(2)
-		if !ok {
-			return nil
-		}
+		f.uint(2) // data_reference_index
+		base := f.uint(baseSize)
+		extents := f.uint(2)
 		var offset, length uint64
 		for range extents {
-			if _, ok = read(indexSize); !ok {
-				return nil
-			}
-			if offset, ok = read(offsetSize); !ok {
-				return nil
-			}
-			if length, ok = read(lengthSize); !ok {
-				return nil
-			}
+			f.uint(indexSize)
+			offset, length = f.uint(offsetSize), f.uint(lengthSize)
 		}
-		if uint32(item) != id {
-			continue
-		}
-		start := base + offset
-		if method != 0 || extents != 1 || length == 0 || length > maxExifSize || start >= uint64(size) || length > uint64(size)-start {
+		if !f.ok {
 			return nil
 		}
-		data := make([]byte, length)
-		if _, err := r.ReadAt(data, int64(start)); err != nil {
-			return nil
+		if item == uint64(id) {
+			if method != 0 || extents != 1 {
+				return nil // in idat or split: not worth following for Exif
+			}
+			return readExtent(r, size, base+offset, length)
 		}
-		return data
 	}
 	return nil
+}
+
+// readExtent reads length bytes at start, which must lie inside the file and
+// not exceed maxExifSize.
+func readExtent(r io.ReaderAt, size int64, start, length uint64) []byte {
+	if length == 0 || length > maxExifSize || start >= uint64(size) || length > uint64(size)-start {
+		return nil
+	}
+	data := make([]byte, length)
+	if _, err := r.ReadAt(data, int64(start)); err != nil {
+		return nil
+	}
+	return data
+}
+
+// fields reads big-endian unsigned fields of up to 8 bytes from b. After any
+// read past the end, ok is false and further reads return 0.
+type fields struct {
+	b  []byte
+	p  int
+	ok bool
+}
+
+func (f *fields) uint(n int) uint64 {
+	if !f.ok || n > 8 || f.p+n > len(f.b) {
+		f.ok = false
+		return 0
+	}
+	var v uint64
+	for _, c := range f.b[f.p : f.p+n] {
+		v = v<<8 | uint64(c)
+	}
+	f.p += n
+	return v
 }
 
 // Grid is how FFmpeg (7.1 and later) exposes a tiled HEIF/AVIF image: tile

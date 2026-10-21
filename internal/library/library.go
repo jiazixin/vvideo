@@ -115,26 +115,28 @@ func (i *Index) Register(ctx context.Context, c config.Config) error {
 // Libraries lists the active libraries by name.
 func (i *Index) Libraries(ctx context.Context) ([]Library, error) {
 	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT l.id,l.name,l.root,l.identity,d.id,l.healthy FROM libraries l JOIN directories d ON d.library_id=l.id AND d.relative='.' WHERE l.active=1 ORDER BY l.name,l.id LIMIT 200")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Library{}
-	for rows.Next() {
+	return storage.Collect(rows, err, func(rows *sql.Rows) (Library, error) {
 		var l Library
-		if err = rows.Scan(&l.ID, &l.Name, &l.Root, &l.Identity, &l.DirectoryID, &l.Healthy); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
-	}
-	return out, rows.Err()
+		return l, rows.Scan(&l.ID, &l.Name, &l.Root, &l.Identity, &l.DirectoryID, &l.Healthy)
+	})
 }
+
+// directoryColumns selects a directory row d for scanDirectory.
+const directoryColumns = `d.id,d.library_id,coalesce(d.parent_id,0),d.relative,d.name,d.identity,d.generation,d.revision,d.state`
+
+// scanDirectory scans one row selected with directoryColumns.
+func scanDirectory(row interface{ Scan(...any) error }) (Directory, error) {
+	var d Directory
+	err := row.Scan(&d.ID, &d.LibraryID, &d.ParentID, &d.Relative, &d.Name, &d.Identity, &d.Generation, &d.Revision, &d.State)
+	return d, err
+}
+
+// scanDirectoryRow is scanDirectory for storage.Collect.
+func scanDirectoryRow(rows *sql.Rows) (Directory, error) { return scanDirectory(rows) }
 
 // Directory reads one directory row, whatever its state.
 func (i *Index) Directory(ctx context.Context, id int64) (Directory, error) {
-	var d Directory
-	err := i.Store.Reader.QueryRowContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE id=?", id).Scan(&d.ID, &d.LibraryID, &d.ParentID, &d.Relative, &d.Name, &d.Identity, &d.Generation, &d.Revision, &d.State)
-	return d, err
+	return scanDirectory(i.Store.Reader.QueryRowContext(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.id=?", id))
 }
 
 // Visible returns ErrUnavailable unless the directory and all its ancestors
@@ -215,19 +217,16 @@ func ScanEntry(row interface{ Scan(...any) error }) (Entry, error) {
 // Baseline pages the published entries of d by media ID, after the given ID.
 func (i *Index) Baseline(ctx context.Context, d Directory, after string) ([]Entry, error) {
 	rows, err := i.Store.Reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id>? ORDER BY e.media_id LIMIT ?`, d.ID, d.Generation, after, storage.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Entry{}
-	for rows.Next() {
-		e, err := ScanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return storage.Collect(rows, err, scanEntryRow)
+}
+
+// scanEntryRow is ScanEntry for storage.Collect.
+func scanEntryRow(rows *sql.Rows) (Entry, error) { return ScanEntry(rows) }
+
+// scanID scans a single integer ID column.
+func scanID(rows *sql.Rows) (int64, error) {
+	var id int64
+	return id, rows.Scan(&id)
 }
 
 // Media returns the published, visible version of one media item.
@@ -377,20 +376,7 @@ func (i *Index) Recover(ctx context.Context) error {
 	var after int64
 	for {
 		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT ?", after, storage.BatchSize)
-		if err != nil {
-			return err
-		}
-		ids := []int64{}
-		for rows.Next() {
-			var id int64
-			if err = rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		err = rows.Err()
-		rows.Close()
+		ids, err := storage.Collect(rows, err, scanID)
 		if err != nil {
 			return err
 		}

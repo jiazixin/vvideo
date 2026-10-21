@@ -15,9 +15,10 @@ import (
 type mountRecord struct{ root, point, kind, source string }
 
 // selectMount returns the mount containing path, preferring the entry whose
-// mount ID equals mountID when it is known. Mount numbers and options are observations of this mount namespace, not
-// persistent volume identity. Bind-root/point layout can also change inside
-// a read-only service namespace; the opened root inode identifies the directory.
+// mount ID equals mountID when it is known. Mount numbers and options are
+// observations of this mount namespace, not persistent volume identity.
+// Bind-root/point layout can also change inside a read-only service
+// namespace; the opened root inode identifies the directory.
 func selectMount(reader io.Reader, path string, mountID uint64) (mountRecord, error) {
 	scan := bufio.NewScanner(reader)
 	scan.Buffer(make([]byte, 4096), 1<<20)

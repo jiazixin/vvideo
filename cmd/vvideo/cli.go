@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,7 +50,7 @@ func parseArgs(args []string) (options, error) {
 	flags.SetOutput(io.Discard)
 	setConfig := func(v string) error {
 		if strings.TrimSpace(v) == "" {
-			return fmt.Errorf("file path must not be empty")
+			return errors.New("file path must not be empty")
 		}
 		o.configFile = v
 		return nil

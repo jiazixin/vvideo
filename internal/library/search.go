@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"vvideo/internal/storage"
 )
 
 const (
@@ -61,24 +63,11 @@ func (i *Index) Search(ctx context.Context, id int64, query string) (SearchResul
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, subtree+`
-		SELECT d.id,d.library_id,coalesce(d.parent_id,0),d.relative,d.name,d.identity,d.generation,d.revision,d.state
+		SELECT `+directoryColumns+`
 		FROM subtree s JOIN directories d ON d.id=s.id
 		WHERE s.id!=? AND d.name LIKE ? ESCAPE '\'
 		ORDER BY d.name,d.id LIMIT ?`, id, id, pattern, searchDirectoryLimit+1)
-	if err != nil {
-		return r, err
-	}
-	for rows.Next() {
-		var d Directory
-		if err = rows.Scan(&d.ID, &d.LibraryID, &d.ParentID, &d.Relative, &d.Name, &d.Identity, &d.Generation, &d.Revision, &d.State); err != nil {
-			rows.Close()
-			return r, err
-		}
-		r.Directories = append(r.Directories, d)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if r.Directories, err = storage.Collect(rows, err, scanDirectoryRow); err != nil {
 		return r, err
 	}
 
@@ -90,20 +79,7 @@ func (i *Index) Search(ctx context.Context, id int64, query string) (SearchResul
 		JOIN versions v ON v.media_id=e.media_id AND v.version=e.version
 		WHERE e.state='visible' AND e.name LIKE ? ESCAPE '\'
 		LIMIT ?`, id, pattern, searchMediaLimit+1)
-	if err != nil {
-		return r, err
-	}
-	for rows.Next() {
-		e, err := ScanEntry(rows)
-		if err != nil {
-			rows.Close()
-			return r, err
-		}
-		r.Items = append(r.Items, e)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if r.Items, err = storage.Collect(rows, err, scanEntryRow); err != nil {
 		return r, err
 	}
 

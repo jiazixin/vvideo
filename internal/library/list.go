@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+
+	"vvideo/internal/storage"
 )
 
 const (
@@ -125,9 +128,9 @@ func key(e Entry, sort string) string {
 	case "name":
 		return e.Name
 	case "mtime":
-		return fmt.Sprint(e.Mtime)
+		return strconv.FormatInt(e.Mtime, 10)
 	default:
-		return fmt.Sprint(e.EffectiveTime)
+		return strconv.FormatInt(e.EffectiveTime, 10)
 	}
 }
 
@@ -146,7 +149,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 		return p, err
 	}
 	defer tx.Rollback()
-	if err = tx.QueryRowContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE id=?", id).Scan(&p.Directory.ID, &p.Directory.LibraryID, &p.Directory.ParentID, &p.Directory.Relative, &p.Directory.Name, &p.Directory.Identity, &p.Directory.Generation, &p.Directory.Revision, &p.Directory.State); err != nil {
+	if p.Directory, err = scanDirectory(tx.QueryRowContext(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.id=?", id)); err != nil {
 		return p, err
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT healthy FROM libraries WHERE id=?", p.Directory.LibraryID).Scan(&p.Healthy); err != nil {
@@ -187,7 +190,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	if o.Anchor != "" {
 		anchor, err := ScanEntry(tx.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id=? AND e.state='visible'`, id, p.Directory.Generation, o.Anchor))
 		if err == nil {
-			start, groupErr := i.groupStart(ctx, tx, p.Directory, o, anchor)
+			start, groupErr := groupStart(ctx, tx, p.Directory, o, anchor)
 			if groupErr != nil {
 				return p, groupErr
 			}
@@ -215,21 +218,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	}
 	args = append(args, o.Limit+1)
 	rows, err := tx.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE `+filter+` ORDER BY e.`+col+` `+dir+`,e.media_id `+dir+` LIMIT ?`, args...)
-	if err != nil {
-		return p, err
-	}
-	p.Items = []Entry{}
-	for rows.Next() {
-		e, err := ScanEntry(rows)
-		if err != nil {
-			rows.Close()
-			return p, err
-		}
-		p.Items = append(p.Items, e)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if p.Items, err = storage.Collect(rows, err, scanEntryRow); err != nil {
 		return p, err
 	}
 	if len(p.Items) > o.Limit {
@@ -268,30 +257,21 @@ func (i *Index) Children(ctx context.Context, parent int64, cursor string, previ
 	name, id := "", int64(0)
 	if cursor != "" {
 		c, err := DecodeCursor(cursor)
+		if err == nil && c.DirectoryID == parent {
+			id, err = strconv.ParseInt(c.ID, 10, 64)
+		}
 		if err != nil || c.DirectoryID != parent {
 			return p, fmt.Errorf("%w: malformed child cursor", ErrInvalid)
 		}
 		name = c.Key
-		_, err = fmt.Sscan(c.ID, &id)
-		if err != nil {
-			return p, fmt.Errorf("%w: malformed child cursor", ErrInvalid)
-		}
 	}
 	comparison, order := ">", "ASC"
 	if previous {
 		comparison, order = "<", "DESC"
 	}
-	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,library_id,coalesce(parent_id,0),relative,name,identity,generation,revision,state FROM directories WHERE parent_id=? AND state='visible' AND (name,id)"+comparison+"(?,?) ORDER BY name "+order+",id "+order+" LIMIT ?", parent, name, id, childPageSize+1)
-	if err != nil {
+	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.parent_id=? AND d.state='visible' AND (d.name,d.id)"+comparison+"(?,?) ORDER BY d.name "+order+",d.id "+order+" LIMIT ?", parent, name, id, childPageSize+1)
+	if p.Items, err = storage.Collect(rows, err, scanDirectoryRow); err != nil {
 		return p, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var d Directory
-		if err = rows.Scan(&d.ID, &d.LibraryID, &d.ParentID, &d.Relative, &d.Name, &d.Identity, &d.Generation, &d.Revision, &d.State); err != nil {
-			return p, err
-		}
-		p.Items = append(p.Items, d)
 	}
 	more := len(p.Items) > childPageSize
 	if more {
@@ -302,12 +282,12 @@ func (i *Index) Children(ctx context.Context, parent int64, cursor string, previ
 	}
 	if len(p.Items) > 0 {
 		first, last := p.Items[0], p.Items[len(p.Items)-1]
-		if (!previous && more) || previous {
-			p.Next = EncodeCursor(Cursor{DirectoryID: parent, Key: last.Name, ID: fmt.Sprint(last.ID)})
+		if previous || more {
+			p.Next = EncodeCursor(Cursor{DirectoryID: parent, Key: last.Name, ID: strconv.FormatInt(last.ID, 10)})
 		}
 		if (previous && more) || (!previous && cursor != "") {
-			p.Previous = EncodeCursor(Cursor{DirectoryID: parent, Key: first.Name, ID: fmt.Sprint(first.ID)})
+			p.Previous = EncodeCursor(Cursor{DirectoryID: parent, Key: first.Name, ID: strconv.FormatInt(first.ID, 10)})
 		}
 	}
-	return p, rows.Err()
+	return p, nil
 }

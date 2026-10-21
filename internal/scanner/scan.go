@@ -477,22 +477,13 @@ func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round 
 	})
 }
 
-// missingCandidates pages the directories of library by ID.
-func (s *Scanner) missingCandidates(ctx context.Context, library string, after int64) ([]missingCandidate, error) {
-	rows, err := s.Index.Store.Reader.QueryContext(ctx, "SELECT id,relative,observed_round,state,missing_streak FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT ?", library, after, storage.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	batch := []missingCandidate{}
-	for rows.Next() {
+// missingCandidates pages the directories of a library by ID.
+func (s *Scanner) missingCandidates(ctx context.Context, libraryID string, after int64) ([]missingCandidate, error) {
+	rows, err := s.Index.Store.Reader.QueryContext(ctx, "SELECT id,relative,observed_round,state,missing_streak FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT ?", libraryID, after, storage.BatchSize)
+	return storage.Collect(rows, err, func(rows *sql.Rows) (missingCandidate, error) {
 		var x missingCandidate
-		if err = rows.Scan(&x.id, &x.rel, &x.seen, &x.state, &x.streak); err != nil {
-			return nil, err
-		}
-		batch = append(batch, x)
-	}
-	return batch, rows.Err()
+		return x, rows.Scan(&x.id, &x.rel, &x.seen, &x.state, &x.streak)
+	})
 }
 
 // markDirectoryMissing marks directory x ignored when configuration now
@@ -578,19 +569,10 @@ func (s *Scanner) absentEntries(ctx context.Context, directory int64, after stri
 		JOIN directories d ON d.id=e.directory_id
 		WHERE e.directory_id=? AND e.generation=d.generation AND e.present=0 AND e.state='visible' AND e.media_id>?
 		ORDER BY e.media_id LIMIT ?`, directory, after, storage.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := []string{}
-	for rows.Next() {
+	return storage.Collect(rows, err, func(rows *sql.Rows) (string, error) {
 		var id string
-		if err = rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+		return id, rows.Scan(&id)
+	})
 }
 
 // Running reports whether a scan is in progress.

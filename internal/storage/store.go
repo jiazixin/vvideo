@@ -58,14 +58,14 @@ var ErrLocked = errors.New("database is in use by another vvideo process")
 // Open takes exclusive ownership of the database and initializes its schema.
 // Errors name the database path so startup failures are actionable.
 func Open(ctx context.Context, path string) (*Store, error) {
-	s, err := open(ctx, path)
+	s, err := openStore(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("database %s: %w", path, err)
 	}
 	return s, nil
 }
 
-func open(ctx context.Context, path string) (*Store, error) {
+func openStore(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,15 @@ const staleTempAge = 3 * time.Minute
 // the cache directory. Only this service's hex-named covers and old temp files
 // are reclaimed; publication/deletion guards prevent races with current work.
 func (e *Engine) Reconcile(ctx context.Context) error {
+	if err := e.removeOrphanFiles(ctx); err != nil {
+		return err
+	}
+	return e.forgetMissingFiles(ctx)
+}
+
+// removeOrphanFiles deletes stale FFmpeg temp files and covers the ledger does
+// not know, one directory page at a time.
+func (e *Engine) removeOrphanFiles(ctx context.Context) error {
 	directory, err := os.Open(e.Config.Cache.Path)
 	if err != nil {
 		return err
@@ -35,79 +45,69 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			if item.IsDir() || item.Type()&os.ModeSymlink != 0 {
 				continue
 			}
-			name := item.Name()
-			path := filepath.Join(e.Config.Cache.Path, name)
-			if strings.HasPrefix(name, ".frame-") && strings.HasSuffix(name, ".webp") {
-				info, err := item.Info()
-				if err == nil && time.Since(info.ModTime()) > staleTempAge {
-					if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-						return err
-					}
-				}
-				continue
-			}
-			key, ok := strings.CutSuffix(name, ".webp")
-			if !ok || len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
-				continue
-			}
-			// budget serializes ledger checks with final publication and eviction.
-			e.budget.Lock()
-			var exists int
-			err = e.Queue.Store.Reader.QueryRowContext(ctx, "SELECT 1 FROM thumbnails WHERE key=?", key).Scan(&exists)
-			if errors.Is(err, sql.ErrNoRows) {
-				e.mu.Lock()
-				busy := e.pins[key] > 0 || e.deleting[key]
-				e.mu.Unlock()
-				if !busy {
-					err = os.Remove(path)
-					if errors.Is(err, os.ErrNotExist) {
-						err = nil
-					}
-				} else {
-					err = nil
-				}
-			}
-			e.budget.Unlock()
-			if err != nil {
+			if err = e.removeIfOrphan(ctx, item); err != nil {
 				return err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			break
+			return nil
 		}
 		if readErr != nil {
 			return readErr
 		}
 	}
+}
+
+// removeIfOrphan deletes item if it is an FFmpeg temp file older than
+// staleTempAge, or a cover with no ledger row that no request is using.
+func (e *Engine) removeIfOrphan(ctx context.Context, item fs.DirEntry) error {
+	name := item.Name()
+	path := filepath.Join(e.Config.Cache.Path, name)
+	if strings.HasPrefix(name, ".frame-") && strings.HasSuffix(name, ".webp") {
+		info, err := item.Info()
+		if err != nil || time.Since(info.ModTime()) <= staleTempAge {
+			return nil
+		}
+		return removeFile(path)
+	}
+	key, ok := strings.CutSuffix(name, ".webp")
+	if !ok || len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
+		return nil
+	}
+	// budget serializes ledger checks with final publication and eviction.
+	e.budget.Lock()
+	defer e.budget.Unlock()
+	var exists int
+	err := e.Queue.Store.Reader.QueryRowContext(ctx, "SELECT 1 FROM thumbnails WHERE key=?", key).Scan(&exists)
+	switch {
+	case err == nil: // the ledger knows this cover
+		return nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	case e.busy(key):
+		return nil
+	}
+	return removeFile(path)
+}
+
+// forgetMissingFiles removes ledger rows whose cover file is gone.
+func (e *Engine) forgetMissingFiles(ctx context.Context) error {
+	type entry struct {
+		key  string
+		size int64
+	}
 	cursor := ""
 	for {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT ?", cursor, storage.BatchSize)
-		if err != nil {
-			return err
-		}
-		type entry struct {
-			key  string
-			size int64
-		}
-		batch := []entry{}
-		for rows.Next() {
+		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (entry, error) {
 			var x entry
-			if err = rows.Scan(&x.key, &x.size); err != nil {
-				rows.Close()
-				return err
-			}
-			batch = append(batch, x)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+			return x, rows.Scan(&x.key, &x.size)
+		})
+		if err != nil || len(batch) == 0 {
 			return err
-		}
-		if len(batch) == 0 {
-			return nil
 		}
 		for _, x := range batch {
 			cursor = x.key
@@ -122,4 +122,12 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// removeFile deletes path; a file already gone counts as removed.
+func removeFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

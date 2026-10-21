@@ -156,6 +156,10 @@ func (e *Engine) Bytes(ctx context.Context) (int64, error) {
 // cache.max_size and the cache filesystem keeps its free-space guard. Pinned
 // covers are skipped; it fails if nothing else can be removed.
 func (e *Engine) Evict(ctx context.Context, reserve int64) error {
+	type candidate struct {
+		key  string
+		size int64
+	}
 	e.budget.Lock()
 	defer e.budget.Unlock()
 	if err := os.MkdirAll(e.Config.Cache.Path, 0700); err != nil {
@@ -175,58 +179,87 @@ func (e *Engine) Evict(ctx context.Context, reserve int64) error {
 			return nil
 		}
 		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE state='ready' ORDER BY accessed,key LIMIT ?", storage.BatchSize)
-		if err != nil {
-			return err
-		}
-		type candidate struct {
-			key  string
-			size int64
-		}
-		batch := []candidate{}
-		for rows.Next() {
+		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (candidate, error) {
 			var c candidate
-			if err = rows.Scan(&c.key, &c.size); err != nil {
-				rows.Close()
-				return err
-			}
-			batch = append(batch, c)
-		}
-		err = rows.Err()
-		rows.Close()
+			return c, rows.Scan(&c.key, &c.size)
+		})
 		if err != nil {
 			return err
 		}
 		removed := false
 		for _, c := range batch {
-			e.mu.Lock()
-			busy := e.pins[c.key] > 0 || e.deleting[c.key]
-			if !busy {
-				e.deleting[c.key] = true
+			if removed, err = e.evictCover(ctx, c.key, c.size); removed || err != nil {
+				break
 			}
-			e.mu.Unlock()
-			if busy {
-				continue
-			}
-			err = os.Remove(filepath.Join(e.Config.Cache.Path, c.key+".webp"))
-			if errors.Is(err, os.ErrNotExist) {
-				err = nil
-			}
-			if err == nil {
-				err = e.forget(ctx, c.key, c.size)
-			}
-			e.mu.Lock()
-			delete(e.deleting, c.key)
-			e.mu.Unlock()
-			if err != nil {
-				return err
-			}
-			removed = true
-			break
+		}
+		if err != nil {
+			return err
 		}
 		if !removed {
 			return errors.New("thumbnail cache has no reclaimable space")
 		}
 	}
+}
+
+// coverArgs returns the FFmpeg arguments that write item's cover to output,
+// reading the media open as f through the first extra file descriptor.
+func (e *Engine) coverArgs(ctx context.Context, item library.Entry, f *os.File, output string) ([]string, error) {
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", strconv.Itoa(e.Config.Cache.Threads)}
+	filter := coverFilter
+	var grid probe.Grid
+	tiled := false
+	if item.Kind == "video" {
+		seconds := float64(item.DurationMS) / 1000 * e.Config.Cache.Percent / 100
+		args = append(args, "-ss", strconv.FormatFloat(seconds, 'f', 3, 64))
+	} else {
+		// FFmpeg versions differ on applying EXIF/irot rotation to images, so
+		// the probed rotation is applied explicitly, matching the size the
+		// client lays out.
+		args = append(args, "-noautorotate")
+		filter = rotation(item.Rotation) + filter
+		if probe.IsHEIF(item.Name) {
+			grid, tiled = probe.TileGrid(ctx, f)
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return nil, err
+			}
+		}
+	}
+	args = append(args, "-i", probe.ExtraFilePath())
+	if tiled {
+		args = append(args, "-filter_complex", grid.Filter()+","+filter+"[cover]", "-map", "[cover]")
+	} else {
+		args = append(args, "-map", "0:v:0", "-vf", filter)
+	}
+	return append(args, "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-c:v", Encoder, "-threads:v", "1", "-quality", coverQuality, "-y", output), nil
+}
+
+// evictCover deletes one cover and its ledger row unless a request has it pinned
+// or another eviction is deleting it, reporting whether it was removed. The
+// caller holds budget.
+func (e *Engine) evictCover(ctx context.Context, key string, size int64) (bool, error) {
+	e.mu.Lock()
+	if e.pins[key] > 0 || e.deleting[key] {
+		e.mu.Unlock()
+		return false, nil
+	}
+	e.deleting[key] = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.deleting, key)
+		e.mu.Unlock()
+	}()
+	if err := removeFile(filepath.Join(e.Config.Cache.Path, key+".webp")); err != nil {
+		return false, err
+	}
+	return true, e.forget(ctx, key, size)
+}
+
+// busy reports whether a request has key pinned or an eviction is deleting it.
+func (e *Engine) busy(key string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pins[key] > 0 || e.deleting[key]
 }
 
 // rotation returns the filters that turn an image clockwise by degrees.
@@ -279,33 +312,10 @@ func (e *Engine) run(ctx context.Context, j jobs.Job, start time.Time) error {
 	defer os.Remove(temp)
 	timeout, cancel := context.WithTimeout(ctx, coverTimeout)
 	defer cancel()
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", strconv.Itoa(e.Config.Cache.Threads)}
-	filter := coverFilter
-	var grid probe.Grid
-	tiled := false
-	if item.Kind == "video" {
-		seconds := float64(item.DurationMS) / 1000 * e.Config.Cache.Percent / 100
-		args = append(args, "-ss", strconv.FormatFloat(seconds, 'f', 3, 64))
-	} else {
-		// FFmpeg versions differ on applying EXIF/irot rotation to images, so
-		// the probed rotation is applied explicitly, matching the size the
-		// client lays out.
-		args = append(args, "-noautorotate")
-		filter = rotation(item.Rotation) + filter
-		if probe.IsHEIF(item.Name) {
-			grid, tiled = probe.TileGrid(ctx, f)
-			if _, err = f.Seek(0, io.SeekStart); err != nil {
-				return err
-			}
-		}
+	args, err := e.coverArgs(ctx, item, f, temp)
+	if err != nil {
+		return err
 	}
-	args = append(args, "-i", probe.ExtraFilePath())
-	if tiled {
-		args = append(args, "-filter_complex", grid.Filter()+","+filter+"[cover]", "-map", "[cover]")
-	} else {
-		args = append(args, "-map", "0:v:0", "-vf", filter)
-	}
-	args = append(args, "-frames:v", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "-c:v", Encoder, "-threads:v", "1", "-quality", coverQuality, "-y", temp)
 	cmd := exec.CommandContext(timeout, "ffmpeg", args...)
 	cmd.ExtraFiles = []*os.File{f}
 	var stderr probe.Diagnostics

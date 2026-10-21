@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"uuid"
 
@@ -26,11 +25,7 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 		return err
 	}
 	token := uuid.New().String()
-	type anchor struct {
-		sort, direction, id, name string
-		time                      int64
-	}
-	pending := []anchor{}
+	pending := make([]groupAnchor, 0, storage.BatchSize)
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
@@ -42,7 +37,7 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 			}
 			defer stmt.Close()
 			for _, a := range pending {
-				if _, err = stmt.ExecContext(ctx, id, token, a.sort, a.direction, a.time, a.name, a.id); err != nil {
+				if _, err = stmt.ExecContext(ctx, id, token, a.sort, a.direction, a.time, a.name, a.mediaID); err != nil {
 					return err
 				}
 			}
@@ -52,73 +47,19 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 		return err
 	}
 	for _, sort := range []string{"capture", "mtime", "name"} {
-		col := sortColumns[sort]
-		for _, dir := range []string{"asc", "desc"} {
-			var cursor Cursor
-			ordinal := int64(0)
-			for {
-				if err = pause(ctx); err != nil {
-					return err
+		for _, direction := range []string{"asc", "desc"} {
+			err = i.walkOrder(ctx, d, sort, direction, pause, func(ordinal int64, e orderedEntry) error {
+				if ordinal%groupSize != 0 {
+					return nil
 				}
-				filter := ""
-				args := []any{id, d.Generation}
-				if cursor.ID != "" {
-					operator := ">"
-					if dir == "desc" {
-						operator = "<"
-					}
-					filter = " AND (" + col + ",media_id)" + operator + "(?,?)"
-					args = append(args, cursor.Key, cursor.ID)
+				pending = append(pending, e.anchor(sort, direction))
+				if len(pending) < storage.BatchSize {
+					return nil
 				}
-				rows, err := i.Store.Reader.QueryContext(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+dir+`,media_id `+dir+` LIMIT ?`, append(args, storage.BatchSize)...)
-				if err != nil {
-					return err
-				}
-				type item struct {
-					id, name       string
-					capture, mtime int64
-				}
-				batch := []item{}
-				for rows.Next() {
-					var x item
-					if err = rows.Scan(&x.id, &x.capture, &x.mtime, &x.name); err != nil {
-						rows.Close()
-						return err
-					}
-					batch = append(batch, x)
-				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
-					return err
-				}
-				if len(batch) == 0 {
-					break
-				}
-				for _, x := range batch {
-					keyTime := x.capture
-					keyName := ""
-					if sort == "mtime" {
-						keyTime = x.mtime
-					}
-					if sort == "name" {
-						keyTime = 0
-						keyName = x.name
-					}
-					if ordinal%groupSize == 0 {
-						pending = append(pending, anchor{sort: sort, direction: dir, id: x.id, time: keyTime, name: keyName})
-						if len(pending) == storage.BatchSize {
-							if err = flush(); err != nil {
-								return err
-							}
-						}
-					}
-					ordinal++
-					cursor = Cursor{ID: x.id, Key: fmt.Sprint(keyTime)}
-					if sort == "name" {
-						cursor.Key = x.name
-					}
-				}
+				return flush()
+			})
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -142,6 +83,83 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 		return err
 	}
 	return i.CleanupGroups(ctx, id)
+}
+
+// groupAnchor is the first media of one album group in one listing order,
+// with the sort key a listing compares against: a time, or a name.
+type groupAnchor struct {
+	sort, direction, mediaID, name string
+	time                           int64
+}
+
+// orderedEntry is one listed media item and its sort keys.
+type orderedEntry struct {
+	id, name       string
+	capture, mtime int64
+}
+
+// key is e's value in the column that sort orders by.
+func (e orderedEntry) key(sort string) any {
+	switch sort {
+	case "name":
+		return e.name
+	case "mtime":
+		return e.mtime
+	default:
+		return e.capture
+	}
+}
+
+// anchor is e as the anchor of its group in the given order.
+func (e orderedEntry) anchor(sort, direction string) groupAnchor {
+	a := groupAnchor{sort: sort, direction: direction, mediaID: e.id}
+	switch sort {
+	case "name":
+		a.name = e.name
+	case "mtime":
+		a.time = e.mtime
+	default:
+		a.time = e.capture
+	}
+	return a
+}
+
+// walkOrder visits the visible entries of d's published generation in one
+// listing order, reading a batch at a time and calling pause before each read.
+// visit receives each entry's zero-based position in that order.
+func (i *Index) walkOrder(ctx context.Context, d Directory, sort, direction string, pause func(context.Context) error, visit func(int64, orderedEntry) error) error {
+	col := sortColumns[sort]
+	operator := ">"
+	if direction == "desc" {
+		operator = "<"
+	}
+	var ordinal int64
+	var last *orderedEntry
+	for {
+		if err := pause(ctx); err != nil {
+			return err
+		}
+		filter, args := "", []any{d.ID, d.Generation}
+		if last != nil {
+			filter = " AND (" + col + ",media_id)" + operator + "(?,?)"
+			args = append(args, last.key(sort), last.id)
+		}
+		rows, err := i.Store.Reader.QueryContext(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+direction+`,media_id `+direction+` LIMIT ?`, append(args, storage.BatchSize)...)
+		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (orderedEntry, error) {
+			var e orderedEntry
+			return e, rows.Scan(&e.id, &e.capture, &e.mtime, &e.name)
+		})
+		if err != nil || len(batch) == 0 {
+			return err
+		}
+		for _, e := range batch {
+			if err = visit(ordinal, e); err != nil {
+				return err
+			}
+			ordinal++
+		}
+		last = &batch[len(batch)-1]
+	}
 }
 
 // CleanupGroups deletes album anchors left by superseded rebuilds.
@@ -172,25 +190,15 @@ func (i *Index) CleanupGroups(ctx context.Context, id int64) error {
 func (i *Index) PublishProbedTimes(ctx context.Context) (int64, error) {
 	var moved int64
 	for {
-		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,media_id,version FROM jobs WHERE kind='probe' AND state='probed' ORDER BY id LIMIT ?", storage.BatchSize)
-		if err != nil {
-			return moved, err
-		}
 		type probed struct {
 			id             int64
 			media, version string
 		}
-		batch := []probed{}
-		for rows.Next() {
+		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,media_id,version FROM jobs WHERE kind='probe' AND state='probed' ORDER BY id LIMIT ?", storage.BatchSize)
+		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (probed, error) {
 			var p probed
-			if err = rows.Scan(&p.id, &p.media, &p.version); err != nil {
-				rows.Close()
-				return moved, err
-			}
-			batch = append(batch, p)
-		}
-		err = rows.Err()
-		rows.Close()
+			return p, rows.Scan(&p.id, &p.media, &p.version)
+		})
 		if err != nil || len(batch) == 0 {
 			return moved, err
 		}
@@ -201,21 +209,12 @@ func (i *Index) PublishProbedTimes(ctx context.Context) (int64, error) {
 			for _, p := range batch {
 				const stale = "FROM entries WHERE media_id=? AND version=? AND effective_time!=(SELECT effective_time FROM versions WHERE media_id=? AND version=?)"
 				rows, err := tx.QueryContext(ctx, "SELECT DISTINCT directory_id "+stale, p.media, p.version, p.media, p.version)
+				ids, err := storage.Collect(rows, err, scanID)
 				if err != nil {
 					return err
 				}
-				for rows.Next() {
-					var id int64
-					if err = rows.Scan(&id); err != nil {
-						rows.Close()
-						return err
-					}
+				for _, id := range ids {
 					directories[id] = true
-				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
-					return err
 				}
 				result, err := tx.ExecContext(ctx, "UPDATE entries SET effective_time=(SELECT effective_time FROM versions WHERE media_id=? AND version=?) WHERE rowid IN (SELECT rowid "+stale+")", p.media, p.version, p.media, p.version, p.media, p.version)
 				if err != nil {
@@ -260,7 +259,7 @@ func (i *Index) DirtyDirectory(ctx context.Context, after int64) (int64, error) 
 // groupStart returns the inclusive cursor of the album group containing e, so
 // an anchored page starts on a group boundary. A kind-filtered listing has no
 // groups and starts at e itself.
-func (i *Index) groupStart(ctx context.Context, tx *sql.Tx, d Directory, o ListOptions, e Entry) (Cursor, error) {
+func groupStart(ctx context.Context, tx *sql.Tx, d Directory, o ListOptions, e Entry) (Cursor, error) {
 	if o.Kind != "" {
 		return Cursor{ID: e.ID, Key: key(e, o.Sort)}, nil
 	}

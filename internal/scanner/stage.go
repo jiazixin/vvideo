@@ -171,92 +171,83 @@ func (s *stage) put(ctx context.Context, e library.Entry) error {
 // (or ignored) so missing confirmation can count them. It returns the number
 // of changes; zero means the directory needs no new generation.
 func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(string) bool, force bool, resolve func(string) (string, error)) (int64, error) {
+	known, err := s.mergeBaseline(ctx, d, ignored, force)
+	if err != nil {
+		return 0, err
+	}
+	added, err := s.mergeNew(ctx, d, resolve)
+	if err != nil {
+		return 0, err
+	}
+	return known + added, nil
+}
+
+// mergeBaseline stages every baseline entry as the second pass observed it.
+func (s *stage) mergeBaseline(ctx context.Context, d library.Directory, ignored func(string) bool, force bool) (int64, error) {
 	var changed int64
 	after := ""
 	for {
-		rows, err := s.db.QueryContext(ctx, "SELECT id,payload FROM baseline WHERE id>? ORDER BY id LIMIT ?", after, storage.BatchSize)
-		if err != nil {
-			return 0, err
-		}
-		batch := []library.Entry{}
-		for rows.Next() {
-			var id string
-			var b []byte
-			if err = rows.Scan(&id, &b); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			var e library.Entry
-			if err = decodeEntry(b, &e); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			batch = append(batch, e)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return 0, err
-		}
-		if len(batch) == 0 {
-			break
+		rows, err := s.db.QueryContext(ctx, "SELECT payload FROM baseline WHERE id>? ORDER BY id LIMIT ?", after, storage.BatchSize)
+		batch, err := storage.Collect(rows, err, scanPayload)
+		if err != nil || len(batch) == 0 {
+			return changed, err
 		}
 		for _, e := range batch {
 			after = e.ID
-			original := e
-			var a Attributes
-			a.Name = e.Name
-			err := s.db.QueryRowContext(ctx, "SELECT fingerprint,kind,size,mtime FROM observation WHERE pass=2 AND name=? AND directory=0", e.Name).Scan(&a.Fingerprint, &a.Kind, &a.Size, &a.Mtime)
-			if errors.Is(err, sql.ErrNoRows) {
-				if ignored(e.Name) {
-					e.State = "ignored"
-					e.Present = false
-					e.MissingStreak = 0
-				} else {
-					e.Present = false
-				}
-			} else if err != nil {
-				return 0, err
-			} else {
-				e.Present = true
-				e.State = "visible"
-				e.MissingStreak = 0
-				e.ObservedRound = 0
-				if e.Fingerprint != a.Fingerprint || force {
-					e = changedEntry(d, e.ID, a)
-					changed++
-				}
-			}
-			if e.State != original.State || e.Present != original.Present {
-				changed++
-			}
-			if err = s.put(ctx, e); err != nil {
+			next, changes, err := s.observed(ctx, d, e, ignored, force)
+			if err != nil {
 				return 0, err
 			}
+			if err = s.put(ctx, next); err != nil {
+				return 0, err
+			}
+			changed += changes
 		}
 	}
-	after = ""
+}
+
+// observed is baseline entry e as the second pass found it, and how many
+// changes that makes: a new version, and a different state or presence.
+func (s *stage) observed(ctx context.Context, d library.Directory, e library.Entry, ignored func(string) bool, force bool) (library.Entry, int64, error) {
+	original := e
+	var changes int64
+	a := Attributes{Name: e.Name}
+	err := s.db.QueryRowContext(ctx, "SELECT fingerprint,kind,size,mtime FROM observation WHERE pass=2 AND name=? AND directory=0", e.Name).Scan(&a.Fingerprint, &a.Kind, &a.Size, &a.Mtime)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		e.Present = false
+		if ignored(e.Name) {
+			e.State = "ignored"
+			e.MissingStreak = 0
+		}
+	case err != nil:
+		return e, 0, err
+	default:
+		e.Present, e.State, e.MissingStreak, e.ObservedRound = true, "visible", 0, 0
+		if e.Fingerprint != a.Fingerprint || force {
+			e = changedEntry(d, e.ID, a)
+			changes++
+		}
+	}
+	if e.State != original.State || e.Present != original.Present {
+		changes++
+	}
+	return e, changes, nil
+}
+
+// mergeNew stages a new version for every file of the second pass that is
+// not in the baseline.
+func (s *stage) mergeNew(ctx context.Context, d library.Directory, resolve func(string) (string, error)) (int64, error) {
+	var added int64
+	after := ""
 	for {
 		rows, err := s.db.QueryContext(ctx, `SELECT o.name,o.fingerprint,o.kind,o.size,o.mtime FROM observation o LEFT JOIN baseline b ON b.name=o.name WHERE o.pass=2 AND o.directory=0 AND b.id IS NULL AND o.name>? ORDER BY o.name LIMIT ?`, after, storage.BatchSize)
-		if err != nil {
-			return 0, err
-		}
-		batch := []Attributes{}
-		for rows.Next() {
+		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (Attributes, error) {
 			var a Attributes
-			if err = rows.Scan(&a.Name, &a.Fingerprint, &a.Kind, &a.Size, &a.Mtime); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			batch = append(batch, a)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return 0, err
-		}
-		if len(batch) == 0 {
-			break
+			return a, rows.Scan(&a.Name, &a.Fingerprint, &a.Kind, &a.Size, &a.Mtime)
+		})
+		if err != nil || len(batch) == 0 {
+			return added, err
 		}
 		for _, a := range batch {
 			after = a.Name
@@ -267,10 +258,19 @@ func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(str
 			if err = s.put(ctx, changedEntry(d, id, a)); err != nil {
 				return 0, err
 			}
-			changed++
+			added++
 		}
 	}
-	return changed, nil
+}
+
+// scanPayload decodes one staged entry from a payload column.
+func scanPayload(rows *sql.Rows) (library.Entry, error) {
+	var b []byte
+	var e library.Entry
+	if err := rows.Scan(&b); err != nil {
+		return e, err
+	}
+	return e, decodeEntry(b, &e)
 }
 
 // changedEntry is a new version of a file in d, with attributes a.
@@ -281,23 +281,7 @@ func changedEntry(d library.Directory, id string, a Attributes) library.Entry {
 // merged pages the staged next generation by media ID.
 func (s *stage) merged(ctx context.Context, after string) ([]library.Entry, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT payload FROM merged WHERE id>? ORDER BY id LIMIT ?", after, storage.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []library.Entry{}
-	for rows.Next() {
-		var b []byte
-		if err = rows.Scan(&b); err != nil {
-			return nil, err
-		}
-		var e library.Entry
-		if err = decodeEntry(b, &e); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return storage.Collect(rows, err, scanPayload)
 }
 
 // queueSubdirectories adds the subdirectories of d seen in the second pass
