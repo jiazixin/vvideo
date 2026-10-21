@@ -21,7 +21,9 @@ private const val HOLD_SPEED = 2f
  * is not a tap. detectTapGestures reports any release that nothing consumed as a
  * tap, so a swipe across a pager that does not scroll that way (vertical on the
  * photo pager, horizontal on the video feed) would toggle the viewer's controls.
- * The travel is only observed, never consumed.
+ * The travel is only observed, never consumed. A press whose start this
+ * detector did not see, as when its pointerInput restarts mid-swipe because a
+ * pager brought another page to the front, is not a tap either.
  */
 internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
     onTap: () -> Unit,
@@ -29,17 +31,22 @@ internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
     onLongPress: ((Offset) -> Unit)? = null,
     onPress: suspend PressGestureScope.(Offset) -> Unit = {}
 ) = coroutineScope {
-    var moved = false
+    // Whether the last press seen from down to release stayed within the slop.
+    var tappable = false
     launch {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            moved = false
+            tappable = false
+            var moved = false
             val slop = viewConfiguration.touchSlop
             while (true) {
                 val change = awaitPointerEvent(PointerEventPass.Initial).changes
                     .firstOrNull { it.id == down.id } ?: break
                 if ((change.position - down.position).getDistance() > slop) moved = true
-                if (!change.pressed) break
+                if (!change.pressed) {
+                    tappable = !moved
+                    break
+                }
             }
         }
     }
@@ -47,7 +54,7 @@ internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
         onDoubleTap = onDoubleTap,
         onLongPress = onLongPress,
         onPress = onPress,
-        onTap = { if (!moved) onTap() }
+        onTap = { if (tappable) onTap() }
     )
 }
 
