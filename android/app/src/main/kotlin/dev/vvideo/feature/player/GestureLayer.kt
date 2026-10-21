@@ -1,12 +1,55 @@
 package dev.vvideo.feature.player
 
+import androidx.compose.foundation.gestures.PressGestureScope
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.Player
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 /** A long press plays at this speed until it is released. */
 private const val HOLD_SPEED = 2f
+
+/**
+ * [detectTapGestures], except that a press which travelled beyond the touch slop
+ * is not a tap. detectTapGestures reports any release that nothing consumed as a
+ * tap, so a swipe across a pager that does not scroll that way (vertical on the
+ * photo pager, horizontal on the video feed) would toggle the viewer's controls.
+ * The travel is only observed, never consumed.
+ */
+internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
+    onTap: () -> Unit,
+    onDoubleTap: ((Offset) -> Unit)? = null,
+    onLongPress: ((Offset) -> Unit)? = null,
+    onPress: suspend PressGestureScope.(Offset) -> Unit = {}
+) = coroutineScope {
+    var moved = false
+    launch {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            moved = false
+            val slop = viewConfiguration.touchSlop
+            while (true) {
+                val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                    .firstOrNull { it.id == down.id } ?: break
+                if ((change.position - down.position).getDistance() > slop) moved = true
+                if (!change.pressed) break
+            }
+        }
+    }
+    detectTapGestures(
+        onDoubleTap = onDoubleTap,
+        onLongPress = onLongPress,
+        onPress = onPress,
+        onTap = { if (!moved) onTap() }
+    )
+}
 
 /** Tap recognition yields vertical movement to the pager. Only the seek bar consumes drags. */
 fun Modifier.viewerGestures(
@@ -17,8 +60,8 @@ fun Modifier.viewerGestures(
 ): Modifier = pointerInput(player) {
     var held = false
     var originalSpeed = 1f
-    detectTapGestures(
-        onTap = { onTap() },
+    detectTapsIgnoringDrags(
+        onTap = onTap,
         onDoubleTap = { point ->
             when {
                 point.x < size.width / 3f -> onSeek(false)

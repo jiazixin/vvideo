@@ -1,7 +1,6 @@
 package dev.vvideo.feature.player
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Box
@@ -142,7 +141,7 @@ fun PhotoScreen(
                     }
                 } else null,
                 Modifier.pointerInput(photo.id, front) {
-                    detectTapGestures(onTap = { controls = !controls }, onDoubleTap = { point ->
+                    detectTapsIgnoringDrags(onTap = { controls = !controls }, onDoubleTap = { point ->
                         if (front) {
                             if (scale > 1f) {
                                 scale = 1f
