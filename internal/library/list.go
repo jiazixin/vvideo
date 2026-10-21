@@ -27,18 +27,27 @@ var sortColumns = map[string]string{"capture": "effective_time", "mtime": "mtime
 // directory revision and listing options, so a stale cursor fails with
 // ErrConflict instead of silently mixing two orders.
 type Cursor struct {
+	DirectoryID           int64
+	Revision              int64
+	Sort, Direction, Kind string
+	Key, ID               string
+}
+
+// cursorWire is Cursor as encoded. Key travels as bytes because a name key is
+// the raw file name, which need not be valid UTF-8 and must round-trip exactly.
+type cursorWire struct {
 	DirectoryID int64  `json:"directory_id"`
 	Revision    int64  `json:"revision"`
 	Sort        string `json:"sort"`
 	Direction   string `json:"direction"`
 	Kind        string `json:"kind"`
-	Key         string `json:"key"`
+	Key         []byte `json:"key"`
 	ID          string `json:"id"`
 }
 
 // EncodeCursor serializes c as URL-safe base64 JSON.
 func EncodeCursor(c Cursor) string {
-	b, _ := json.Marshal(&c)
+	b, _ := json.Marshal(cursorWire{c.DirectoryID, c.Revision, c.Sort, c.Direction, c.Kind, []byte(c.Key), c.ID})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
@@ -53,10 +62,11 @@ func DecodeCursor(s string) (Cursor, error) {
 	if err != nil {
 		return c, errCursor
 	}
-	if err = json.Unmarshal(b, &c, json.RejectUnknownMembers(true)); err != nil {
+	var w cursorWire
+	if err = json.Unmarshal(b, &w, json.RejectUnknownMembers(true)); err != nil {
 		return c, errCursor
 	}
-	return c, nil
+	return Cursor{w.DirectoryID, w.Revision, w.Sort, w.Direction, w.Kind, string(w.Key), w.ID}, nil
 }
 
 // ListOptions are the query parameters of a media listing.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -42,6 +43,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/media/{id}/thumbnail", a.thumbnail)
 	mux.HandleFunc("POST /v1/scan", a.scan)
 	mux.HandleFunc("GET /v1/status", a.status)
+	// Unknown paths and methods answer in the same JSON shape as other errors.
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusNotFound, errorBody("unavailable"))
+	})
 	return a.authenticate(mux)
 }
 
@@ -102,8 +107,8 @@ func (a *App) directoryMedia(w http.ResponseWriter, r *http.Request) {
 		Fallback:  q.Get("fallback"),
 	}
 	if q.Has("limit") {
-		if o.Limit, err = strconv.Atoi(q.Get("limit")); err != nil {
-			writeError(w, r, fmt.Errorf("%w: limit must be an integer", library.ErrInvalid))
+		if o.Limit, err = strconv.Atoi(q.Get("limit")); err != nil || o.Limit < 1 {
+			writeError(w, r, fmt.Errorf("%w: limit must be a positive integer", library.ErrInvalid))
 			return
 		}
 	}
@@ -329,7 +334,9 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.MarshalWrite(w, v); err != nil {
+	// File and directory names are raw bytes that need not be valid UTF-8;
+	// they are shown with U+FFFD rather than breaking the whole response.
+	if err := json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true)); err != nil {
 		slog.Warn("http_response_failed", "error", err.Error())
 	}
 }

@@ -155,11 +155,14 @@ func TestHTTPErrorsAreJSON(t *testing.T) {
 		{"/v1/directories/abc/path", "fixture", 400, "invalid_request"},
 		{fmt.Sprintf("/v1/directories/%d/media?sort=size", root), "fixture", 400, "invalid_request"},
 		{fmt.Sprintf("/v1/directories/%d/media?limit=many", root), "fixture", 400, "invalid_request"},
+		{fmt.Sprintf("/v1/directories/%d/media?limit=0", root), "fixture", 400, "invalid_request"},
 		{fmt.Sprintf("/v1/directories/%d/media?cursor=%%21", root), "fixture", 400, "invalid_request"},
 		{fmt.Sprintf("/v1/directories/%d/children?previous=true", root), "fixture", 400, "invalid_request"},
 		{"/v1/directories/999999/children", "fixture", 404, "unavailable"},
 		{"/v1/media/absent", "fixture", 404, "unavailable"},
 		{"/v1/media/absent/bytes?version=x", "fixture", 404, "unavailable"},
+		{"/v1/unknown", "fixture", 404, "unavailable"},
+		{"/v1/unknown", "wrong", 401, "unauthorized"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
