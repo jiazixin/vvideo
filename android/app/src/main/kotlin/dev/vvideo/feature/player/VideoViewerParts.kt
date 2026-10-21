@@ -81,6 +81,7 @@ internal fun VideoPage(
     covered: Boolean,
     failed: Boolean,
     error: PlaybackException?,
+    noDecoder: Boolean,
     onDetails: () -> Unit,
     onRetry: () -> Unit
 ) {
@@ -105,20 +106,24 @@ internal fun VideoPage(
             )
         }
         if (failed) {
-            PlaybackErrorPanel(error, onDetails, onRetry, Modifier.align(Alignment.Center))
+            PlaybackErrorPanel(error, noDecoder, onDetails, onRetry, Modifier.align(Alignment.Center))
         }
     }
 }
 
-/** An unsupported format offers the media details; any other error offers a retry. */
+/**
+ * An unsupported format, or a video track [noDecoder] can play, offers the
+ * media details; any other error offers a retry.
+ */
 @Composable
 private fun PlaybackErrorPanel(
     error: PlaybackException?,
+    noDecoder: Boolean,
     onDetails: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val unsupported = error?.errorCode in listOf(
+    val unsupported = noDecoder || error?.errorCode in listOf(
         PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
     )

@@ -1301,7 +1301,7 @@ class DevicePlaybackTest {
                 "unsupported codec lacks visible error",
                 device.wait(
                     androidx.test.uiautomator.Until.hasObject(
-                        androidx.test.uiautomator.By.textStartsWith("无法播放这个媒体")
+                        androidx.test.uiautomator.By.text("这台手机无法解码此视频")
                     ), 15000
                 )
             )

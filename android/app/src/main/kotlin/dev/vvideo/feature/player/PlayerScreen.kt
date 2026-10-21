@@ -207,6 +207,7 @@ fun PlayerRoute(
                 covered = !selected || playback.id != itemKey || !playback.firstFrame,
                 failed = failed,
                 error = if (failed) active.player.playerError else null,
+                noDecoder = failed && playback.unsupported,
                 onDetails = { detailsOpen = true },
                 onRetry = {
                     vm.retry(item.id)

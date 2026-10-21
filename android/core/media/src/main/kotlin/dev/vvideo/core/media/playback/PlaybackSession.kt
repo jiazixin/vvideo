@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -39,6 +40,8 @@ data class PlaybackState(
     val id: String = "",
     val firstFrame: Boolean = false,
     val error: Boolean = false,
+    /** The video track cannot be extracted or decoded on this device. */
+    val unsupported: Boolean = false,
     val buffering: Boolean = true
 )
 
@@ -82,6 +85,17 @@ class PlaybackSession(context: Context, cache: VideoCache, token: String) {
             }
 
             override fun onPlaybackStateChanged(state: Int) {
+                // Media3 drops a video track it cannot extract or decode and
+                // plays on without a picture; report it instead of spinning.
+                if (state == Player.STATE_READY &&
+                    !player.currentTracks.isTypeSupported(C.TRACK_TYPE_VIDEO, true)
+                ) {
+                    _state.value =
+                        _state.value.copy(error = true, unsupported = true, buffering = false)
+                    preloader.target(null)
+                    player.pause()
+                    return
+                }
                 _state.value = _state.value.copy(buffering = state == Player.STATE_BUFFERING)
                 if (state == Player.STATE_BUFFERING) preloader.target(null)
             }
