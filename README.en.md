@@ -71,7 +71,7 @@ Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (inde
 
 ```text
 .
-├── .github/workflows/  CI workflow
+├── .github/workflows/  CI and release workflows
 ├── cmd/vvideo/         server entry point (flags, logging, startup, shutdown)
 ├── internal/           server packages
 │   ├── app/            wiring of storage, workers and the HTTP API
@@ -106,6 +106,14 @@ Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规
 | Android SDK | Platform 36 and Build-Tools 35.0.0; devices running Android 9 (API 28) or later |
 
 Check FFmpeg with `ffmpeg -hide_banner -encoders | grep libwebp`. Debian and Ubuntu's `ffmpeg` package includes it; the current Homebrew `ffmpeg` does not.
+
+### Download a release
+
+Pushing a `vX.Y.Z` tag makes the [release workflow](.github/workflows/release.yml) publish to [Releases](https://github.com/jiazixin/vvideo/releases):
+
+- `vvideo_<version>_linux_amd64.tar.gz` and `vvideo_<version>_linux_arm64.tar.gz`: the server binary with LICENSE, NOTICE, the READMEs, the example configuration and the systemd unit. It still needs FFmpeg as listed above.
+- `vvideo_<version>_android.apk`: the release-signed Android app. Its signature differs from local debug, profile and device builds, so a phone with a development build installed must uninstall it first, which deletes the app's bookmarks and settings.
+- `checksums.txt`: SHA-256 checksums of the files above.
 
 ### Run the server
 
@@ -195,7 +203,7 @@ go test ./...
 android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) runs on every push to `main` and every pull request: `gofmt`, `go vet` (plus a macOS cross-check), `go test -race` and Linux amd64/arm64 cross-builds for the server; unit tests, lint, and the debug and profile builds for Android. Device tests and performance measurements need a phone and are not run in CI; see [android/README.md](android/README.md).
+[GitHub Actions CI](.github/workflows/ci.yml) runs on every push to `main` and every pull request: `gofmt`, `go vet` (plus a macOS cross-check), `go test -race` and Linux amd64/arm64 cross-builds for the server; unit tests, lint, and the debug and profile builds for Android. CI also checks the release configuration with a GoReleaser snapshot. Pushing a `vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which signs the APK with the key stored in the repository secrets and publishes the server archives and the APK with GoReleaser; see [release signing](android/README.md#release-signing). Device tests and performance measurements need a phone and are not run in CI.
 
 `scripts/generate-media.py <dir>` creates a small synthetic library (H.264, HEVC and AV1 in MP4, MKV, TS and MOV, plus photos) for local testing. Never commit real media, tokens or server addresses.
 

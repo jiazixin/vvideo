@@ -76,3 +76,25 @@ jobs:
           :app:testDebugUnitTest :core:media:testDebugUnitTest
           :app:lintDebug :core:media:lintDebug
           :app:assembleDebug :app:assembleProfile
+
+  release-snapshot:
+    name: GoReleaser 快照构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          install-only: true
+      # The signed APK is only built for tags, so the snapshot has none.
+      - run: goreleaser check
+      - run: goreleaser release --snapshot --clean

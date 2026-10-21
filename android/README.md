@@ -101,3 +101,16 @@ python3 android/benchmark/tools/profile-ui-workload.py --screen album
 ```
 
 The clear helper requires the visible storage page, checks its confirmation text and then checks zero video/image usage. It does not access cache, source-media or bookmark files directly. Omit `--prewarm` for the following frame capture; entering the album has already loaded its first visible covers, so label this as cache-cleared scrolling rather than a cold application launch.
+
+## Release signing
+
+`release` is signed only when a key store is configured; otherwise Gradle writes an unsigned `app-release-unsigned.apk`. The build reads these Gradle properties or environment variables, so no key material lives in the repository:
+
+| Name | Meaning | Default |
+| --- | --- | --- |
+| `VVIDEO_KEYSTORE_FILE` | PKCS12 key store; enables release signing | unset |
+| `VVIDEO_KEYSTORE_PASSWORD` | Store password, also used for the key (PKCS12 has one password) | required with the file |
+| `VVIDEO_KEY_ALIAS` | Key alias | `vvideo` |
+| `VVIDEO_VERSION_NAME` / `VVIDEO_VERSION_CODE` | App version | `0.1.0` / `1` |
+
+The [release workflow](../.github/workflows/release.yml) restores the key store from the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` repository secrets, derives the version from the tag (`vX.Y.Z` gives `versionName` `X.Y.Z` and `versionCode` `X*1000000 + Y*1000 + Z`; a pre-release shares the code of its final version) and checks the signature and version with `apksigner` and `aapt2`. To sign locally, put the values in `~/.gradle/gradle.properties` or the environment and run `./gradlew :app:assembleRelease`. Keep the key store and its password backed up outside the repository: Android installs an update only when it carries the same signature.

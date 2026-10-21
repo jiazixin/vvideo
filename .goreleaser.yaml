@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Release artifacts for tags vMAJOR.MINOR.PATCH[-pre]; see .github/workflows/release.yml.
+version: 2
+
+project_name: vvideo
+
+# Kept under the ignored bin/ so the tree stays clean and Go stamps the tag.
+dist: bin/release
+
+builds:
+  - id: vvideo
+    main: ./cmd/vvideo
+    binary: vvideo
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # No -X main.version: Go embeds the exact tag from the Git checkout.
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # The server targets Linux/NAS.
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: vvideo
+    ids: [vvideo]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - README.en.md
+      - configs/config.example.yaml
+      - deploy/vvideo.service
+
+# The release workflow places the signed APK here before GoReleaser runs.
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  extra_files:
+    - glob: bin/android/*.apk
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+
+release:
+  prerelease: auto
+  extra_files:
+    - glob: bin/android/*.apk

@@ -71,7 +71,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 ```text
 .
-├── .github/workflows/  CI 工作流
+├── .github/workflows/  CI 与发布工作流
 ├── cmd/vvideo/         服务入口（参数、日志、启动与退出）
 ├── internal/           服务端各包
 │   ├── app/            装配存储、后台任务和 HTTP API
@@ -106,6 +106,14 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 | Android SDK | Platform 36、Build-Tools 35.0.0；设备需 Android 9（API 28）及以上 |
 
 用 `ffmpeg -hide_banner -encoders | grep libwebp` 检查 FFmpeg。Debian/Ubuntu 的 `ffmpeg` 软件包带有该编码器，当前 Homebrew 的 `ffmpeg` 没有。
+
+### 下载发布版
+
+推送 `vX.Y.Z` 形式的 tag 后，[发布工作流](.github/workflows/release.yml) 会在 [Releases](https://github.com/jiazixin/vvideo/releases) 生成：
+
+- `vvideo_<版本>_linux_amd64.tar.gz`、`vvideo_<版本>_linux_arm64.tar.gz`：服务端二进制，附 LICENSE、NOTICE、README、配置示例和 systemd 单元。运行仍需上表的 FFmpeg。
+- `vvideo_<版本>_android.apk`：正式签名的安卓应用。它与本地构建的 debug、profile、device 包签名不同，手机上已装开发构建时要先卸载才能安装，应用内的书签和设置会丢失。
+- `checksums.txt`：以上文件的 SHA-256。
 
 ### 运行服务端
 
@@ -195,7 +203,7 @@ go test ./...
 android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
 ```
 
-每次推送到 `main` 和每个 PR 都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：Go 部分检查 `gofmt`、`go vet`（含 macOS 交叉检查）、`go test -race` 和 Linux amd64/arm64 交叉编译；安卓部分运行单元测试、Lint 以及 debug 和 profile 构建。真机测试和性能测量需要手机，不在 CI 中运行，见 [android/README.md](android/README.md)。
+每次推送到 `main` 和每个 PR 都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：Go 部分检查 `gofmt`、`go vet`（含 macOS 交叉检查）、`go test -race` 和 Linux amd64/arm64 交叉编译；安卓部分运行单元测试、Lint 以及 debug 和 profile 构建。CI 还用 GoReleaser 快照检查发布配置。推送 `vX.Y.Z` tag 时，[发布工作流](.github/workflows/release.yml) 用仓库 Secrets 中的密钥签名 APK，再用 GoReleaser 发布服务端压缩包和 APK；签名方式见 [android/README.md](android/README.md#release-signing)。真机测试和性能测量需要手机，不在 CI 中运行。
 
 `scripts/generate-media.py <目录>` 生成一个小型合成媒体库（MP4、MKV、TS、MOV 容器中的 H.264、HEVC、AV1 视频，以及照片），用于本地测试。不要提交真实媒体、令牌或服务器地址。
 
