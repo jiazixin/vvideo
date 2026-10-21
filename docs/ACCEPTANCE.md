@@ -630,7 +630,7 @@ ADB 主机命令 exit 0 不代表测试成功：这是主动停止冻结 runner 
   - `invalidConnectionReportsConnectionError` 是测试过时：2026-10-20 起任意主机均可用 HTTP，`http://example.org` 已是合法地址，现改用带路径的无效地址后通过。
   - `realUiBidirectionalWindowAndRestoration` 是测试过时：Telegram 式相册更高，固定 55 次滑动只加载满 300 项、未淘汰首页；改为滑到窗口越过首页为止（上限 200 次）后通过，窗口与恢复断言不变。
   - `PhotoDeviceTest#originalPhotoPinchAndReturn` 暴露真实缺陷：`detectTapGestures` 不看位移，照片横向分页后竖滑不被消费，被当成单击切掉顶栏（视频纵向翻页时横滑同理）。两个查看器改为位移超过 touch slop 不算单击，修复后两项照片测试通过。
-  - `codecContainerMatrixSeekAndCacheClear` 仍失败：只有下载样本 `nile-falls.webm`（VP9 1080p、11 s、仅 0 s 一个关键帧）seek 到 3/4 后 885–906 ms 才 READY，超过 800 ms 断言；其余 13 个文件通过。原因是精确 seek 须从唯一关键帧解码约 8 s；门槛未放宽，是否把这类单关键帧样本移出该断言待定。
+  - `codecContainerMatrixSeekAndCacheClear` 仍失败：只有下载样本 `nile-falls.webm`（VP9 1080p、11 s、仅 0 s 一个关键帧）seek 到 3/4 后 885–906 ms 才 READY，超过 800 ms 断言；其余 13 个文件通过。原因是精确 seek 须从唯一关键帧解码约 8 s。2026-10-21 用户决定接受、保持现状且不再处理（见 [设计](DESIGN.md)）；门槛与测试不变，此项失败为已知结果。
   - `unsupportedVideoShowsErrorAndNextRecovers`、`feedWindowCancellationAndReverse` 需要的 `negative`、`feed` 目录不在本 fixture，未执行到断言。
 - **帧表现**（`profile`，整理前 `d01124cb…`、整理后 `a2af3f2d…` 交替安装各 6 次，每次预热后 3 轮；修复后 `ae2a54d5…` 视频 3 轮）：
 
