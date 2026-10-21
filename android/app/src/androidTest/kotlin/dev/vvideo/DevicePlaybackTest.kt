@@ -919,13 +919,17 @@ class DevicePlaybackTest {
         val rounds =
             if (names == null) 3 else (arguments.getString("diagnosticRounds") ?: "30").toInt()
                 .also { require(it in 1..30) }
+        // "switch" repeats the prefetch procedure without preloading. Cold and disk start
+        // a fresh player, while prefetch first tears down the playing video, so only
+        // switch isolates what the preload saves.
         val phases = if (names == null) listOf(
             "cold",
             "disk",
-            "prefetch"
+            "prefetch",
+            "switch"
         ) else listOf(
             arguments.getString("diagnosticPhase") ?: "cold"
-        ).also { require(it.single() in listOf("cold", "disk", "prefetch")) }
+        ).also { require(it.single() in listOf("cold", "disk", "prefetch", "switch")) }
         val measurements = JSONArray()
         fun record(
             phase: String,
@@ -1034,13 +1038,14 @@ class DevicePlaybackTest {
                         } finally {
                             graph.cache.release(warmed)
                         }
-                    } else if (phase == "prefetch") {
+                    } else if (phase == "prefetch" || phase == "switch") {
                         val preceding = items.first { it.id != item.id }
                         select(session, preceding, "warmup", round)
-                        withContext(Dispatchers.Main) { session.preload(item.playback(c)) }
+                        if (phase == "prefetch") withContext(Dispatchers.Main) { session.preload(item.playback(c)) }
                         delay(2000)
                         val cached = graph.cache.cachedVideoBytes(item.playback(c).cacheKey)
-                        assertTrue("prefetch produced no cache", cached > 0)
+                        if (phase == "prefetch") assertTrue("prefetch produced no cache", cached > 0)
+                        else assertEquals("switch target was cached", 0L, cached)
                         select(session, item, phase, round)
                     } else select(session, item, phase, round)
                     val active = if (phase == "disk") null else session
