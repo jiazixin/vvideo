@@ -107,6 +107,8 @@ Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规
 
 Check FFmpeg with `ffmpeg -hide_banner -encoders | grep libwebp`. Debian and Ubuntu's `ffmpeg` package includes it; the current Homebrew `ffmpeg` does not.
 
+For HEIC/HEIF photos (such as tiled iPhone photos) the server reads size, rotation and capture time from the file's own metadata, whatever the FFmpeg version; making their covers needs FFmpeg 7.1 or later (earlier versions either read only the first 512×512 tile, so the cover shows one corner, or cannot decode the file, and the cover is marked failed).
+
 ### Download a release
 
 Pushing a `vX.Y.Z` tag makes the [release workflow](.github/workflows/release.yml) publish to [Releases](https://github.com/jiazixin/vvideo/releases):
@@ -138,7 +140,7 @@ Options:
   -h, --help            Print this help and exit
 ```
 
-The exit status is 0 on success, `--help` or `--version`; 2 for a command-line error; and 1 when the service cannot start or fails. A failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use. SIGTERM cancels background work and allows up to 30 seconds for HTTP requests to finish.
+The exit status is 0 on success, `--help` or `--version`; 2 for a command-line error; and 1 when the service cannot start or fails. A failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use. SIGTERM cancels background work: in-flight HTTP requests get up to 10 more seconds, after which connections still open (such as a stream to a client that stopped reading) are closed; the whole stop takes at most 30 seconds.
 
 ### Build and install the Android app
 

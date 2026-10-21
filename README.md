@@ -107,6 +107,8 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 用 `ffmpeg -hide_banner -encoders | grep libwebp` 检查 FFmpeg。Debian/Ubuntu 的 `ffmpeg` 软件包带有该编码器，当前 Homebrew 的 `ffmpeg` 没有。
 
+HEIC/HEIF 照片（如 iPhone 拍摄的切块图）的尺寸、旋转和拍摄时间由服务端直接读取文件元数据，与 FFmpeg 版本无关；生成其封面需要 FFmpeg 7.1 或更高版本（更早的版本要么只取到第一个 512×512 切块，封面只是图的一角；要么无法解码，封面标记为失败）。
+
 ### 下载发布版
 
 推送 `vX.Y.Z` 形式的 tag 后，[发布工作流](.github/workflows/release.yml) 会在 [Releases](https://github.com/jiazixin/vvideo/releases) 生成：
@@ -138,7 +140,7 @@ Options:
   -h, --help            Print this help and exit
 ```
 
-退出码：成功、`--help` 或 `--version` 为 0；命令行错误为 2；服务无法启动或运行失败为 1。启动失败时记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、配置文件及出错行、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作，最多等待 30 秒让 HTTP 请求结束。
+退出码：成功、`--help` 或 `--version` 为 0；命令行错误为 2；服务无法启动或运行失败为 1。启动失败时记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、配置文件及出错行、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作：进行中的 HTTP 请求最多再等 10 秒，之后仍未结束的连接（例如已停止读取的播放流）被关闭；整个停止过程不超过 30 秒。
 
 ### 构建并安装安卓应用
 
