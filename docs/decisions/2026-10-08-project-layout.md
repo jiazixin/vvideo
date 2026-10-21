@@ -11,7 +11,7 @@
 1. Go 服务应用根保持在仓库根，遵守基线第 2、6、7、8 节；不增加 `server/`、`backend/` 或 Go 的 `src/`。
 2. 原生 Android 工程根为 `android/`，规则以根 [安卓目录规范.md](../../安卓目录规范.md) 为准。这是本项目明确、有限的类型扩展；不据此允许其他未列出的顶层应用目录。
 3. 当前不启用基线第 10 节的 `apps/` 多应用布局，也不创建 `packages/`。Go 与 Android 通过 HTTP 协议协作，互不导入对方源码。
-4. 英文入口为 `README.md`，中文入口为 `README.zh-CN.md`，内容保持语义一致。根 `AGENTS.md` 引用基线和项目补充，不复制基线全文。
+4. 中文入口为 `README.md`（GitHub 默认显示），英文入口为 `README.en.md`，内容保持语义一致；2026-10-21 按用户要求由英文默认改为中文默认。根 `AGENTS.md` 引用基线和项目补充，不复制基线全文。
 5. 现有当前设计由 `docs/plans/2026-10-08-media-library-design.md` 迁到 `docs/DESIGN.md`，符合基线第 9 节。旧路径只在本条迁移记录中出现，不保留副本。后续可执行实施计划才放 `docs/plans/`。
 
 ## 目录例外与平台映射
@@ -21,7 +21,7 @@
 | 规则 / 标准路径 | 实际路径或行为 | 原因与依据 | 适用范围 | 重新评估条件 |
 | --- | --- | --- | --- | --- |
 | 第 2、4 节未覆盖原生移动客户端 | 根 `android/` 是 Android 应用与 Gradle 工程边界 | 用户明确委托制定安卓规范；服务端与客户端构建工具和运行环境独立 | 本项目 Android 工程 | 引入独立发布的多个客户端或用户要求重组仓库 |
-| 第 3 节根入口文档清单 | 增加根 `安卓目录规范.md` 与 `README.zh-CN.md` | 用户明确要求安卓规范及中英文 README | 项目文档 | 文档入口或语言策略调整 |
+| 第 3 节根入口文档清单 | 增加根 `安卓目录规范.md` 与 `README.en.md` | 用户明确要求安卓规范及中英文 README | 项目文档 | 文档入口或语言策略调整 |
 | 第 3 节根文件清单 | 根 `NOTICE` 与 `LICENSE` 并列，记录版权与移植来源；`CONTRIBUTING.md`、`SECURITY.md` 放 `docs/`（GitHub 会识别该位置） | 版权人 jzx；2026-10-20 先选 Apache-2.0，同日因移植 Telegram for Android（GPL-2.0 或更高版本）的相册排版代码，按用户授权改为 GPL-3.0-or-later（GPLv3 兼容所用的 Apache-2.0 依赖，GPLv2 单独不兼容）；`LICENSE` 保持官方原文以便工具识别 | 项目许可与开源入口 | 更换许可证或托管平台 |
 | 第 4、6 节通用源码和测试位置 | `android/<module>/src/main/kotlin/`、`src/test/kotlin/`、`src/androidTest/kotlin/`；资源和 Manifest 使用相应 source set | 本项目选择 Android Gradle Plugin 支持的标准 source set；测试依赖及运行环境由 source set 区分，依据见安卓规范 | Android Gradle 模块 | 更换构建系统或 source set 配置 |
 | 第 4 节非 Go 发布输出与测试报告 | Android 输出保留在所属 Gradle 工程 / 模块的 `build/`，不另拷源码或构建目录 | 使用 Gradle/AGP 的默认输出和报告发现机制；不声称路径不可配置 | Android 构建及报告 | 实际工具配置更改输出位置 |

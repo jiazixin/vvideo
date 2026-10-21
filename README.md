@@ -1,116 +1,124 @@
-<p align="center"><img src="docs/assets/logo.svg" width="96" height="96" alt="VVideo logo"></p>
+<p align="center"><img src="docs/assets/logo.svg" width="96" height="96" alt="VVideo 标志"></p>
 
 <h1 align="center">VVideo</h1>
 
 <p align="center">
-  A self-hosted media server for Linux/NAS and a native Android app for browsing and playing a folder-organized photo and video library.
+  自托管的 Linux/NAS 媒体服务，配合原生安卓应用浏览和播放按文件夹整理的照片与视频库。
 </p>
 
 <p align="center">
-  English | <a href="README.zh-CN.md">简体中文</a>
+  <a href="https://github.com/jiazixin/vvideo/actions/workflows/ci.yml"><img src="https://github.com/jiazixin/vvideo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <img src="https://img.shields.io/github/go-mod/go-version/jiazixin/vvideo?logo=go&logoColor=white" alt="Go version">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Android-4c8b3f" alt="Linux | Android">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
+</p>
+
+<p align="center">
+  <b>简体中文</b> · <a href="README.en.md">English</a>
 </p>
 
 ---
 
-VVideo indexes an existing media library where it already lives. A Go service scans your folders, extracts metadata and covers, and serves the original bytes over HTTP. A Kotlin/Jetpack Compose app shows each folder as an album feed and plays videos full screen with a vertical swipe between them. Originals stay read-only: there is no transcoding, renaming or moving of files.
+VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取元信息和封面，通过 HTTP 提供原始字节；Kotlin/Jetpack Compose 应用把每个文件夹显示为相册流，全屏播放视频并上下滑动切换。原文件只读：不转码，不改名，也不移动文件。
 
 <p align="center">
-  <img src="docs/assets/mockups/01-home-libraries.png" width="200" alt="Home screen mockup">
-  <img src="docs/assets/mockups/02-folder-album-feed.png" width="200" alt="Folder album feed mockup">
-  <img src="docs/assets/mockups/06-player-controls.png" width="200" alt="Player mockup">
+  <img src="docs/assets/mockups/01-home-libraries.png" width="200" alt="首页效果图">
+  <img src="docs/assets/mockups/02-folder-album-feed.png" width="200" alt="文件夹相册流效果图">
+  <img src="docs/assets/mockups/06-player-controls.png" width="200" alt="播放器效果图">
 </p>
-<p align="center"><sub>Design mockups with placeholder images. See <a href="docs/assets/mockups/">all mockups</a>.</sub></p>
+<p align="center"><sub>以上为使用占位图的设计效果图，全部效果图见 <a href="docs/assets/mockups/">docs/assets/mockups</a>。</sub></p>
 
-## Project status
+## 项目状态
 
-**First release, partially accepted.** The server and app are implemented and tested on synthetic media and on a real phone (iQOO 12 Pro). Not yet verified: a full real library on a NAS, every codec/container combination, and a persistent production deployment. The latest warm-scroll frame measurements missed the 1% deadline-overrun target. The [acceptance record](docs/ACCEPTANCE.md) lists what was measured, on which build, and the known limitations.
+**首个版本，验收尚未全部完成。** 服务端和应用已实现，并在合成媒体和真机（iQOO 12 Pro）上测试。尚未验证：NAS 上的完整真实媒体库、全部编码与容器组合、持久化的正式部署。最近一次暖缓存滚动帧测量未达到 1% 超时帧目标。[验收记录](docs/ACCEPTANCE.md)列出测量内容、对应构建和已知限制。
 
-Scope of this release: home network only, original-quality playback, Android only. Out of scope: public internet service, transcoding, iOS and recommendations.
+本版范围：仅限家庭内网、原画播放、仅安卓。不在本版范围：公网服务、转码、iOS 和推荐。
 
-## Features
+## 功能
 
-**Server (Go, Linux/NAS)**
+**服务端（Go，Linux/NAS）**
 
-- Streaming, batched scans of large folder trees. A failed or offline scan keeps the previous index, and a file is only treated as deleted after two consecutive complete, healthy scans.
-- SQLite in WAL mode with one writer and four read-only connections; the database lives on local disk while media may sit on a network mount.
-- Durable background jobs for `ffprobe` metadata and one WebP cover per video, with bounded concurrency and a disk-budgeted LRU cover cache. Scans, probes and covers keep running during playback, limited by their worker counts.
-- Global sorting by capture time, modification time or name, with cursor paging and stable anchors so clients can restore a position deep inside a folder. Name search covers a folder's whole subtree with bounded results.
-- Bearer-token API with HTTP Range, ETag and per-version checks, so a client never mixes bytes from an old and a new version of a file. Optional MP4 index hints let the client prefetch `moov` at its original offset.
-- Scheduled scans (cron), strict configuration validation, structured logs and graceful shutdown.
+- 对大型目录树做流式、分批扫描。扫描失败或目录离线时保留原有索引；文件只有在连续两次完整、健康的扫描中都不存在时才视为删除。
+- SQLite WAL 模式，一个写连接、四个只读连接；数据库放本机磁盘，媒体可以位于网络挂载盘。
+- 持久化后台任务：`ffprobe` 元信息探测，每个视频生成一张 WebP 封面；并发受限，封面缓存按磁盘预算做 LRU 淘汰。播放期间扫描、探测和抽帧照常进行，由各自的并发数限制。
+- 按拍摄时间、修改时间或文件名全局排序，游标分页并带稳定锚点，客户端可以恢复到大目录深处的位置。按名称搜索覆盖整个子目录树，结果数量有上限。
+- Bearer 令牌鉴权的 API，支持 HTTP Range、ETag 和逐版本校验，客户端不会混用同一文件新旧版本的字节。可选的 MP4 索引提示让客户端按原始偏移预取 `moov`。
+- 定时扫描（cron）、严格的配置校验、结构化日志和优雅退出。
 
-**Android app (Kotlin, Compose, Media3)**
+**安卓应用（Kotlin、Compose、Media3）**
 
-- Folder navigation with ten-item albums laid out like Telegram channel albums (ported from Telegram for Android), and per-folder sort and position that survive app restarts.
-- Name search across the open folder and all its subfolders, from a search box at the top of the folder page.
-- A vertical video feed driven by a single reused Media3 player, a versioned byte cache and bounded, cancellable prefetch of the next video.
-- Full-screen photos with zoom and horizontal paging; media details show where the sort time came from.
-- Media cache budgets of 1, 5 or 10 GB (decimal), separate from RAM buffering. Clearing the cache keeps settings and browsing positions.
-- Light and dark themes, high-refresh-rate scrolling and playback gestures: double-tap seek, hold for 2× speed, and vertical swipes on the left or right edge for brightness or volume.
+- 文件夹浏览，每十个媒体组成一块相册，排版与 Telegram 频道相册相同（移植自 Telegram for Android）；各文件夹的排序和浏览位置在重启应用后保留。
+- 文件夹页顶部的搜索框可按名称搜索当前文件夹及其全部子文件夹。
+- 竖向视频流复用同一个 Media3 播放器，带版本化字节缓存，并有限量、可取消地预加载下一个视频。
+- 全屏查看照片，支持缩放和左右翻页；媒体详情显示排序时间的来源。
+- 媒体缓存上限可选 1、5、10 GB（十进制），与内存缓冲分开计算。清理缓存不会删除设置和浏览位置。
+- 浅色与深色主题、高刷新率滚动，以及播放手势：双击快进快退、长按 2 倍速，在屏幕左侧或右侧边缘上下滑动调节亮度或音量。
 
-The library size this was designed for (about 130,000 videos and 380,000 images) is the owner's estimate, not a measured count. Scale tests used a 510,000-row synthetic database, which is separate from indexing real media.
+设计时参考的库规模（约 13 万视频、38 万图片）是所有者的估计，不是实际统计。规模测试使用 51 万行的合成数据库，与真实媒体的索引是两回事。
 
-## Architecture
+## 架构
 
 ```text
-Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (index, jobs)
-  Compose UI                           │  scanner ─▶ read-only media folders
-  Media3 player ◀── Range bytes ───────┤  ffprobe / FFmpeg ─▶ cover cache
-  disk cache (1/5/10 GB)               └  REST API /v1
+安卓应用 ──HTTP（Bearer 令牌）──▶ Go 服务 ──▶ SQLite（索引、任务）
+  Compose 界面                      │  扫描器 ─▶ 只读媒体目录
+  Media3 播放器 ◀── Range 字节 ─────┤  ffprobe / FFmpeg ─▶ 封面缓存
+  磁盘缓存（1/5/10 GB）             └  REST API /v1
 ```
 
-[docs/DESIGN.md](docs/DESIGN.md) describes the product behavior and performance targets, and [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) the server's scan, storage and performance rules.
+产品行为与性能目标见 [docs/DESIGN.md](docs/DESIGN.md)，服务端扫描、存储与性能规则见 [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)。
 
-## Repository layout
+## 目录结构
 
 ```text
 .
-├── cmd/vvideo/         server entry point (flags, logging, startup, shutdown)
-├── internal/           server packages
-│   ├── app/            wiring of storage, workers and the HTTP API
-│   ├── config/         strict configuration loader
-│   ├── jobs/           durable job queue and playback-activity tracker
-│   ├── library/        published index: directories, media, paging, album anchors
-│   ├── mediafs/        descriptor-relative, read-only file access and mount identity
-│   ├── probe/          ffprobe and EXIF metadata
-│   ├── scanner/        two-pass directory observation and publication
-│   ├── storage/        SQLite ownership, connections and schema
-│   ├── streaming/      Range responses and MP4 index hints
-│   └── thumbnail/      cover generation and LRU cache
-├── tests/              cross-package Go integration tests
-├── configs/            configuration example (local copies are git-ignored)
-├── deploy/             systemd unit
-├── scripts/            device measurement and synthetic-media tools
-├── android/            Android Gradle project (:app, :core:media, :benchmark)
-└── docs/               design, API, deployment, decisions, plans and acceptance records
+├── .github/workflows/  CI 工作流
+├── cmd/vvideo/         服务入口（参数、日志、启动与退出）
+├── internal/           服务端各包
+│   ├── app/            装配存储、后台任务和 HTTP API
+│   ├── config/         严格的配置加载
+│   ├── jobs/           持久任务队列与播放活动跟踪
+│   ├── library/        已发布索引：目录、媒体、分页、相册锚点
+│   ├── mediafs/        基于目录描述符的只读文件访问与挂载身份
+│   ├── probe/          ffprobe 与 EXIF 元信息
+│   ├── scanner/        两遍观测目录并发布结果
+│   ├── storage/        SQLite 独占、连接与 schema
+│   ├── streaming/      Range 响应与 MP4 索引提示
+│   └── thumbnail/      封面生成与 LRU 缓存
+├── tests/              Go 跨包集成测试
+├── configs/            配置示例（本地配置被 Git 忽略）
+├── deploy/             systemd 服务定义
+├── scripts/            真机测量与合成媒体工具
+├── android/            安卓 Gradle 工程（:app、:core:media、:benchmark）
+└── docs/               设计、API、部署、决策、计划与验收记录
 ```
 
-Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规范.md](安卓目录规范.md) (Android) and the [project layout decision](docs/decisions/2026-10-08-project-layout.md), which also lists the project's documented exceptions.
+目录规则见 [目录规范.md](目录规范.md)（Go）、[安卓目录规范.md](安卓目录规范.md)（安卓）和[项目目录决策](docs/decisions/2026-10-08-project-layout.md)；目录例外统一记录在该决策中。
 
-## Getting started
+## 快速开始
 
-### Requirements
+### 环境要求
 
-| Component | Version |
+| 组件 | 版本 |
 | --- | --- |
-| Go | **1.27.1** or newer, as declared in [go.mod](go.mod) |
-| FFmpeg | `ffmpeg` and `ffprobe` on `PATH`; `ffmpeg` must include the `libwebp` encoder |
-| JDK (Android) | 21 |
-| Android SDK | Platform 36 and Build-Tools 35.0.0; devices running Android 9 (API 28) or later |
+| Go | **1.27.1** 或更高，以 [go.mod](go.mod) 为准 |
+| FFmpeg | `PATH` 中有 `ffmpeg` 和 `ffprobe`；`ffmpeg` 必须带 `libwebp` 编码器 |
+| JDK（安卓） | 21 |
+| Android SDK | Platform 36、Build-Tools 35.0.0；设备需 Android 9（API 28）及以上 |
 
-Check FFmpeg with `ffmpeg -hide_banner -encoders | grep libwebp`. Debian and Ubuntu's `ffmpeg` package includes it; the current Homebrew `ffmpeg` does not.
+用 `ffmpeg -hide_banner -encoders | grep libwebp` 检查 FFmpeg。Debian/Ubuntu 的 `ffmpeg` 软件包带有该编码器，当前 Homebrew 的 `ffmpeg` 没有。
 
-### Run the server
+### 运行服务端
 
 ```sh
 go mod download
 go build -trimpath -o bin/vvideo ./cmd/vvideo
 cp configs/config.example.yaml configs/config.local.yaml
-# Edit media paths and set a private, non-empty auth.token.
+# 修改媒体路径，并设置私密、非空的 auth.token
 chmod 600 configs/config.local.yaml
 bin/vvideo --config configs/config.local.yaml
 ```
 
-Put the SQLite data directory on the server's local disk, not on SMB/NFS; media folders may be network mounts. For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git.
+SQLite 数据目录放在服务器本机磁盘，不要放在 SMB/NFS 上；媒体目录可以是网络挂载。发布构建可用 `-ldflags "-X main.version=v1.0.0"` 写入版本号，否则 `--version` 显示 Go 根据 Git 推导的版本。
 
 ```text
 Usage:
@@ -122,64 +130,64 @@ Options:
   -h, --help            Print this help and exit
 ```
 
-The exit status is 0 on success, `--help` or `--version`; 2 for a command-line error; and 1 when the service cannot start or fails. A failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use. SIGTERM cancels background work and allows up to 30 seconds for HTTP requests to finish.
+退出码：成功、`--help` 或 `--version` 为 0；命令行错误为 2；服务无法启动或运行失败为 1。启动失败时记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、配置文件及出错行、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作，最多等待 30 秒让 HTTP 请求结束。
 
-### Build and install the Android app
+### 构建并安装安卓应用
 
-The Gradle Wrapper pins Gradle 8.14.3; AGP 8.13.2, Kotlin 2.2.21, Media3 1.8.1 and the other dependencies are pinned in [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml). Set `ANDROID_HOME` or an ignored `android/local.properties`.
+Gradle Wrapper 固定 Gradle 8.14.3；AGP 8.13.2、Kotlin 2.2.21、Media3 1.8.1 等依赖固定在 [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml)。请设置 `ANDROID_HOME` 或被 Git 忽略的 `android/local.properties`。
 
 ```sh
 android/gradlew -p android :app:assembleDebug
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open Settings in the app and enter the server root URL (for example `http://192.168.1.10:8080`) and the token. HTTP and HTTPS are both accepted for any host. Plain HTTP does not encrypt the connection: anyone on the same network can read the token and the media.
+在应用设置中填写服务根地址（例如 `http://192.168.1.10:8080`）和令牌。任意主机都可以使用 HTTP 或 HTTPS。HTTP 不加密连接，同一网络中的任何人都能读到令牌和媒体内容。
 
-Build variants, device tests and performance measurement are described in [android/README.md](android/README.md).
+构建变体、真机测试和性能测量见 [android/README.md](android/README.md)。
 
-## Configuration
+## 配置
 
-[configs/config.example.yaml](configs/config.example.yaml) lists every supported field. Only `auth.token` and at least one `media[].path` are required; everything else has a default. Configuration is read once at startup, so changes need a restart.
+[configs/config.example.yaml](configs/config.example.yaml) 列出全部支持的字段。只有 `auth.token` 和至少一个 `media[].path` 是必填项，其余都有默认值。配置只在启动时读取，修改后需要重启。
 
-**Choosing the file.** `-c`/`--config` (also `--config=<file>`; the last one wins) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
+**选择配置文件。** `-c`/`--config`（也可写 `--config=<file>`，以最后一个为准）优先于 `CONFIG_FILE`，后者优先于工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式指定的文件为空、不存在、不可读或格式错误时报错；只有隐式默认文件允许不存在，此时必须由环境变量提供必填项。
 
-**Precedence and environment variables.** `VVIDEO_*` environment variables override the YAML file, which overrides the defaults. A variable name is `VVIDEO_` plus the uppercase field path with `__` between levels, for example `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA` and `VVIDEO_IGNORE` replace the whole list with a JSON array of `{"path": "..."}` objects. Unknown or legacy fields, duplicate keys, YAML aliases and tags, wrong types and empty required values are rejected. There is no `.env` loading and no variable interpolation in YAML.
+**优先级与环境变量。** `VVIDEO_*` 环境变量覆盖 YAML 文件，YAML 覆盖默认值。变量名为 `VVIDEO_` 加大写字段路径，层级之间用 `__` 连接，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA` 和 `VVIDEO_IGNORE` 用 `{"path": "..."}` 对象组成的 JSON 数组替换整个列表。未知或旧字段、重复键、YAML 别名和标签、类型错误、必填项为空都会被拒绝。不加载 `.env`，YAML 中也不做变量替换。
 
-| Setting | Meaning | Default |
+| 配置项 | 含义 | 默认值 |
 | --- | --- | --- |
-| `server.listen` | Host name or IP address without a port; write IPv6 as `::` | `0.0.0.0` |
-| `server.port` | TCP port, 1–65535 | `8080` |
-| `auth.token` | Bearer token clients must send | required |
-| `storage` | Data directory holding `data.sqlite` and the `.scan-tmp/` staging area | `data` |
-| `media[].path` | Media roots; they must not overlap | required |
-| `ignore[].path` | Exact files or directory subtrees inside a media root, not globs | none |
-| `scan.cron` | Five-field cron with optional `CRON_TZ=`; empty disables periodic scans (the startup scan still runs) | `*/30 * * * *` |
-| `scan.parallel` | Concurrent file attribute reads during a scan | `2` |
-| `scan.probe_parallel` | Concurrent `ffprobe` jobs | `2` |
-| `cache.path` | Cover cache directory | `cache` |
-| `cache.max_size` | Cover cache budget, with unit `MB`, `GB`, `MiB` or `GiB` | `30GB` |
-| `cache.parallel` / `cache.threads` | Concurrent cover jobs, and decode threads per job | `2` / `2` |
-| `cache.percent` | Position of the cover frame as a percentage of the duration, in `[0, 100)` | `10` |
-| `log.level` / `log.format` | `debug`, `info`, `warn` or `error` / `json` or `text` | `info` / `json` |
-| `log.output` / `log.file` | `stdout`, `stderr` or `file`; `log.file` is required for, and only accepted with, `file` | `stdout` |
+| `server.listen` | 主机名或 IP 地址，不含端口；IPv6 写作 `::` | `0.0.0.0` |
+| `server.port` | TCP 端口，1–65535 | `8080` |
+| `auth.token` | 客户端必须携带的 Bearer 令牌 | 必填 |
+| `storage` | 数据目录，内含 `data.sqlite` 和扫描暂存区 `.scan-tmp/` | `data` |
+| `media[].path` | 媒体根目录，彼此不能重叠 | 必填 |
+| `ignore[].path` | 媒体根内要排除的具体文件或目录子树，不支持通配符 | 无 |
+| `scan.cron` | 五段式 cron，可加 `CRON_TZ=` 前缀；留空则关闭定时扫描（启动时仍扫描一次） | `*/30 * * * *` |
+| `scan.parallel` | 扫描时并发读取文件属性的数量 | `2` |
+| `scan.probe_parallel` | 同时运行的 `ffprobe` 任务数 | `2` |
+| `cache.path` | 封面缓存目录 | `cache` |
+| `cache.max_size` | 封面缓存上限，单位 `MB`、`GB`、`MiB` 或 `GiB` | `30GB` |
+| `cache.parallel` / `cache.threads` | 同时运行的抽帧任务数 / 单个任务的解码线程数 | `2` / `2` |
+| `cache.percent` | 封面取自视频时长的百分比位置，范围 `[0, 100)` | `10` |
+| `log.level` / `log.format` | `debug`、`info`、`warn` 或 `error` / `json` 或 `text` | `info` / `json` |
+| `log.output` / `log.file` | `stdout`、`stderr` 或 `file`；仅当为 `file` 时必须且只能填写 `log.file` | `stdout` |
 
-Paths in the YAML file resolve against the file's directory; paths from environment variables and defaults resolve against the working directory. Writable directories (`storage`, `cache.path`, `log.file`) must stay outside the media roots. Concurrency values accept 1–1024; they bound VVideo's own workers, not the process's thread count. Log files are appended to and never rotated, so use logrotate with `copytruncate`. While covers are being generated, a `thumbnail_progress` event every five minutes reports progress, throughput and an ETA; an idle queue logs nothing.
+YAML 中的路径以配置文件所在目录为基准；环境变量和默认值中的路径以工作目录为基准。可写目录（`storage`、`cache.path`、`log.file`）必须位于媒体根之外。并发类数值可取 1–1024，它们限制的是 VVideo 自己的工作者，不是进程线程总数。日志文件只追加、不轮转，请用 logrotate 的 `copytruncate`。生成封面期间，每 5 分钟输出一条 `thumbnail_progress` 事件，报告进度、速度和预计剩余时间；队列空闲时不输出。
 
-Libraries keep their IDs across restarts and reordering. Changing a root's path creates a new library, and removing a root stops managing it without touching the files. Timeouts, retry limits, page sizes and other resource policies are built in; see the [design](docs/DESIGN.md) and the [HTTP API](docs/API.md).
+媒体库的 ID 在重启和调整顺序后保持不变。修改根目录路径会产生新的媒体库；移除根目录只停止管理，不会动文件。超时、重试次数、分页大小等资源策略内置于程序，见[设计文档](docs/DESIGN.md)和 [HTTP API](docs/API.md)。
 
-## Deployment
+## 部署
 
-[deploy/vvideo.service](deploy/vvideo.service) is a hardened systemd unit for a binary in `/opt/vvideo` running as a `vvideo` service account. Before installing it:
+[deploy/vvideo.service](deploy/vvideo.service) 是一个加固的 systemd 服务定义，假设程序位于 `/opt/vvideo`，以 `vvideo` 服务账户运行。安装前：
 
-1. Create the account and the writable `/opt/vvideo/data` and `/opt/vvideo/cache` directories, and install the binary and `configs/config.local.yaml`.
-2. Adjust paths and the account to your system. The unit only allows writes to `data/` and `cache/`; with `log.output: file`, add the log directory to `ReadWritePaths` (or keep the default stdout, which goes to journald). Keep read access to the media mounts.
-3. Install it as `/etc/systemd/system/vvideo.service`, then run `systemctl daemon-reload` and `systemctl enable --now vvideo`.
+1. 创建该账户和可写的 `/opt/vvideo/data`、`/opt/vvideo/cache` 目录，安装程序和 `configs/config.local.yaml`。
+2. 按你的系统调整路径和账户。该服务只允许写 `data/` 和 `cache/`；如果使用 `log.output: file`，请把日志目录加入 `ReadWritePaths`（或保留默认的 stdout，由 journald 收集）。保留对媒体挂载点的读取权限。
+3. 安装为 `/etc/systemd/system/vvideo.service`，然后执行 `systemctl daemon-reload` 和 `systemctl enable --now vvideo`。
 
-Mount media read-only where possible. The service writes only its data directory and cover cache, and a lock file stops a second process from opening the same database.
+尽量以只读方式挂载媒体。服务只写自己的数据目录和封面缓存；锁文件会阻止第二个进程打开同一个数据库。
 
-**Backups and state.** Back up the private configuration and a consistent snapshot of `data/data.sqlite` (stop the service, or use SQLite's online backup). The cover cache and scan staging area can be rebuilt. Before the first stable release there are no schema migrations: if a new build reports a schema version mismatch, stop the service, delete the data directory and let it reindex. Media files are never affected.
+**备份与状态。** 请备份私有配置，以及 `data/data.sqlite` 的一致快照（先停止服务，或使用 SQLite 在线备份）。封面缓存和扫描暂存区可以重建。首个稳定版本之前不提供 schema 迁移：如果新版本提示 schema 版本不匹配，请停止服务、删除数据目录，让程序重新建立索引。媒体文件不受影响。
 
-## Development
+## 开发
 
 ```sh
 gofmt -l . && go vet ./...
@@ -187,28 +195,30 @@ go test ./...
 android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
 ```
 
-`scripts/generate-media.py <dir>` creates a small synthetic library (H.264, HEVC and AV1 in MP4, MKV, TS and MOV, plus photos) for local testing. Never commit real media, tokens or server addresses.
+每次推送到 `main` 和每个 PR 都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：Go 部分检查 `gofmt`、`go vet`（含 macOS 交叉检查）、`go test -race` 和 Linux amd64/arm64 交叉编译；安卓部分运行单元测试、Lint 以及 debug 和 profile 构建。真机测试和性能测量需要手机，不在 CI 中运行，见 [android/README.md](android/README.md)。
 
-See [CONTRIBUTING](docs/CONTRIBUTING.md) for the workflow, code style and checks expected in a pull request. Contributors using AI agents should also follow [AGENTS.md](AGENTS.md).
+`scripts/generate-media.py <目录>` 生成一个小型合成媒体库（MP4、MKV、TS、MOV 容器中的 H.264、HEVC、AV1 视频，以及照片），用于本地测试。不要提交真实媒体、令牌或服务器地址。
 
-## Documentation
+工作流程、代码风格和提交 PR 前需要通过的检查见[贡献指南](docs/CONTRIBUTING.md)。使用 AI 代理参与开发时，还需遵守 [AGENTS.md](AGENTS.md)。
 
-| Document | Contents |
+## 文档
+
+| 文档 | 内容 |
 | --- | --- |
-| [docs/DESIGN.md](docs/DESIGN.md) | Product behavior and performance targets (Chinese) |
-| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | Server scan, storage and performance rules PERF-01 to PERF-12 (Chinese) |
-| [docs/API.md](docs/API.md) | HTTP API and error codes (Chinese) |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment record of the test machine (Chinese) |
-| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | What was measured and verified, with limitations (Chinese) |
-| [docs/decisions/](docs/decisions/) and [docs/plans/](docs/plans/) | Design decisions and implementation plans |
-| [android/README.md](android/README.md) | Android build variants, device tests and measurement |
+| [docs/DESIGN.md](docs/DESIGN.md) | 产品行为与性能目标 |
+| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | 服务端扫描、存储与性能规则 PERF-01 至 PERF-12 |
+| [docs/API.md](docs/API.md) | HTTP API 与错误码 |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 测试机部署记录 |
+| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | 测量与验证结果及限制 |
+| [docs/decisions/](docs/decisions/) 与 [docs/plans/](docs/plans/) | 设计决策与实施计划 |
+| [android/README.md](android/README.md) | 安卓构建变体、真机测试与测量（英文） |
 
-## Security
+## 安全
 
-The API is designed for a trusted home network. Use a long random token, restrict the listening address and firewall to your LAN, and use HTTPS (for example behind a reverse proxy) if the network is not trusted. To report a vulnerability, follow [docs/SECURITY.md](docs/SECURITY.md); please do not open a public issue.
+API 面向可信的家庭内网设计。请使用足够长的随机令牌，把监听地址和防火墙限制在局域网内；网络不可信时请使用 HTTPS（例如放在反向代理之后）。报告安全漏洞请按 [docs/SECURITY.md](docs/SECURITY.md) 操作，不要公开提交 issue。
 
-## License
+## 许可证
 
-Copyright 2026 jzx. Licensed under the [GNU General Public License v3.0 or later](LICENSE).
+Copyright 2026 jzx。依据 [GNU 通用公共许可证 v3.0 或更高版本](LICENSE) 授权。
 
-The Android album layout is ported from [Telegram for Android](https://github.com/DrKLO/Telegram) (GPL-2.0-or-later); see [NOTICE](NOTICE). VVideo is not affiliated with Telegram.
+安卓相册排版移植自 [Telegram for Android](https://github.com/DrKLO/Telegram)（GPL-2.0 或更高版本），详见 [NOTICE](NOTICE)。VVideo 与 Telegram 没有关联。

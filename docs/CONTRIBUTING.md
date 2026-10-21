@@ -12,7 +12,7 @@ Thanks for helping. This guide covers the development setup, the conventions the
 
 ## Development setup
 
-You need Go (version from [go.mod](../go.mod)), FFmpeg with `libwebp`, JDK 21 and the Android SDK (Platform 36, Build-Tools 35.0.0). See the [README](../README.md#requirements).
+You need Go (version from [go.mod](../go.mod)), FFmpeg with `libwebp`, JDK 21 and the Android SDK (Platform 36, Build-Tools 35.0.0). See the [README](../README.en.md#requirements).
 
 Run a local server against synthetic media:
 
@@ -60,13 +60,13 @@ android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest 
   :app:lintDebug :core:media:lintDebug :app:assembleDebug :app:assembleProfile
 ```
 
-Run `go test -race ./...` for changes to concurrent server code. Device tests and frame or memory measurements need a phone and are described in [android/README.md](../android/README.md). If you could not run a check, say which one and why in the pull request rather than leaving it out.
+[CI](../.github/workflows/ci.yml) runs these checks, `go test -race` and a macOS cross-vet on every pull request. Run `go test -race ./...` locally for changes to concurrent server code. Device tests and frame or memory measurements need a phone and are described in [android/README.md](../android/README.md). If you could not run a check, say which one and why in the pull request rather than leaving it out.
 
 ## Commits and pull requests
 
 - Write commit subjects in the imperative mood, in English, under about 70 characters (for example `Keep the album position when the viewer closes`), and explain the why in the body.
 - Describe the behavior change, the checks you ran with their results, and anything not verified (devices, network shares, codecs).
-- Update [README.md](../README.md) and [README.zh-CN.md](../README.zh-CN.md) together when commands, configuration or scope change, and update [API.md](API.md) when the HTTP contract changes.
+- Update [README.md](../README.md) (Chinese) and [README.en.md](../README.en.md) (English) together when commands, configuration or scope change, and update [API.md](API.md) when the HTTP contract changes.
 
 ## Reporting bugs
 

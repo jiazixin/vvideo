@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned by commit; the comment names the reviewed tag.
+jobs:
+  go:
+    name: Go 检查与测试
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go mod verify
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal tests)
+          [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }
+      - run: go vet ./...
+      # macOS is cross-checked only; the server targets Linux/NAS.
+      - run: GOOS=darwin GOARCH=arm64 go vet ./...
+      # Tests use synthetic media and a fake ffprobe; FFmpeg is not needed.
+      - run: go test -race -count=1 ./...
+      - name: 交叉编译 Linux amd64 / arm64
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -o "$RUNNER_TEMP/vvideo-linux-$arch" ./cmd/vvideo
+          done
+
+  android:
+    name: Android 测试、Lint 与构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
+      # Same SDK components as android/README.md; the runner image ships
+      # sdkmanager with its licenses already accepted.
+      - name: 安装 Android SDK 组件
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;35.0.0"
+      # Device tests and frame measurements need a phone and are not run here.
+      - run: >-
+          ./gradlew --no-daemon
+          :app:testDebugUnitTest :core:media:testDebugUnitTest
+          :app:lintDebug :core:media:lintDebug
+          :app:assembleDebug :app:assembleProfile

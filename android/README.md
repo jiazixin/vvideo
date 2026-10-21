@@ -26,7 +26,7 @@ Media metadata is limited to three pages (at most 300 items at the default page 
 
 For hardware-decoded HEVC at 4K or higher, seeking can briefly request a codec processing rate bounded by the declared capability and 120 fps. The hint ends after the first presented buffer, after two seconds, or when stopped. Unknown frame rates, software decoders and unavailable capabilities keep Media3 defaults. This affects decoder resource planning, not playback speed or timestamp accuracy; the declared capability does not guarantee measured throughput. Android 14+ also uses Media3's decode-only buffer flag for skipped pre-target frames. Both policies retain exact seeking and the existing RAM/cache budgets. See [Android's operating-rate definition](https://developer.android.com/reference/android/media/MediaFormat#KEY_OPERATING_RATE).
 
-See the [root README](../README.md), [Android conventions](../安卓目录规范.md) and [acceptance record](../docs/ACCEPTANCE.md).
+See the [root README](../README.en.md) ([中文](../README.md)), [Android conventions](../安卓目录规范.md) and [acceptance record](../docs/ACCEPTANCE.md).
 
 
 If the OEM freezes the separate benchmark runner, use the host capture tool with
