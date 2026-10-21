@@ -232,6 +232,19 @@ class LibraryViewModel(
         _state.value =
             LibraryUiState(libraries = _state.value.libraries, recent = _state.value.recent)
         viewModelScope.launch { repository.setLastDirectory(0) }
+        // The list stays shown; the reply refreshes library health or reports the
+        // server unreachable, instead of the state from before the folder opened.
+        val shown = connection
+        openJob = viewModelScope.launch {
+            try {
+                val libraries = repository.libraries(shown)
+                _state.value = _state.value.copy(libraries = libraries, error = false, errorStatus = 0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
+            }
+        }
     }
 
     /**
@@ -332,6 +345,13 @@ class LibraryViewModel(
             } catch (e: Exception) {
                 reveal?.cancel()
                 loading = false
+                // A destination that failed before it was revealed, as when the server
+                // refuses the connection at once, is still shown with the error, so going
+                // back moves up a level instead of staying on the folder being left.
+                val pending = if (leaving && _state.value.directory?.id != id) {
+                    pendingDirectory(origin, id)
+                } else null
+                if (pending != null) reveal(origin, pending, left)
                 _state.value =
                     _state.value.copy(busy = false, error = true, errorStatus = e.serviceStatus())
             }
@@ -355,15 +375,20 @@ class LibraryViewModel(
                 _state.value = _state.value.copy(busy = true)
                 return@launch
             }
-            // Only a settled page that owns the windows can be returned to as it was.
-            if (windowDirectory != 0L && origin.directory?.id == windowDirectory && !origin.busy) {
-                kept = KeptPage(origin, bookmark, left)
-            }
-            // The placeholder was built from the state at the tap; lists refreshed since then stay.
-            bookmark = null
-            _state.value =
-                _state.value.let { pending.copy(recent = it.recent, libraries = it.libraries) }
+            reveal(origin, pending, left)
         }
+    }
+
+    /** Shows [pending] in place of [origin], keeping [origin] to return to. */
+    private fun reveal(origin: LibraryUiState, pending: LibraryUiState, left: FolderPosition) {
+        // Only a settled page that owns the windows can be returned to as it was.
+        if (windowDirectory != 0L && origin.directory?.id == windowDirectory && !origin.busy) {
+            kept = KeptPage(origin, bookmark, left)
+        }
+        // The placeholder was built from the state at the tap; lists refreshed since then stay.
+        bookmark = null
+        _state.value =
+            _state.value.let { pending.copy(recent = it.recent, libraries = it.libraries) }
     }
 
     /** The path down to [directory], from the [known] path when it leads there, else from the server. */
