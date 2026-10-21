@@ -7,7 +7,10 @@ import org.junit.Test
 class LibraryKeysTest {
     private val dir = Directory(5, "lib", 1, "folder", 2)
     private val item =
-        Media("m1", "v", "lib", 5, "a.mp4", "video", 1920, 1080, 0, 1000, 10, 0, 0, "ready", "", "")
+        Media(
+            "m1", "v", "lib", 5, "a.mp4", MediaKind.Video, 1920, 1080, 0, 1000, 10, 0, 0,
+            MediaStatus.Ready, "", CaptureSource.Unknown
+        )
 
     private fun page(found: Boolean, items: List<Media>) =
         MediaPage(dir, items, "", "", "", found, true)
@@ -31,7 +34,8 @@ class LibraryKeysTest {
 
     @Test
     fun restoreFindsTheSavedRowOrTheAnchorAlbum() {
-        val state = LibraryUiState(children = listOf(dir.copy(id = 7), dir.copy(id = 8)))
+        val state =
+            LibraryUiState(subfolders = Subfolders(listOf(dir.copy(id = 7), dir.copy(id = 8))))
         assertEquals(1, restoreIndex(libraryKeys(state), state.albums, "folder:8", ""))
         val albums = listOf(Album(listOf(item)))
         val keys = libraryKeys(LibraryUiState(albums = albums))
@@ -41,7 +45,7 @@ class LibraryKeysTest {
     // A row that is no longer shown gives no index, so its offset is not applied at the top.
     @Test
     fun missingRowGivesNoIndex() {
-        val state = LibraryUiState(children = listOf(dir.copy(id = 7)))
+        val state = LibraryUiState(subfolders = Subfolders(listOf(dir.copy(id = 7))))
         assertNull(restoreIndex(libraryKeys(state), state.albums, "folder:9", "m1"))
     }
 }

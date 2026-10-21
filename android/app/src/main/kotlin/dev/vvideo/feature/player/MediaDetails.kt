@@ -2,21 +2,35 @@ package dev.vvideo.feature.player
 
 import android.text.format.Formatter
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.*
-import androidx.compose.ui.res.*
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.vvideo.R
+import dev.vvideo.model.CaptureSource
 import dev.vvideo.model.Media
-import dev.vvideo.ui.component.*
+import dev.vvideo.model.MediaKind
+import dev.vvideo.ui.component.TimeLabels
+import dev.vvideo.ui.component.VVBottomSheet
+import dev.vvideo.ui.component.mediaDuration
+import dev.vvideo.ui.theme.ViewerColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -62,7 +76,7 @@ fun MediaDetailsSheet(item: Media, pathLabel: String, onDismiss: () -> Unit) {
                     ) else stringResource(R.string.detail_resolution),
                     Modifier.weight(1.35f)
                 )
-                if (item.kind == "video") Spec(
+                if (item.kind == MediaKind.Video) Spec(
                     if (item.durationMs > 0) mediaDuration(item.durationMs) else stringResource(
                         R.string.dash
                     ), stringResource(R.string.detail_duration), Modifier.weight(1f)
@@ -78,14 +92,14 @@ fun MediaDetailsSheet(item: Media, pathLabel: String, onDismiss: () -> Unit) {
                     stringResource(R.string.capture_time), date, stringResource(
                         R.string.detail_time_source, stringResource(
                             when (item.capturedSource) {
-                                "exif_datetime_original" -> R.string.time_source_exif
-                                "container_creation_time" -> R.string.time_source_container
-                                "mtime" -> R.string.time_source_modified
-                                else -> R.string.time_source_unknown
+                                CaptureSource.ExifOriginal -> R.string.time_source_exif
+                                CaptureSource.ContainerCreation -> R.string.time_source_container
+                                CaptureSource.Modified -> R.string.time_source_modified
+                                CaptureSource.Unknown -> R.string.time_source_unknown
                             }
                         )
                     ),
-                    if (item.capturedSource == "container_creation_time") {
+                    if (item.capturedSource == CaptureSource.ContainerCreation) {
                         stringResource(R.string.container_time_hint)
                     } else {
                         null
@@ -139,7 +153,7 @@ private fun Field(label: String, value: String, note: String? = null, warning: S
         if (note != null) Text(note, color = Secondary, style = MaterialTheme.typography.bodySmall)
         if (warning != null) Text(
             warning,
-            color = Color(0xFFE8B04B),
+            color = ViewerColors.Warning,
             style = MaterialTheme.typography.bodySmall
         )
     }

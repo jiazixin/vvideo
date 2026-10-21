@@ -1,14 +1,25 @@
 package dev.vvideo.data.library.local
 
-import androidx.room.*
+import androidx.room.ColumnInfo
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Index
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
+
+/** Folders listed as recently visited, per connection. */
+private const val RECENT_FOLDER_LIMIT = 30
 
 @Entity(
     tableName = "bookmarks",
     primaryKeys = ["connection", "directory"],
     indices = [Index(value = ["connection", "hiddenFromRecent", "visitedAt"])]
 )
-
 data class BookmarkEntity(
     val connection: String,
     val directory: Long,
@@ -39,9 +50,9 @@ interface BookmarkDao {
 
     @Query(
         "UPDATE bookmarks SET library=:library,sort=:sort,direction=:direction,anchor=:anchor," +
-            "neighbor=:neighbor,fallback=:fallback,pixelOffset=:pixelOffset,width=:width," +
-            "revision=:revision,savedAt=:savedAt,formatVersion=:formatVersion " +
-            "WHERE connection=:connection AND directory=:directory"
+                "neighbor=:neighbor,fallback=:fallback,pixelOffset=:pixelOffset,width=:width," +
+                "revision=:revision,savedAt=:savedAt,formatVersion=:formatVersion " +
+                "WHERE connection=:connection AND directory=:directory"
     )
     suspend fun updateAnchor(
         connection: String,
@@ -61,28 +72,28 @@ interface BookmarkDao {
 
     /** Scrolling must not resurrect a hidden entry or overwrite a newer visit. */
     @Transaction
-    suspend fun put(b: BookmarkEntity) {
-        insert(b)
+    suspend fun put(bookmark: BookmarkEntity) {
+        insert(bookmark)
         updateAnchor(
-            b.connection,
-            b.directory,
-            b.library,
-            b.sort,
-            b.direction,
-            b.anchor,
-            b.neighbor,
-            b.fallback,
-            b.pixelOffset,
-            b.width,
-            b.revision,
-            b.savedAt,
-            b.formatVersion
+            bookmark.connection,
+            bookmark.directory,
+            bookmark.library,
+            bookmark.sort,
+            bookmark.direction,
+            bookmark.anchor,
+            bookmark.neighbor,
+            bookmark.fallback,
+            bookmark.pixelOffset,
+            bookmark.width,
+            bookmark.revision,
+            bookmark.savedAt,
+            bookmark.formatVersion
         )
     }
 
     @Query(
         "UPDATE bookmarks SET name=:name,pathLabel=:pathLabel,visitedAt=:visitedAt,hiddenFromRecent=0 " +
-            "WHERE connection=:connection AND directory=:directory"
+                "WHERE connection=:connection AND directory=:directory"
     )
     suspend fun updateVisit(
         connection: String,
@@ -93,14 +104,20 @@ interface BookmarkDao {
     )
 
     @Transaction
-    suspend fun visit(b: BookmarkEntity) {
-        insert(b)
-        updateVisit(b.connection, b.directory, b.name, b.pathLabel, b.visitedAt)
+    suspend fun visit(bookmark: BookmarkEntity) {
+        insert(bookmark)
+        updateVisit(
+            bookmark.connection,
+            bookmark.directory,
+            bookmark.name,
+            bookmark.pathLabel,
+            bookmark.visitedAt
+        )
     }
 
     @Query(
         "SELECT * FROM bookmarks WHERE connection=:connection AND hiddenFromRecent=0 AND name!='' " +
-            "ORDER BY visitedAt DESC LIMIT 30"
+                "ORDER BY visitedAt DESC LIMIT $RECENT_FOLDER_LIMIT"
     )
     fun recent(connection: String): Flow<List<BookmarkEntity>>
 

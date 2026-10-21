@@ -10,7 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import dev.vvideo.app.navigation.VVideoRoot
-import dev.vvideo.ui.theme.ThemeMode
+import dev.vvideo.model.ThemeMode
 import dev.vvideo.ui.theme.VVideoTheme
 
 /**
@@ -20,6 +20,10 @@ import dev.vvideo.ui.theme.VVideoTheme
  * the frame pipeline for tens of milliseconds on the test device.
  */
 private const val REFRESH_HOLD_MS = 1500L
+
+/** Marks interaction in Perfetto traces; the frame measurement tools look for this name. */
+private const val SCROLL_TRACE_SECTION = "VVideoScroll"
+private const val SCROLL_TRACE_COOKIE = 1
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
@@ -32,25 +36,19 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val app = application as VVideoApplication
-            val theme by app.graph.settings.theme.collectAsStateWithLifecycle(initialValue = "system")
-            VVideoTheme(
-                when (theme) {
-                    "light" -> ThemeMode.Light
-                    "dark" -> ThemeMode.Dark
-                    else -> ThemeMode.System
-                }
-            ) { VVideoRoot(app, ::interaction) }
+            val theme by app.graph.settings.theme.collectAsStateWithLifecycle(initialValue = ThemeMode.System)
+            VVideoTheme(theme) { VVideoRoot(app, ::interaction) }
         }
     }
 
     private fun interaction(active: Boolean) {
         if (interacting == active) return
         interacting = active
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (active) {
-                Trace.beginAsyncSection("VVideoScroll", 1)
+                Trace.beginAsyncSection(SCROLL_TRACE_SECTION, SCROLL_TRACE_COOKIE)
             } else {
-                Trace.endAsyncSection("VVideoScroll", 1)
+                Trace.endAsyncSection(SCROLL_TRACE_SECTION, SCROLL_TRACE_COOKIE)
             }
         }
         val decor = window.decorView

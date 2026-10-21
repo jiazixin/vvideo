@@ -9,6 +9,7 @@ import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.*
 import dev.vvideo.app.*
 import dev.vvideo.data.library.ChildrenWindow
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.feature.library.LibraryViewModel
 import dev.vvideo.model.Sort
 import kotlinx.coroutines.*
@@ -44,12 +45,12 @@ class UiRedesignDeviceTest {
         val window = ChildrenWindow()
         window.reset(api.children(c, wide))
         while (window.next.isNotEmpty()) {
-            window.add(api.children(c, wide, window.next), false)
+            window.add(api.children(c, wide, window.next), PageEdge.Next)
             assertTrue(window.items.size <= 300)
         }
         assertEquals("folder-0449", window.items.last().name)
         while (window.previous.isNotEmpty()) {
-            window.add(api.children(c, wide, window.previous, true), true)
+            window.add(api.children(c, wide, window.previous, PageEdge.Previous), PageEdge.Previous)
             assertTrue(window.items.size <= 300)
         }
         assertEquals("folder-0000", window.items.first().name)

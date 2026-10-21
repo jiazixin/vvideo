@@ -17,10 +17,14 @@ import androidx.test.runner.lifecycle.Stage
 import dev.vvideo.app.MainActivity
 import dev.vvideo.app.VVideoApplication
 import dev.vvideo.core.media.playback.PlaybackSession
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.library.local.BookmarkEntity
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.feature.player.playback
+import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
+import dev.vvideo.model.SortDirection
+import dev.vvideo.model.SortField
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -94,7 +98,12 @@ class DevicePlaybackTest {
         val libs = graph.api.libraries(c)
         assertTrue(libs.isNotEmpty())
         val root = libs.first().directoryId
-        val page = graph.api.page(c, root, Sort("name", "asc"), kind = "video")
+        val page = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        )
         assertTrue("fixtures missing", page.items.size >= 12)
         launchActivity().use { scenario ->
             val session = graph.cache.session(c.token)
@@ -173,8 +182,8 @@ class DevicePlaybackTest {
         val items = graph.api.page(
             c,
             root,
-            Sort("name", "asc"),
-            kind = "video"
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
         ).items.filter { it.name.endsWith("falls.webm") }
         assertEquals(2, items.size)
         val measurements = JSONArray()
@@ -224,7 +233,12 @@ class DevicePlaybackTest {
         val c = connection()
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
-        val items = graph.api.page(c, root, Sort("name", "asc"), kind = "video").items
+        val items = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items
         launchActivity().use { scenario ->
             val session = graph.cache.session(c.token)
             scenario.onActivity {
@@ -280,19 +294,17 @@ class DevicePlaybackTest {
                 val release = CompletableDeferred<Unit>()
                 val dao = object :
                     dev.vvideo.data.library.local.BookmarkDao by graph.database.bookmarks() {
-                    override suspend fun visit(b: BookmarkEntity) {
+                    override suspend fun visit(bookmark: BookmarkEntity) {
                         entered.complete(Unit)
                         release.await()
                     }
 
-                    override suspend fun put(b: BookmarkEntity) {}
+                    override suspend fun put(bookmark: BookmarkEntity) {}
                 }
                 val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
                 val store = androidx.lifecycle.ViewModelStore()
                 val vm = dev.vvideo.feature.library.LibraryViewModel(
-                    graph.api,
-                    dao,
-                    graph.settings,
+                    dev.vvideo.data.library.LibraryRepository(graph.api, dao, graph.settings),
                     scope
                 )
                 try {
@@ -304,17 +316,17 @@ class DevicePlaybackTest {
                     withContext(Dispatchers.Main) {
                         vm.open(
                             directories.first { it.name == name }.id,
-                            Sort("name", "asc")
+                            Sort(SortField.Name, SortDirection.Ascending)
                         )
                     }
                     withTimeout(10000) { entered.await() }
                     assertFalse(vm.state.value.busy)
                     val before =
-                        if (name == "large") vm.state.value.albums.sumOf { it.items.size } else vm.state.value.children.size
+                        if (name == "large") vm.state.value.albums.sumOf { it.items.size } else vm.state.value.subfolders.items.size
                     withContext(Dispatchers.Main) {
-                        if (name == "large") vm.page(false) else vm.moreChildren(false)
+                        if (name == "large") vm.page(PageEdge.Next) else vm.moreSubfolders(PageEdge.Next)
                     }
-                    withTimeout(10000) { vm.state.first { if (name == "large") it.albums.sumOf { a -> a.items.size } > before else it.children.size > before } }
+                    withTimeout(10000) { vm.state.first { if (name == "large") it.albums.sumOf { a -> a.items.size } > before else it.subfolders.items.size > before } }
                     assertFalse(
                         "Visit must still be pending when paging succeeds",
                         release.isCompleted
@@ -344,7 +356,7 @@ class DevicePlaybackTest {
             scenario.onActivity {
                 vm =
                     androidx.lifecycle.ViewModelProvider(it)[dev.vvideo.feature.library.LibraryViewModel::class.java]
-                vm.open(large.id, Sort("name", "asc"))
+                vm.open(large.id, Sort(SortField.Name, SortDirection.Ascending))
             }
             withTimeout(15000) { vm.state.first { it.directory?.id == large.id && !it.busy && it.albums.isNotEmpty() } }
             val first = vm.state.value.albums.first().items.first().id
@@ -397,7 +409,11 @@ class DevicePlaybackTest {
                 "VVideoValidation",
                 "ui_window_restored=true retained_items=${restored.albums.sumOf { it.items.size }}"
             )
-            val firstPage = graph.api.page(c, large.id, Sort("name", "asc")).items.first().id
+            val firstPage = graph.api.page(
+                c,
+                large.id,
+                Sort(SortField.Name, SortDirection.Ascending)
+            ).items.first().id
             repeat(140) { step ->
                 if (vm.state.value.albums.first().items.first().id != firstPage) {
                     device.swipe(
@@ -441,15 +457,23 @@ class DevicePlaybackTest {
         val c = connection()
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
-        val videos = graph.api.page(c, root, Sort(), kind = "video").items
+        val videos = graph.api.page(c, root, Sort(), kind = MediaKind.Video).items
         org.junit.Assume.assumeTrue("needs a root holding one page of videos", videos.size in 2..99)
-        val vm = dev.vvideo.feature.player.PlayerViewModel(graph.api)
+        val vm = dev.vvideo.feature.player.PlayerViewModel(graph.library)
         try {
-            withContext(Dispatchers.Main) { vm.open(c, root, Sort(), videos.last().id) }
+            withContext(Dispatchers.Main) {
+                vm.open(
+                    c,
+                    root,
+                    Sort(),
+                    videos.last().id,
+                    MediaKind.Video
+                )
+            }
             val opened = withTimeout(10000) { vm.state.first { it.items.isNotEmpty() } }.items.size
             withContext(Dispatchers.Main) {
-                vm.page(false)
-                vm.page(true)
+                vm.page(PageEdge.Next)
+                vm.page(PageEdge.Previous)
             }
             withTimeout(10000) { vm.state.first { it.items.firstOrNull()?.id == videos.first().id && it.endReached } }
             assertEquals(videos.map { it.id }, vm.state.value.items.map { it.id })
@@ -468,46 +492,58 @@ class DevicePlaybackTest {
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
         val feed = graph.api.children(c, root).items.first { it.name == "feed" }
-        val firstPage = graph.api.page(c, feed.id, Sort("name", "asc"), kind = "video")
-        val vm = dev.vvideo.feature.player.PlayerViewModel(graph.api)
+        val firstPage = graph.api.page(
+            c,
+            feed.id,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        )
+        val vm = dev.vvideo.feature.player.PlayerViewModel(graph.library)
         try {
             withContext(Dispatchers.Main) {
                 vm.open(
                     c,
                     feed.id,
-                    Sort("name", "asc"),
-                    firstPage.items.first().id
+                    Sort(SortField.Name, SortDirection.Ascending),
+                    firstPage.items.first().id,
+                    MediaKind.Video
                 )
             }
             withTimeout(10000) { vm.state.first { it.items.size == 100 } }
             repeat(4) {
                 val last = vm.state.value.items.last().id
-                withContext(Dispatchers.Main) { vm.page(false) }
+                withContext(Dispatchers.Main) { vm.page(PageEdge.Next) }
                 withTimeout(10000) { vm.state.first { it.items.lastOrNull()?.id != last } }
                 assertTrue(vm.state.value.items.size <= 300)
             }
-            withContext(Dispatchers.Main) { vm.page(false) }
+            withContext(Dispatchers.Main) { vm.page(PageEdge.Next) }
             delay(300)
             assertNotEquals(firstPage.items.first().id, vm.state.value.items.first().id)
             repeat(3) {
                 if (vm.state.value.items.first().id != firstPage.items.first().id) {
                     val first = vm.state.value.items.first().id
-                    withContext(Dispatchers.Main) { vm.page(true) }
+                    withContext(Dispatchers.Main) { vm.page(PageEdge.Previous) }
                     withTimeout(10000) { vm.state.first { it.items.firstOrNull()?.id != first } }
                     assertTrue(vm.state.value.items.size <= 300)
                 }
             }
             assertEquals(firstPage.items.first().id, vm.state.value.items.first().id)
             withContext(Dispatchers.Main) {
-                vm.page(false)
+                vm.page(PageEdge.Next)
                 vm.leave()
             }
             delay(500)
             assertTrue(vm.state.value.items.isEmpty())
             assertFalse(vm.state.value.error)
             withContext(Dispatchers.Main) {
-                vm.open(c, feed.id, Sort("name", "asc"), firstPage.items.first().id)
-                vm.open(c, root, Sort("name", "asc"), "")
+                vm.open(
+                    c,
+                    feed.id,
+                    Sort(SortField.Name, SortDirection.Ascending),
+                    firstPage.items.first().id,
+                    MediaKind.Video
+                )
+                vm.open(c, root, Sort(SortField.Name, SortDirection.Ascending), "", MediaKind.Video)
             }
             val current = withTimeout(10000) { vm.state.first { it.items.isNotEmpty() } }
             assertTrue(current.items.all { it.directoryId == root })
@@ -522,7 +558,12 @@ class DevicePlaybackTest {
         val c = connection()
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
-        val item = graph.api.page(c, root, Sort("name", "asc"), kind = "video").items.first()
+        val item = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items.first()
         val originalBudget = graph.settings.connection.first().budget
         try {
             graph.cache.configure(1_000_000_000L, true)
@@ -572,7 +613,12 @@ class DevicePlaybackTest {
         val c = connection()
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
-        val videos = graph.api.page(c, root, Sort("name", "asc"), kind = "video").items
+        val videos = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items
         val device = androidx.test.uiautomator.UiDevice.getInstance(instrumentation)
         launchActivity().use { scenario ->
             delay(400)
@@ -580,7 +626,7 @@ class DevicePlaybackTest {
             scenario.onActivity {
                 library =
                     androidx.lifecycle.ViewModelProvider(it)[dev.vvideo.feature.library.LibraryViewModel::class.java]
-                library.open(root, Sort("name", "asc"))
+                library.open(root, Sort(SortField.Name, SortDirection.Ascending))
             }
             withTimeout(10000) { library.state.first { !it.busy && it.directory?.id == root && it.albums.isNotEmpty() } }
             delay(500)
@@ -729,7 +775,9 @@ class DevicePlaybackTest {
                 touch(android.view.MotionEvent.ACTION_UP)
             }
             withTimeout(2000) {
-                while (withContext(Dispatchers.Main) { session.player.playbackParameters.speed != 1.5f }) delay(20)
+                while (withContext(Dispatchers.Main) { session.player.playbackParameters.speed != 1.5f }) delay(
+                    20
+                )
             }
             // Pause through the middle double-tap, away from the centered pause overlay.
             val gestureY = device.displayHeight * 2 / 5
@@ -824,14 +872,19 @@ class DevicePlaybackTest {
         val c = connection()
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
-        val rootItems = graph.api.page(c, root, Sort("name", "asc"), kind = "video").items
+        val rootItems = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items
         val extra = graph.api.children(c, root).items.firstOrNull { it.name == "representative" }
         val items = rootItems + (extra?.let {
             graph.api.page(
                 c,
                 it.id,
-                Sort("name", "asc"),
-                kind = "video"
+                Sort(SortField.Name, SortDirection.Ascending),
+                kind = MediaKind.Video
             ).items
         } ?: emptyList())
         assertTrue(items.isNotEmpty())
@@ -1103,12 +1156,12 @@ class DevicePlaybackTest {
             vm = dev.vvideo.feature.settings.SettingsViewModel(
                 graph.settings,
                 graph.cache,
-                graph.api
+                graph.library
             )
             vm.connect("http://example.org", "synthetic-unused")
         }
-        val result = withTimeout(5000) { vm.state.first { it.result != 0 && !it.busy } }
-        assertEquals(dev.vvideo.R.string.invalid_address, result.result)
+        val result = withTimeout(5000) { vm.state.first { it.message != null && !it.busy } }
+        assertEquals(dev.vvideo.feature.settings.SettingsMessage.InvalidAddress, result.message)
         assertEquals(before, graph.settings.connection.first())
         Log.i("VVideoValidation", "invalid_connection_preserved_and_correct_error=true")
     }
@@ -1123,7 +1176,7 @@ class DevicePlaybackTest {
             launchActivity().use { scenario ->
                 delay(500)
                 scenario.onActivity { activity ->
-                    val testVm = dev.vvideo.feature.player.PlayerViewModel(graph.api)
+                    val testVm = dev.vvideo.feature.player.PlayerViewModel(graph.library)
                     val testLoader = checkNotNull(graph.cache.loader.value)
                     activity.setContent {
                         if (visible.value) dev.vvideo.feature.player.PlayerRoute(
@@ -1182,8 +1235,18 @@ class DevicePlaybackTest {
         val graph = application.graph
         val root = graph.api.libraries(c).first().directoryId
         val negative = graph.api.children(c, root).items.first { it.name == "negative" }
-        val bad = graph.api.page(c, negative.id, Sort("name", "asc"), kind = "video").items.single()
-        val good = graph.api.page(c, root, Sort("name", "asc"), kind = "video").items.first()
+        val bad = graph.api.page(
+            c,
+            negative.id,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items.single()
+        val good = graph.api.page(
+            c,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
+        ).items.first()
         val device = androidx.test.uiautomator.UiDevice.getInstance(instrumentation)
         launchActivity().use { scenario ->
             delay(400)
@@ -1193,7 +1256,12 @@ class DevicePlaybackTest {
                     androidx.lifecycle.ViewModelProvider(it)[dev.vvideo.feature.library.LibraryViewModel::class.java]
             }
             suspend fun select(directory: Long, item: dev.vvideo.model.Media) {
-                scenario.onActivity { library.open(directory, Sort("name", "asc")) }
+                scenario.onActivity {
+                    library.open(
+                        directory,
+                        Sort(SortField.Name, SortDirection.Ascending)
+                    )
+                }
                 withTimeout(15000) { library.state.first { it.directory?.id == directory && !it.busy && it.albums.isNotEmpty() } }
                 delay(500)
                 checkNotNull(
@@ -1259,7 +1327,12 @@ class DevicePlaybackTest {
                     androidx.lifecycle.ViewModelProvider(it)[dev.vvideo.feature.library.LibraryViewModel::class.java]
             }
             suspend fun open(id: Long) {
-                scenario.onActivity { library.open(id, Sort("name", "asc")) }
+                scenario.onActivity {
+                    library.open(
+                        id,
+                        Sort(SortField.Name, SortDirection.Ascending)
+                    )
+                }
                 withTimeout(15000) { library.state.first { it.directory?.id == id && !it.busy && it.albums.isNotEmpty() } }
                 delay(500)
             }
@@ -1300,7 +1373,8 @@ class DevicePlaybackTest {
                 for (directory in listOf(root, representative.id)) {
                     open(directory)
                     val video =
-                        library.state.value.albums.flatMap { it.items }.first { it.kind == "video" }
+                        library.state.value.albums.flatMap { it.items }
+                            .first { it.kind == MediaKind.Video }
                     val target = checkNotNull(
                         device.wait(
                             androidx.test.uiautomator.Until.findObject(
@@ -1312,7 +1386,12 @@ class DevicePlaybackTest {
                     playing()
                     delay(2000)
                     val expected =
-                        graph.api.page(c, directory, Sort("name", "asc"), kind = "video").items
+                        graph.api.page(
+                            c,
+                            directory,
+                            Sort(SortField.Name, SortDirection.Ascending),
+                            kind = MediaKind.Video
+                        ).items
                     for (reverse in listOf(false, true)) repeat(if (directory == root) 12 else 2) {
                         device.swipe(
                             device.displayWidth / 2,
@@ -1366,14 +1445,14 @@ class DevicePlaybackTest {
         val items = graph.api.page(
             c,
             root,
-            Sort("name", "asc"),
-            kind = "video"
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Video
         ).items + (extra?.let {
             graph.api.page(
                 c,
                 it.id,
-                Sort("name", "asc"),
-                kind = "video"
+                Sort(SortField.Name, SortDirection.Ascending),
+                kind = MediaKind.Video
             ).items
         } ?: emptyList())
         launchActivity().use { scenario ->

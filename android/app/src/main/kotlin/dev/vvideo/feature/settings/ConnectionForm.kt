@@ -1,45 +1,80 @@
 package dev.vvideo.feature.settings
 
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.*
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.*
-import androidx.compose.ui.text.input.*
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.ui.component.*
-import dev.vvideo.ui.theme.*
+import dev.vvideo.ui.component.ActionIcon
+import dev.vvideo.ui.component.VVButton
+import dev.vvideo.ui.theme.LocalVVColors
+import dev.vvideo.ui.theme.ServerGradient
 
 @UnstableApi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectionForm(vm: SettingsViewModel, connection: Connection, onDone: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     var address by rememberSaveable(connection.address) { mutableStateOf(connection.address) }
     // Credentials stay out of saved-instance state.
     var token by remember(connection.token) { mutableStateOf(connection.token) }
-    var show by remember { mutableStateOf(false) }
+    var tokenVisible by remember { mutableStateOf(false) }
     val initial = remember { state.connectedSerial }
-    LaunchedEffect(Unit) { vm.dismissResult() }
+    LaunchedEffect(Unit) { vm.dismissMessage() }
     LaunchedEffect(state.connectedSerial) { if (state.connectedSerial > initial) onDone() }
-    val addressError = when (state.result) {
-        R.string.invalid_address -> R.string.invalid_address
-        R.string.error_connection -> R.string.address_unreachable
-        else -> 0
+    val addressError = when (state.message) {
+        SettingsMessage.InvalidAddress -> R.string.invalid_address
+        SettingsMessage.ConnectionFailed -> R.string.address_unreachable
+        else -> null
     }
-    val tokenError = state.result == R.string.authentication_failed
+    val tokenError = state.message == SettingsMessage.AuthenticationFailed
     Scaffold(
-        containerColor = c.bgPage,
+        containerColor = colors.bgPage,
         topBar = {
             if (connection.configured) TopAppBar(
                 expandedHeight = 56.dp,
@@ -52,7 +87,7 @@ fun ConnectionForm(vm: SettingsViewModel, connection: Connection, onDone: () -> 
                         enabled = !state.busy
                     )
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgSurface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
             )
         }) { padding ->
         Column(
@@ -67,7 +102,7 @@ fun ConnectionForm(vm: SettingsViewModel, connection: Connection, onDone: () -> 
                     Spacer(Modifier.height(40.dp))
                     Box(
                         Modifier.size(104.dp).align(Alignment.CenterHorizontally)
-                            .background(AvatarGradients[5], CircleShape),
+                            .background(ServerGradient, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -84,58 +119,62 @@ fun ConnectionForm(vm: SettingsViewModel, connection: Connection, onDone: () -> 
                     )
                     Text(
                         stringResource(R.string.connect_body),
-                        color = c.textSecondary,
+                        color = colors.textSecondary,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(16.dp))
                 }
                 Text(
                     stringResource(R.string.server_address),
-                    color = c.accentText,
+                    color = colors.accentText,
                     style = MaterialTheme.typography.labelSmall
                 )
                 OutlinedTextField(
                     address,
                     {
                         address = it
-                        vm.dismissResult()
+                        vm.dismissMessage()
                     },
                     Modifier.fillMaxWidth().heightIn(min = 52.dp),
                     singleLine = true,
                     enabled = !state.busy,
-                    isError = addressError != 0,
+                    isError = addressError != null,
                     shape = RoundedCornerShape(12.dp),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
                         imeAction = ImeAction.Next
                     ),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = c.bgInput,
-                        focusedContainerColor = c.bgInput
+                        unfocusedContainerColor = colors.bgInput,
+                        focusedContainerColor = colors.bgInput
                     )
                 )
-                if (addressError != 0) Text(
+                if (addressError != null) Text(
                     stringResource(addressError),
-                    color = c.error,
+                    color = colors.error,
                     style = MaterialTheme.typography.bodySmall
                 )
                 Text(
                     stringResource(R.string.access_token),
-                    color = c.accentText,
+                    color = colors.accentText,
                     style = MaterialTheme.typography.labelSmall
                 )
                 OutlinedTextField(
                     token,
                     {
                         token = it
-                        vm.dismissResult()
+                        vm.dismissMessage()
                     },
                     Modifier.fillMaxWidth().heightIn(min = 52.dp),
                     singleLine = true,
                     enabled = !state.busy,
                     isError = tokenError,
                     shape = RoundedCornerShape(12.dp),
-                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                    visualTransformation = if (tokenVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
@@ -144,21 +183,21 @@ fun ConnectionForm(vm: SettingsViewModel, connection: Connection, onDone: () -> 
                         ActionIcon(
                             R.drawable.ic_eye,
                             R.string.show_token,
-                            { show = !show })
+                            { tokenVisible = !tokenVisible })
                     },
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = c.bgInput,
-                        focusedContainerColor = c.bgInput
+                        unfocusedContainerColor = colors.bgInput,
+                        focusedContainerColor = colors.bgInput
                     )
                 )
                 if (tokenError) Text(
                     stringResource(R.string.token_wrong),
-                    color = c.error,
+                    color = colors.error,
                     style = MaterialTheme.typography.bodySmall
                 )
                 Text(
                     stringResource(R.string.connection_hint),
-                    color = c.textSecondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall
                 )
             }

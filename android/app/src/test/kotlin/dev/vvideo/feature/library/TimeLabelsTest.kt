@@ -22,6 +22,7 @@ class TimeLabelsTest {
     private val now = Instant.parse("2026-10-10T08:00:00Z")
     private fun instant(date: String) = LocalDateTime.parse(date).atZone(zone).toInstant()
     private fun ns(date: String) = instant(date).epochSecond * 1_000_000_000L
+
     @Test
     fun allRecentColumns() {
         listOf(
@@ -86,7 +87,7 @@ class TimeLabelsTest {
                 "l",
                 1,
                 id,
-                "image",
+                MediaKind.Image,
                 100,
                 100,
                 0,
@@ -94,9 +95,9 @@ class TimeLabelsTest {
                 1,
                 ns(date),
                 ns(date),
-                "ready",
+                MediaStatus.Ready,
                 "",
-                ""
+                CaptureSource.Unknown
             )
         )
     )
@@ -115,7 +116,7 @@ class TimeLabelsTest {
         assertTrue(
             datedAlbums(
                 result,
-                Sort("name"),
+                Sort(SortField.Name),
                 labels,
                 now,
                 zone
@@ -128,7 +129,10 @@ class TimeLabelsTest {
         val b = album("b", "2026-10-09T14:00:00")
         val albums = datedAlbums(listOf(a, b), Sort(), labels, now, zone)
         val state =
-            LibraryUiState(albums = albums, children = listOf(Directory(4, "l", 1, "child", 1)))
+            LibraryUiState(
+                albums = albums,
+                subfolders = Subfolders(listOf(Directory(4, "l", 1, "child", 1)))
+            )
         val keys = libraryKeys(state)
         assertEquals(listOf("subfolder-bar", "date:a", "album:a", "date:b", "album:b"), keys)
         assertEquals(4, restoreIndex(keys, albums, "missing", "b"))
@@ -142,7 +146,8 @@ class TimeLabelsTest {
         val original = album("a", "2026-10-10T14:00:00")
         val modified =
             original.copy(items = original.items.map { it.copy(mtime = ns("2026-10-09T08:20:00")) })
-        val result = datedAlbums(listOf(modified), Sort("mtime"), labels, now, zone).single()
+        val result =
+            datedAlbums(listOf(modified), Sort(SortField.Modified), labels, now, zone).single()
         assertEquals("昨天", result.dateLabel)
         val b = album("b", "2026-10-09T14:00:00")
         val prepended = datedAlbums(
@@ -156,9 +161,11 @@ class TimeLabelsTest {
         assertEquals(5, restoreIndex(keys, prepended, "album:b", "b"))
         val folders = libraryKeys(
             LibraryUiState(
-                children = listOf(
-                    Directory(1, "l", 0, "one", 1),
-                    Directory(2, "l", 0, "two", 1)
+                subfolders = Subfolders(
+                    listOf(
+                        Directory(1, "l", 0, "one", 1),
+                        Directory(2, "l", 0, "two", 1)
+                    )
                 )
             )
         )

@@ -1,38 +1,94 @@
 package dev.vvideo.feature.player
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.*
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.*
-import androidx.compose.ui.unit.*
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.coerceAtLeast
+import androidx.compose.ui.unit.coerceIn
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import dev.vvideo.R
-import dev.vvideo.ui.component.*
+import dev.vvideo.ui.component.ActionIcon
+import dev.vvideo.ui.component.mediaDuration
+import dev.vvideo.ui.theme.ViewerColors
 import kotlinx.coroutines.delay
 
-// The viewer is always dark, whatever the app theme.
-private val ViewerAccent = Color(0xFF6AB3F8)
+/** How often the bar reads the player's position while it plays. */
+private const val PROGRESS_POLL_MS = 250L
+
+private const val CONTROLS_FADE_MS = 150
 
 val PlaybackSpeeds = listOf(2f, 1.5f, 1.25f, 1f, .75f, .5f)
 
 fun speedLabel(speed: Float): String =
     if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
+
+/** A drag along the bar: while [active], the thumb follows [target] (0..1) instead of the player. */
+@Stable
+private class SeekDrag {
+    var active by mutableStateOf(false)
+    var target by mutableFloatStateOf(0f)
+}
 
 /**
  * [mediaId] names the page in front. Until the player has switched to it ([live]),
@@ -58,8 +114,7 @@ fun SeekBar(
     var buffered by remember(mediaId) { mutableLongStateOf(0) }
     var playing by remember(player) { mutableStateOf(player.isPlaying) }
     var speed by remember(player) { mutableFloatStateOf(player.playbackParameters.speed) }
-    var dragging by remember(mediaId) { mutableStateOf(false) }
-    var target by remember(mediaId) { mutableFloatStateOf(0f) }
+    val drag = remember(mediaId) { SeekDrag() }
     var speedMenu by remember { mutableStateOf(false) }
     LaunchedEffect(speedMenu) { onSpeedMenu(speedMenu) }
     DisposableEffect(Unit) { onDispose { onSpeedMenu(false) } }
@@ -74,7 +129,7 @@ fun SeekBar(
                 playing = value
             }
 
-            override fun onPlaybackParametersChanged(value: androidx.media3.common.PlaybackParameters) {
+            override fun onPlaybackParametersChanged(value: PlaybackParameters) {
                 speed = value.speed
             }
         }
@@ -88,7 +143,7 @@ fun SeekBar(
             duration = player.duration.coerceAtLeast(0)
             position = player.currentPosition.coerceAtLeast(0)
             buffered = player.bufferedPosition.coerceAtLeast(0)
-            delay(250)
+            delay(PROGRESS_POLL_MS)
         }
     }
     // A seek moves the bar at once. Between polls the released thumb would otherwise
@@ -111,115 +166,30 @@ fun SeekBar(
     }
     DisposableEffect(mediaId) { onDispose { onDragging(false) } }
     val shownDuration = if (duration > 0) duration else expectedDurationMs.coerceAtLeast(0)
-    val fraction =
-        if (dragging) target else if (duration > 0) (position.toFloat() / duration).coerceIn(
-            0f,
-            1f
-        ) else 0f
-    if (!visible) {
-        Canvas(modifier.fillMaxWidth().height(2.dp)) {
-            drawRect(Color.White.copy(alpha = .2f))
-            drawRect(
-                Color.White.copy(alpha = .85f),
-                size = size.copy(width = size.width * fraction)
-            )
-        }
+    val fraction = when {
+        drag.active -> drag.target
+        duration > 0 -> (position.toFloat() / duration).coerceIn(0f, 1f)
+        else -> 0f
     }
-    val seekDescription = stringResource(R.string.seek)
-    val speedDescription = stringResource(R.string.speed)
-    androidx.compose.animation.AnimatedVisibility(
+    if (!visible) ThinProgress(fraction, modifier)
+    AnimatedVisibility(
         visible,
-        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),
-        exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(150))
+        enter = fadeIn(tween(CONTROLS_FADE_MS)),
+        exit = fadeOut(tween(CONTROLS_FADE_MS))
     ) {
         Column(modifier.padding(horizontal = 12.dp)) {
-            BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-                if (dragging) Text(
-                    mediaDuration((target * duration).toLong()),
-                    Modifier.offset(
-                        x = (maxWidth * target - 24.dp).coerceIn(
-                            0.dp,
-                            (maxWidth - 48.dp).coerceAtLeast(0.dp)
-                        ), y = (-28).dp
-                    ).background(Color.Black.copy(alpha = .65f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Canvas(
-                    Modifier.fillMaxWidth().height(40.dp).semantics {
-                        contentDescription = seekDescription
-                        progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
-                        setProgress { value ->
-                            if (enabled && duration > 0) {
-                                player.seekTo((value.coerceIn(0f, 1f) * duration).toLong())
-                                true
-                            } else false
-                        }
-                    }.pointerInput(enabled, duration) {
-                        if (enabled && duration > 0) detectDragGestures(onDragStart = { p ->
-                            dragging = true
-                            target = (p.x / size.width).coerceIn(0f, 1f)
-                            onDragging(true)
-                        }, onDragEnd = {
-                            player.seekTo((target * duration).toLong())
-                            dragging = false
-                            onDragging(false)
-                        }, onDragCancel = {
-                            dragging = false
-                            onDragging(false)
-                        }) { change, _ ->
-                            change.consume()
-                            target = (change.position.x / size.width).coerceIn(0f, 1f)
-                        }
-                    }.pointerInput(
-                        enabled,
-                        duration
-                    ) {
-                        if (enabled && duration > 0) detectTapGestures { p ->
-                            player.seekTo(
-                                ((p.x / size.width).coerceIn(
-                                    0f,
-                                    1f
-                                ) * duration).toLong()
-                            )
-                        }
-                    }) {
-                    val y = size.height / 2
-                    val stroke = (if (dragging) 5.dp else 3.dp).toPx()
-                    drawLine(
-                        Color.White.copy(alpha = .22f),
-                        Offset(0f, y),
-                        Offset(size.width, y),
-                        stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
-                    drawLine(
-                        Color.White.copy(alpha = .45f),
-                        Offset(0f, y),
-                        Offset(
-                            size.width * (if (duration > 0) buffered.toFloat() / duration else 0f).coerceIn(
-                                0f,
-                                1f
-                            ), y
-                        ),
-                        stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
-                    drawLine(
-                        Color.White,
-                        Offset(0f, y),
-                        Offset(size.width * fraction, y),
-                        stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
-                    drawCircle(
-                        Color.White,
-                        (if (dragging) 9.dp else 7.dp).toPx(),
-                        Offset(size.width * fraction, y)
-                    )
-                }
-            }
+            SeekTrack(
+                player = player,
+                enabled = enabled,
+                durationMs = duration,
+                fraction = fraction,
+                bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(
+                    0f,
+                    1f
+                ) else 0f,
+                drag = drag,
+                onDragging = onDragging
+            )
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -232,7 +202,7 @@ fun SeekBar(
                     enabled = enabled
                 )
                 Text(
-                    mediaDuration(if (dragging) (target * duration).toLong() else position),
+                    mediaDuration(if (drag.active) (drag.target * duration).toLong() else position),
                     color = Color.White,
                     style = MaterialTheme.typography.labelLarge
                 )
@@ -243,24 +213,7 @@ fun SeekBar(
                 )
                 Spacer(Modifier.weight(1f))
                 Box {
-                    // Plain text like the time beside it; a speed other than normal stands out in the accent colour.
-                    Box(
-                        Modifier.heightIn(min = 48.dp).widthIn(min = 56.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = enabled) { speedMenu = !speedMenu }.semantics {
-                            contentDescription = speedDescription
-                            role = Role.Button
-                        }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (speed == 1f) stringResource(R.string.speed_normal) else stringResource(
-                                R.string.speed_value,
-                                speedLabel(speed)
-                            ),
-                            color = if (speed == 1f) Color.White else ViewerAccent,
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
+                    SpeedButton(speed, enabled) { speedMenu = !speedMenu }
                     if (speedMenu) SpeedMenu(speed, { speedMenu = false }) {
                         player.setPlaybackSpeed(it)
                         speedMenu = false
@@ -277,10 +230,137 @@ fun SeekBar(
     }
 }
 
+/** The bar alone, under hidden controls. */
+@Composable
+private fun ThinProgress(fraction: Float, modifier: Modifier) {
+    Canvas(modifier.fillMaxWidth().height(2.dp)) {
+        drawRect(Color.White.copy(alpha = .2f))
+        drawRect(
+            Color.White.copy(alpha = .85f),
+            size = size.copy(width = size.width * fraction)
+        )
+    }
+}
+
+/**
+ * The draggable bar with buffered and played lengths. A drag shows the target time
+ * above the thumb and seeks when released; a tap seeks at once.
+ */
+@Composable
+private fun SeekTrack(
+    player: Player,
+    enabled: Boolean,
+    durationMs: Long,
+    fraction: Float,
+    bufferedFraction: Float,
+    drag: SeekDrag,
+    onDragging: (Boolean) -> Unit
+) {
+    val seekDescription = stringResource(R.string.seek)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+        if (drag.active) Text(
+            mediaDuration((drag.target * durationMs).toLong()),
+            Modifier.offset(
+                x = (maxWidth * drag.target - 24.dp).coerceIn(
+                    0.dp,
+                    (maxWidth - 48.dp).coerceAtLeast(0.dp)
+                ), y = (-28).dp
+            ).background(Color.Black.copy(alpha = .65f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium
+        )
+        Canvas(
+            Modifier.fillMaxWidth().height(40.dp).semantics {
+                contentDescription = seekDescription
+                progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+                setProgress { value ->
+                    if (enabled && durationMs > 0) {
+                        player.seekTo((value.coerceIn(0f, 1f) * durationMs).toLong())
+                        true
+                    } else false
+                }
+            }.pointerInput(enabled, durationMs) {
+                if (enabled && durationMs > 0) detectDragGestures(onDragStart = { point ->
+                    drag.active = true
+                    drag.target = (point.x / size.width).coerceIn(0f, 1f)
+                    onDragging(true)
+                }, onDragEnd = {
+                    player.seekTo((drag.target * durationMs).toLong())
+                    drag.active = false
+                    onDragging(false)
+                }, onDragCancel = {
+                    drag.active = false
+                    onDragging(false)
+                }) { change, _ ->
+                    change.consume()
+                    drag.target = (change.position.x / size.width).coerceIn(0f, 1f)
+                }
+            }.pointerInput(enabled, durationMs) {
+                if (enabled && durationMs > 0) detectTapGestures { point ->
+                    player.seekTo(((point.x / size.width).coerceIn(0f, 1f) * durationMs).toLong())
+                }
+            }) {
+            val y = size.height / 2
+            val stroke = (if (drag.active) 5.dp else 3.dp).toPx()
+            drawLine(
+                Color.White.copy(alpha = .22f),
+                Offset(0f, y),
+                Offset(size.width, y),
+                stroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                Color.White.copy(alpha = .45f),
+                Offset(0f, y),
+                Offset(size.width * bufferedFraction, y),
+                stroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                Color.White,
+                Offset(0f, y),
+                Offset(size.width * fraction, y),
+                stroke,
+                cap = StrokeCap.Round
+            )
+            drawCircle(
+                Color.White,
+                (if (drag.active) 9.dp else 7.dp).toPx(),
+                Offset(size.width * fraction, y)
+            )
+        }
+    }
+}
+
+/** Plain text like the time beside it; a speed other than normal stands out in the accent colour. */
+@Composable
+private fun SpeedButton(speed: Float, enabled: Boolean, onClick: () -> Unit) {
+    val speedDescription = stringResource(R.string.speed)
+    Box(
+        Modifier.heightIn(min = 48.dp).widthIn(min = 56.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick).semantics {
+                contentDescription = speedDescription
+                role = Role.Button
+            }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (speed == 1f) {
+                stringResource(R.string.speed_normal)
+            } else {
+                stringResource(R.string.speed_value, speedLabel(speed))
+            },
+            color = if (speed == 1f) Color.White else ViewerColors.Accent,
+            style = MaterialTheme.typography.labelLarge
+        )
+    }
+}
+
 /** Opens upward from the speed button, its right edge on the button's, and closes on any outside tap. */
 @Composable
 private fun SpeedMenu(current: Float, onDismiss: () -> Unit, onSelect: (Float) -> Unit) {
-    val gap = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }
+    val gap = with(LocalDensity.current) { 8.dp.roundToPx() }
     val above = remember(gap) {
         object : PopupPositionProvider {
             override fun calculatePosition(
@@ -303,7 +383,7 @@ private fun SpeedMenu(current: Float, onDismiss: () -> Unit, onSelect: (Float) -
     ) {
         Column(
             Modifier.width(132.dp).shadow(8.dp, RoundedCornerShape(14.dp))
-                .background(Color(0xFF1B232C), RoundedCornerShape(14.dp)).padding(vertical = 6.dp)
+                .background(ViewerColors.Sheet, RoundedCornerShape(14.dp)).padding(vertical = 6.dp)
         ) {
             Text(
                 stringResource(R.string.speed),
@@ -321,14 +401,14 @@ private fun SpeedMenu(current: Float, onDismiss: () -> Unit, onSelect: (Float) -
                     Text(
                         stringResource(R.string.speed_value, speedLabel(option)),
                         Modifier.weight(1f),
-                        color = if (selected) ViewerAccent else Color.White,
+                        color = if (selected) ViewerColors.Accent else Color.White,
                         style = MaterialTheme.typography.bodyLarge
                     )
                     if (selected) Icon(
                         painterResource(R.drawable.ic_check),
                         null,
                         Modifier.size(20.dp),
-                        tint = ViewerAccent
+                        tint = ViewerColors.Accent
                     )
                 }
             }

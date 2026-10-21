@@ -1,45 +1,48 @@
 package dev.vvideo.feature.library
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.*
-import androidx.compose.ui.res.*
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.ImageLoader
-import coil3.compose.AsyncImage
-import coil3.network.NetworkHeaders
-import coil3.network.httpHeaders
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.feature.library.album.AlbumGeometryCalculator
 import dev.vvideo.feature.library.album.TelegramGroupedLayout
-import dev.vvideo.model.*
-import dev.vvideo.ui.component.ActionIcon
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
 import dev.vvideo.ui.component.mediaDuration
-import dev.vvideo.ui.theme.LocalVV
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.sample
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -47,7 +50,6 @@ fun AlbumBubble(
     album: Album,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     onMedia: (Media) -> Unit,
     onDetails: (Media) -> Unit = {}
 ) {
@@ -107,7 +109,7 @@ fun AlbumBubble(
                     val shortSide = with(density) { minOf(cell.width, cell.height).toDp() }
                     AlbumCellContent(
                         item,
-                        if (item.kind == "video") labels[cell.index] else null,
+                        if (item.kind == MediaKind.Video) labels[cell.index] else null,
                         shortSide,
                         textStyle,
                         CELL_SHAPE,
@@ -118,7 +120,6 @@ fun AlbumBubble(
                                 with(density) { cell.height.toDp() }),
                         loader,
                         connection,
-                        thumbnail,
                         onClick = { onMedia(item) },
                         onLongClick = { onDetails(item) }
                     )
@@ -140,6 +141,12 @@ private val INNER_RADIUS = 4.dp
 /** Every cell keeps Telegram's small inner radius; the album clip rounds the outer corners. */
 private val CELL_SHAPE = RoundedCornerShape(INNER_RADIUS)
 
+/** Cells at least this large on their short side explain a missing cover in words. */
+private val COVER_LABEL_MIN_SIDE = 72.dp
+
+/** Video cells at least this large on their short side show a play badge once the cover is in. */
+private val PLAY_BADGE_MIN_SIDE = 96.dp
+
 /**
  * One cell: the cover, and for a video its duration and, on a large cell, a play button.
  * The cell's size is known from the album geometry, so [shortSide] replaces measuring
@@ -151,12 +158,11 @@ private fun AlbumCellContent(
     item: Media,
     duration: String?,
     shortSide: Dp,
-    textStyle: androidx.compose.ui.text.TextStyle,
+    textStyle: TextStyle,
     shape: RoundedCornerShape,
     modifier: Modifier,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -170,14 +176,13 @@ private fun AlbumCellContent(
             item,
             connection,
             loader,
-            thumbnail,
-            showLabel = shortSide >= 72.dp
+            showLabel = shortSide >= COVER_LABEL_MIN_SIDE
         ) { coverLoaded = it }
-        if (coverLoaded && duration != null && shortSide >= 96.dp) {
+        if (coverLoaded && duration != null && shortSide >= PLAY_BADGE_MIN_SIDE) {
             Box(
                 Modifier.size(40.dp).align(Alignment.Center).background(
                     Color.Black.copy(alpha = .45f),
-                    androidx.compose.foundation.shape.CircleShape
+                    CircleShape
                 ),
                 contentAlignment = Alignment.Center
             ) {
@@ -191,7 +196,7 @@ private fun AlbumCellContent(
         }
         if (duration != null) {
             Text(
-                "▶ $duration",
+                stringResource(R.string.video_duration_badge, duration),
                 color = Color.White,
                 style = textStyle,
                 maxLines = 1,
@@ -201,93 +206,5 @@ private fun AlbumCellContent(
                     .padding(horizontal = 7.dp, vertical = 2.dp)
             )
         }
-    }
-}
-
-@Composable
-internal fun Thumbnail(
-    item: Media,
-    c: Connection,
-    loader: ImageLoader,
-    url: (Connection, Media) -> String,
-    showLabel: Boolean = false,
-    onLoaded: (Boolean) -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var attempt by remember(item.id, item.version) { mutableIntStateOf(0) }
-    var failed by remember(item.id, item.version) { mutableStateOf(false) }
-    var loaded by remember(item.id, item.version) { mutableStateOf(false) }
-    var retryDelay by remember(item.id, item.version) { mutableLongStateOf(1000) }
-    var retryable by remember(item.id, item.version) { mutableStateOf(true) }
-    // Requests are tied to visible composition and cancelled by Coil on disposal.
-    LaunchedEffect(failed, attempt) {
-        if (failed && retryable && attempt < 3 && item.status != "failed") {
-            delay(maxOf(1000L shl attempt, retryDelay))
-            attempt++
-            failed = false
-        }
-    }
-    val request = remember(item.id, item.version, c.id, c.token, attempt) {
-        ImageRequest.Builder(context).data(url(c, item)).crossfade(120)
-            .httpHeaders(NetworkHeaders.Builder().set("Authorization", "Bearer ${c.token}").build())
-            .build()
-    }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (!loaded) Column(Modifier.padding(8.dp).clickable(enabled = failed && retryable) {
-            attempt++
-            failed = false
-        }, horizontalAlignment = Alignment.CenterHorizontally) {
-            val icon = when {
-                failed && !retryable -> R.drawable.ic_image_off
-                failed -> R.drawable.ic_refresh
-                else -> R.drawable.ic_clock
-            }
-            Icon(painterResource(icon), null, tint = LocalVV.current.textSecondary)
-            if (showLabel) {
-                val label = when {
-                    failed && !retryable -> R.string.cover_unsupported
-                    failed -> R.string.cover_retry
-                    else -> R.string.cover_generating
-                }
-                Text(stringResource(label), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        AsyncImage(
-            request,
-            stringResource(R.string.media_description, item.name, item.kind),
-            imageLoader = loader,
-            contentScale = ContentScale.Crop,
-            onSuccess = {
-                loaded = true
-                failed = false
-                onLoaded(true)
-            },
-            onError = { error ->
-                val response = (error.result.throwable as? coil3.network.HttpException)?.response
-                retryable = response == null || response.code in listOf(
-                    408,
-                    429,
-                    500,
-                    502,
-                    503,
-                    504
-                ) || (response.code == 404 && item.status != "ready")
-                val after = response?.headers?.get("Retry-After")
-                scope.launch {
-                    retryDelay = withContext(Dispatchers.Default) {
-                        after?.toLongOrNull()?.takeIf { it in 0..Long.MAX_VALUE / 1000 }
-                            ?.times(1000) ?: runCatching {
-                            java.time.ZonedDateTime.parse(
-                                after,
-                                java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
-                            ).toInstant().toEpochMilli() - System.currentTimeMillis()
-                        }.getOrDefault(1000).coerceAtLeast(0)
-                    }
-                    failed = true
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
     }
 }

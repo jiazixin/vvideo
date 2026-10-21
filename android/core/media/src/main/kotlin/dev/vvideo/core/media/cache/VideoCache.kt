@@ -6,9 +6,15 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import dev.vvideo.core.media.model.PreloadBudget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+
+// The same free-space guard the app keeps when it sizes the caches: 5% of the
+// disk (one twentieth), at most 1 GB.
+private const val FREE_SPACE_GUARD_DIVISOR = 20
+private const val MAX_FREE_SPACE_GUARD = 1_000_000_000L
 
 @UnstableApi
 class VideoCache private constructor(
@@ -39,8 +45,10 @@ class VideoCache private constructor(
         }
     }
 
+    /** Whether a full preload still leaves the system its share of free space. */
     fun hasPreloadSpace(): Boolean {
         val stat = StatFs(directory.absolutePath)
-        return stat.availableBytes > minOf(stat.totalBytes / 20, 1_000_000_000L) + 8 * 1024 * 1024
+        val guard = minOf(stat.totalBytes / FREE_SPACE_GUARD_DIVISOR, MAX_FREE_SPACE_GUARD)
+        return stat.availableBytes > guard + PreloadBudget.MAX_BYTES
     }
 }

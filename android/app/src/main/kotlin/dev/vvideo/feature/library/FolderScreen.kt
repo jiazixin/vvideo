@@ -1,75 +1,96 @@
 package dev.vvideo.feature.library
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.*
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import dev.vvideo.R
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.model.*
-import dev.vvideo.ui.component.*
-import dev.vvideo.ui.theme.*
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.Sort
+import dev.vvideo.model.SortDirection
+import dev.vvideo.model.SortField
+import dev.vvideo.ui.component.ActionIcon
+import dev.vvideo.ui.component.BulletinHost
+import dev.vvideo.ui.component.EmptyState
+import dev.vvideo.ui.component.LetterAvatar
+import dev.vvideo.ui.component.OfflineBanner
+import dev.vvideo.ui.theme.LocalVVColors
+import dev.vvideo.ui.theme.Motion
+import dev.vvideo.ui.theme.barEnter
+import dev.vvideo.ui.theme.barExit
+import dev.vvideo.ui.theme.fade
+import dev.vvideo.ui.theme.move
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LibraryScreen(
-    state: LibraryUiState,
-    loader: ImageLoader,
-    connection: Connection,
-    thumbnail: (Connection, Media) -> String,
-    list: LazyListState,
-    onSettings: () -> Unit,
-    onBack: () -> Unit,
-    onOpen: (Long) -> Unit,
-    onSort: (Sort) -> Unit,
-    onMore: (Boolean) -> Unit,
-    onRetry: () -> Unit,
-    onMedia: (Media) -> Unit,
-    onKind: (String) -> Unit = {},
-    onJump: () -> Unit = {},
-    onDetails: (Media) -> Unit = {},
-    onConnection: () -> Unit = onSettings,
-    onAnchorNotice: () -> Unit = {},
-    onSearch: (String) -> Unit = {}
-) {
-    if (state.directory == null) {
-        HomeScreen(state, onSettings, onOpen, onRetry, onConnection)
-        return
-    }
-    FolderScreen(
-        state,
-        loader,
-        connection,
-        thumbnail,
-        list,
-        onBack,
-        onOpen,
-        onSort,
-        onMore,
-        onRetry,
-        onMedia,
-        onKind,
-        onJump,
-        onDetails,
-        onAnchorNotice,
-        onSearch
-    )
-}
+/** The floating date stays this long after the list stops scrolling. */
+private const val FLOATING_DATE_HOLD_MS = 1200L
+
+/** Index of the first album whose top row shows the jump-to-start button. */
+private const val JUMP_BUTTON_FIRST_ALBUM = 3
+
+/** Subfolder names previewed in the subfolder bar. */
+private const val SUBFOLDER_BAR_NAMES = 3
 
 /** The bottom sheets a folder page can open. */
 private enum class FolderSheet { Sort, Children, Info }
@@ -80,27 +101,26 @@ fun FolderScreen(
     state: LibraryUiState,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     list: LazyListState,
     onBack: () -> Unit,
     onOpen: (Long) -> Unit,
     onSort: (Sort) -> Unit,
-    onMore: (Boolean) -> Unit,
+    onMoreSubfolders: (PageEdge) -> Unit,
     onRetry: () -> Unit,
     onMedia: (Media) -> Unit,
-    onKind: (String) -> Unit,
+    onFilter: (MediaKind?) -> Unit,
     onJump: () -> Unit,
     onDetails: (Media) -> Unit,
     onAnchorNotice: () -> Unit = {},
     onSearch: (String) -> Unit = {}
 ) {
-    val c = LocalVV.current
-    val d = checkNotNull(state.directory)
-    var menuOpen by remember(d.id) { mutableStateOf(false) }
-    var sheet by remember(d.id) { mutableStateOf<FolderSheet?>(null) }
+    val colors = LocalVVColors.current
+    val directory = checkNotNull(state.directory)
+    var menuOpen by remember(directory.id) { mutableStateOf(false) }
+    var sheet by remember(directory.id) { mutableStateOf<FolderSheet?>(null) }
     var bulletin by remember { mutableStateOf<String?>(null) }
     val moved = stringResource(R.string.anchor_moved)
-    LaunchedEffect(state.restoreSerial) {
+    LaunchedEffect(state.restore.serial) {
         if (state.anchorMissing) {
             bulletin = moved
             onAnchorNotice()
@@ -117,11 +137,12 @@ fun FolderScreen(
     BackHandler(menuOpen || sheet != null) { if (menuOpen) menuOpen = false else sheet = null }
     // Back first ends a search and returns to the folder's albums.
     BackHandler(state.search.active && !menuOpen && sheet == null) { onSearch("") }
-    FolderSheetHost(sheet, state, { sheet = null }, onSort, onMore, onOpen)
-    val reveal = rememberListReveal(if (state.busy) null else Triple(d.id, state.kind, state.sort))
-    Scaffold(containerColor = c.bgPage, topBar = {
+    FolderSheetHost(sheet, state, { sheet = null }, onSort, onMoreSubfolders, onOpen)
+    val reveal =
+        rememberListReveal(if (state.busy) null else Triple(directory.id, state.filter, state.sort))
+    Scaffold(containerColor = colors.bgPage, topBar = {
         FolderTopBar(
-            d,
+            directory,
             state,
             menuOpen,
             { menuOpen = it },
@@ -129,13 +150,13 @@ fun FolderScreen(
             onBack,
             jump,
             onRetry,
-            onKind,
+            onFilter,
             onSearch
         )
     }) { padding ->
         if (state.search.active) {
             Box(Modifier.fillMaxSize().padding(padding)) {
-                FolderSearchResults(state.search, loader, connection, thumbnail, onOpen, onMedia) {
+                FolderSearchResults(state.search, loader, connection, onOpen, onMedia) {
                     onSearch(state.search.query)
                 }
             }
@@ -148,12 +169,11 @@ fun FolderScreen(
                 { reveal.value },
                 loader,
                 connection,
-                thumbnail,
                 onOpen,
                 onMedia,
                 onDetails
             )
-            LoadingOrEmpty(d.id, state, onRetry)
+            LoadingOrEmpty(directory.id, state, onRetry)
             FloatingDate(
                 list,
                 state.albums,
@@ -178,7 +198,7 @@ private fun FolderSheetHost(
     state: LibraryUiState,
     onDismiss: () -> Unit,
     onSort: (Sort) -> Unit,
-    onMore: (Boolean) -> Unit,
+    onMoreSubfolders: (PageEdge) -> Unit,
     onOpen: (Long) -> Unit
 ) {
     when (sheet) {
@@ -187,7 +207,7 @@ private fun FolderSheetHost(
             onSort(it)
         }
 
-        FolderSheet.Children -> ChildrenSheet(state, onDismiss, onMore) {
+        FolderSheet.Children -> ChildrenSheet(state, onDismiss, onMoreSubfolders) {
             onDismiss()
             onOpen(it)
         }
@@ -234,18 +254,18 @@ private fun FolderTopBar(
     onBack: () -> Unit,
     onJump: () -> Unit,
     onRetry: () -> Unit,
-    onKind: (String) -> Unit,
+    onFilter: (MediaKind?) -> Unit,
     onSearch: (String) -> Unit
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     val searching = state.search.active
-    Column(Modifier.background(c.bgSurface)) {
+    Column(Modifier.background(colors.bgSurface)) {
         TopAppBar(
             expandedHeight = 56.dp,
             title = { FolderTitle(directory, state.pathLabel) { onSheet(FolderSheet.Info) } },
             navigationIcon = { ActionIcon(R.drawable.ic_back, R.string.back, onBack) },
             actions = { FolderMenu(menuOpen, onMenuOpen, state.sort, onSheet, onJump, onRetry) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgSurface)
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
         )
         FolderSearchField(state.search.query, onSearch)
         AnimatedVisibility(
@@ -261,12 +281,12 @@ private fun FolderTopBar(
         }
         AnimatedVisibility(state.hasMedia && !searching, enter = barEnter(), exit = barExit()) {
             MediaTabs(
-                state.kind,
-                onKind
+                state.filter,
+                onFilter
             )
         }
         AnimatedVisibility(
-            state.albums.isNotEmpty() && state.children.isNotEmpty() && !searching,
+            state.albums.isNotEmpty() && state.subfolders.items.isNotEmpty() && !searching,
             enter = barEnter(),
             exit = barExit()
         ) { SubfolderBar(state) { onSheet(FolderSheet.Children) } }
@@ -275,7 +295,7 @@ private fun FolderTopBar(
 
 @Composable
 private fun FolderTitle(directory: Directory, pathLabel: String, onClick: () -> Unit) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     Row(
         Modifier.clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
@@ -292,7 +312,7 @@ private fun FolderTitle(directory: Directory, pathLabel: String, onClick: () -> 
             Text(
                 pathLabel.ifEmpty { stringResource(R.string.libraries) },
                 style = MaterialTheme.typography.bodySmall,
-                color = c.textSecondary,
+                color = colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -310,7 +330,7 @@ private fun FolderMenu(
     onJump: () -> Unit,
     onRefresh: () -> Unit
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     Box {
         ActionIcon(R.drawable.ic_more, R.string.sort, { onExpandedChange(true) })
         DropdownMenu(
@@ -318,7 +338,7 @@ private fun FolderMenu(
             { onExpandedChange(false) },
             Modifier.width(236.dp),
             shape = RoundedCornerShape(10.dp),
-            containerColor = c.bgRaised
+            containerColor = colors.bgRaised
         ) {
             DropdownMenuItem(
                 text = {
@@ -327,7 +347,7 @@ private fun FolderMenu(
                         Text(
                             sortLabel(sort),
                             style = MaterialTheme.typography.bodySmall,
-                            color = c.textSecondary
+                            color = colors.textSecondary
                         )
                     }
                 },
@@ -370,7 +390,6 @@ private fun FolderContentList(
     contentAlpha: () -> Float,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     onOpen: (Long) -> Unit,
     onMedia: (Media) -> Unit,
     onDetails: (Media) -> Unit
@@ -381,14 +400,14 @@ private fun FolderContentList(
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         // Zero-height key preserves a single mapping shared by restoration and pagination.
-        if (state.albums.isNotEmpty() && state.children.isNotEmpty()) item("subfolder-bar") {
+        if (state.albums.isNotEmpty() && state.subfolders.items.isNotEmpty()) item(SUBFOLDER_BAR_KEY) {
             Spacer(
                 Modifier.height(0.dp)
             )
         }
         if (state.albums.isEmpty()) items(
-            state.children,
-            key = { "folder:${it.id}" },
+            state.subfolders.items,
+            key = { folderKey(it.id) },
             contentType = { "folder" }) { dir ->
             LibraryRow(
                 dir.id.toString(),
@@ -397,8 +416,8 @@ private fun FolderContentList(
         }
         state.albums.forEach { album ->
             if (album.dateLabel != null) item(
-                "date:${album.items.first().id}",
-                contentType = "date"
+                dateKey(album),
+                contentType = DATE_CONTENT_TYPE
             ) {
                 Box(
                     Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
@@ -410,13 +429,12 @@ private fun FolderContentList(
                     album,
                     loader,
                     connection,
-                    thumbnail,
                     onMedia,
                     onDetails
                 )
             }
         }
-        if (state.childBusy || state.pageBusy) item("paging") {
+        if (state.subfolders.busy || state.pageBusy) item("paging") {
             Box(
                 Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center
             ) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
@@ -427,10 +445,10 @@ private fun FolderContentList(
 /** The loading placeholder of a page without content yet, or the empty-folder state. */
 @Composable
 private fun LoadingOrEmpty(directoryId: Long, state: LibraryUiState, onRetry: () -> Unit) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     // The placeholder belongs to a page without content of its own; a reload
     // keeps what is already shown, and a failed load is not an empty folder.
-    val blank = state.albums.isEmpty() && state.children.isEmpty()
+    val blank = state.albums.isEmpty() && state.subfolders.items.isEmpty()
     // An empty folder is content too: reloading it keeps the empty state
     // instead of swapping in the placeholder and back.
     val settled = remember(directoryId) {
@@ -452,7 +470,7 @@ private fun LoadingOrEmpty(directoryId: Long, state: LibraryUiState, onRetry: ()
             repeat(2) {
                 Box(
                     Modifier.fillMaxWidth().height(260.dp)
-                        .background(c.bgPlaceholder, RoundedCornerShape(16.dp))
+                        .background(colors.bgPlaceholder, RoundedCornerShape(16.dp))
                 )
             }
         }
@@ -491,13 +509,13 @@ private fun FloatingDate(list: LazyListState, albums: List<Album>, modifier: Mod
     val dateRowAtTop by remember(list, dateBand) {
         derivedStateOf {
             list.layoutInfo.visibleItemsInfo.any {
-                it.contentType == "date" && it.offset < dateBand && it.offset + it.size > 0
+                it.contentType == DATE_CONTENT_TYPE && it.offset < dateBand && it.offset + it.size > 0
             }
         }
     }
     LaunchedEffect(list.isScrollInProgress) {
         if (list.isScrollInProgress) floating = true else {
-            delay(1200)
+            delay(FLOATING_DATE_HOLD_MS)
             floating = false
         }
     }
@@ -519,14 +537,14 @@ private fun JumpToStartButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     val visible by remember(list, albums, hasPrevious) {
         derivedStateOf {
             hasPrevious || albums.indexOfFirst {
                 albumKey(it) == list.layoutInfo.visibleItemsInfo.firstOrNull { item ->
                     item.key.toString().startsWith(ALBUM_KEY_PREFIX)
                 }?.key
-            } > 2
+            } >= JUMP_BUTTON_FIRST_ALBUM
         }
     }
     AnimatedVisibility(
@@ -540,8 +558,8 @@ private fun JumpToStartButton(
             Modifier.navigationBarsPadding().padding(end = 16.dp, bottom = 24.dp)
                 .size(48.dp),
             shape = CircleShape,
-            containerColor = c.bgRaised,
-            contentColor = c.icon
+            containerColor = colors.bgRaised,
+            contentColor = colors.icon
         ) {
             Icon(
                 painterResource(R.drawable.ic_arrow_up),
@@ -553,8 +571,8 @@ private fun JumpToStartButton(
 
 // The start of the list is the oldest or newest media depending on the direction.
 private fun jumpLabel(sort: Sort) = when {
-    sort.field == "name" -> R.string.jump_to_beginning
-    sort.direction == "asc" -> R.string.jump_to_oldest
+    sort.field == SortField.Name -> R.string.jump_to_beginning
+    sort.direction == SortDirection.Ascending -> R.string.jump_to_oldest
     else -> R.string.jump_to_start
 }
 
@@ -562,16 +580,16 @@ private fun jumpLabel(sort: Sort) = when {
 fun DatePill(label: String) {
     Text(
         label,
-        Modifier.background(LocalVV.current.datePill, RoundedCornerShape(12.dp))
+        Modifier.background(LocalVVColors.current.datePill, RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 3.dp),
-        color = LocalVV.current.datePillText,
+        color = LocalVVColors.current.datePillText,
         style = MaterialTheme.typography.labelSmall
     )
 }
 
 @Composable
 private fun SubfolderBar(state: LibraryUiState, onClick: () -> Unit) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 52.dp)
             .padding(horizontal = 16.dp, vertical = 6.dp),
@@ -579,23 +597,24 @@ private fun SubfolderBar(state: LibraryUiState, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Box(
-            Modifier.size(32.dp).background(c.accentSoft, CircleShape),
+            Modifier.size(32.dp).background(colors.accentSoft, CircleShape),
             contentAlignment = Alignment.Center
-        ) { Icon(painterResource(R.drawable.ic_folder), null, tint = c.accentText) }
+        ) { Icon(painterResource(R.drawable.ic_folder), null, tint = colors.accentText) }
         Column(Modifier.weight(1f)) {
             Text(
                 stringResource(
                     R.string.subfolders_count,
-                    state.children.size.toString() + if (state.childNext.isNotEmpty()) "+" else ""
-                ), color = c.accentText, style = MaterialTheme.typography.labelSmall
+                    state.subfolders.items.size.toString() + if (state.subfolders.next.isNotEmpty()) "+" else ""
+                ), color = colors.accentText, style = MaterialTheme.typography.labelSmall
             )
             Text(
-                state.children.take(3).joinToString("、") { it.name },
+                state.subfolders.items.take(SUBFOLDER_BAR_NAMES)
+                    .joinToString(stringResource(R.string.list_separator)) { it.name },
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
-        Icon(painterResource(R.drawable.ic_chevron), null, tint = c.textTertiary)
+        Icon(painterResource(R.drawable.ic_chevron), null, tint = colors.textTertiary)
     }
 }

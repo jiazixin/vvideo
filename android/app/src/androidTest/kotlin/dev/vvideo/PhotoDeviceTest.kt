@@ -15,8 +15,12 @@ import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import dev.vvideo.app.MainActivity
 import dev.vvideo.app.VVideoApplication
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.feature.library.LibraryViewModel
+import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
+import dev.vvideo.model.SortDirection
+import dev.vvideo.model.SortField
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -75,10 +79,14 @@ class PhotoDeviceTest {
     fun albumEndPositionSurvivesViewer() = runBlocking<Unit> {
         val connection = connect()
         val root = app.graph.api.libraries(connection).first().directoryId
-        val media = app.graph.api.page(connection, root, Sort("name", "asc")).items
+        val media = app.graph.api.page(
+            connection,
+            root,
+            Sort(SortField.Name, SortDirection.Ascending)
+        ).items
         org.junit.Assume.assumeTrue(
             "needs a root that fits one page and ends with an image",
-            media.size in 11..99 && media.last().kind == "image"
+            media.size in 11..99 && media.last().kind == MediaKind.Image
         )
         val last = media.last()
         val cell = By.desc(last.name + "，image")
@@ -89,7 +97,7 @@ class PhotoDeviceTest {
             lateinit var library: LibraryViewModel
             withContext(Dispatchers.Main) {
                 library = ViewModelProvider(activity)[LibraryViewModel::class.java]
-                library.open(root, Sort("name", "asc"))
+                library.open(root, Sort(SortField.Name, SortDirection.Ascending))
             }
             withTimeout(10000) { library.state.first { !it.busy && it.directory?.id == root && it.albums.isNotEmpty() } }
             val cx = device.displayWidth / 2
@@ -135,8 +143,8 @@ class PhotoDeviceTest {
         val image = app.graph.api.page(
             connection,
             directory,
-            Sort("name", "asc"),
-            kind = "image"
+            Sort(SortField.Name, SortDirection.Ascending),
+            kind = MediaKind.Image
         ).items.first { it.displayRatio in 1.4f..2f }
         val activity = launch()
         val device = UiDevice.getInstance(instrumentation)
@@ -145,7 +153,7 @@ class PhotoDeviceTest {
             lateinit var library: LibraryViewModel
             withContext(Dispatchers.Main) {
                 library = ViewModelProvider(activity)[LibraryViewModel::class.java]
-                library.open(directory, Sort("name", "asc"))
+                library.open(directory, Sort(SortField.Name, SortDirection.Ascending))
             }
             withTimeout(10000) { library.state.first { !it.busy && it.directory?.id == directory && it.albums.isNotEmpty() } }
             checkNotNull(
@@ -233,9 +241,9 @@ class PhotoDeviceTest {
             val queue = app.graph.api.page(
                 connection,
                 directory,
-                Sort("name", "asc"),
+                Sort(SortField.Name, SortDirection.Ascending),
                 anchor = image.id,
-                kind = "image"
+                kind = MediaKind.Image
             ).items
             val following = queue[queue.indexOfFirst { it.id == image.id } + 1]
             device.swipe(cx + far, cy, cx - far, cy, 12)

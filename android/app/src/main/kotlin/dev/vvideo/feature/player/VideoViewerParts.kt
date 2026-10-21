@@ -37,11 +37,13 @@ import androidx.media3.ui.PlayerView
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import dev.vvideo.R
+import dev.vvideo.data.library.remote.MediaResource
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.ButtonKind
 import dev.vvideo.ui.component.VVButton
+import dev.vvideo.ui.component.imageRequest
 
 // Pieces of the video viewer. They take values and callbacks; the state they show
 // is owned by PlayerRoute.
@@ -74,7 +76,7 @@ internal fun SessionSurface(player: Player, modifier: Modifier = Modifier) {
 @Composable
 internal fun VideoPage(
     item: Media,
-    c: Connection,
+    connection: Connection,
     loader: ImageLoader,
     covered: Boolean,
     failed: Boolean,
@@ -91,8 +93,8 @@ internal fun VideoPage(
     ) {
         if (covered) {
             val context = LocalContext.current
-            val request = remember(item.id, item.version, c.token) {
-                item.imageRequest(context, c, "thumbnail")
+            val request = remember(item.id, item.version, connection.token) {
+                item.imageRequest(context, connection, MediaResource.Thumbnail)
             }
             AsyncImage(
                 request,
@@ -208,7 +210,8 @@ internal fun SpeedHoldLabel(modifier: Modifier = Modifier) {
 /** The brightness or volume an edge drag is setting. */
 @Composable
 internal fun EdgeLevelLabel(control: EdgeControl, level: Float, modifier: Modifier = Modifier) {
-    val label = if (control == EdgeControl.Brightness) R.string.brightness_level else R.string.volume_level
+    val label =
+        if (control == EdgeControl.Brightness) R.string.brightness_level else R.string.volume_level
     Text(
         stringResource(label, levelPercent(level)),
         modifier.statusBarsPadding().padding(top = 72.dp)

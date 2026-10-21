@@ -22,6 +22,15 @@ private const val FULL_RANGE_FRACTION = 0.6f
 /** The window never goes fully dark; 0 would make the screen unreadable. */
 private const val MIN_BRIGHTNESS = 0.01f
 
+/** The system brightness setting ranges from 0 to this. */
+private const val SYSTEM_BRIGHTNESS_MAX = 255
+
+/** Read when the system brightness setting is missing. */
+private const val DEFAULT_SYSTEM_BRIGHTNESS = 128
+
+/** Assumed when there is no window to read the brightness of. */
+private const val UNKNOWN_BRIGHTNESS = 0.5f
+
 /** The level a vertical drag on a viewer edge adjusts. */
 enum class EdgeControl { Brightness, Volume }
 
@@ -100,15 +109,15 @@ class ViewerLevels(private val activity: Activity?) {
 
     /** The window's brightness, or the system brightness while the window follows it. */
     fun brightness(): Float {
-        val window = activity?.window ?: return 0.5f
+        val window = activity?.window ?: return UNKNOWN_BRIGHTNESS
         val own = window.attributes.screenBrightness
         if (own >= 0f) return own
         val system = Settings.System.getInt(
             activity.contentResolver,
             Settings.System.SCREEN_BRIGHTNESS,
-            128
+            DEFAULT_SYSTEM_BRIGHTNESS
         )
-        return (system / 255f).coerceIn(0f, 1f)
+        return (system / SYSTEM_BRIGHTNESS_MAX.toFloat()).coerceIn(0f, 1f)
     }
 
     fun setBrightness(level: Float) {

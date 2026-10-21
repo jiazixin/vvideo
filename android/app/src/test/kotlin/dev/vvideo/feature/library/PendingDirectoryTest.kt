@@ -16,16 +16,16 @@ class PendingDirectoryTest {
     private val home = LibraryUiState(
         libraries = listOf(Library("lib", "media", 1, true)),
         recent = listOf(recent),
-        restoreSerial = 4
+        restore = ScrollRestore(serial = 4)
     )
     private val inWide = home.copy(
         directory = wide,
         path = listOf(root, wide),
         pathLabel = "media",
-        children = listOf(leaf),
+        subfolders = Subfolders(listOf(leaf)),
         albums = listOf(Album(emptyList())),
         hasMedia = true,
-        kind = "video",
+        filter = MediaKind.Video,
         error = true
     )
 
@@ -37,13 +37,13 @@ class PendingDirectoryTest {
         assertEquals("media › wide", pending.pathLabel)
         assertTrue(pending.busy)
         assertTrue(pending.albums.isEmpty())
-        assertTrue(pending.children.isEmpty())
+        assertTrue(pending.subfolders.items.isEmpty())
         assertFalse(pending.hasMedia)
         assertFalse(pending.error)
-        assertEquals("", pending.kind)
+        assertNull(pending.filter)
         assertEquals(home.libraries, pending.libraries)
         assertEquals(home.recent, pending.recent)
-        assertEquals(4, pending.restoreSerial)
+        assertEquals(4, pending.restore.serial)
     }
 
     @Test
@@ -53,7 +53,7 @@ class PendingDirectoryTest {
                 inWide.copy(
                     directory = leaf,
                     path = listOf(root, wide, leaf),
-                    children = emptyList()
+                    subfolders = Subfolders()
                 ), 2
             )
         )
@@ -90,7 +90,12 @@ class PendingDirectoryTest {
     @Test
     fun restoredPageKeepsItsContentAndTakesLiveLists() {
         val left =
-            inWide.copy(pageBusy = true, childBusy = true, restoreSerial = 4, anchorMissing = true)
+            inWide.copy(
+                pageBusy = true,
+                subfolders = inWide.subfolders.copy(busy = true),
+                restore = ScrollRestore(serial = 4),
+                anchorMissing = true
+            )
         val newer = RecentFolder(
             BookmarkEntity(
                 "c",
@@ -104,18 +109,18 @@ class PendingDirectoryTest {
             busy = false,
             error = true,
             recent = listOf(newer),
-            restoreSerial = 6
+            restore = ScrollRestore(serial = 6)
         )
         val back = restoredPage(left, failed)
         assertEquals(wide, back.directory)
         assertEquals(left.albums, back.albums)
-        assertEquals(left.children, back.children)
+        assertEquals(left.subfolders.items, back.subfolders.items)
         assertEquals(left.path, back.path)
-        assertEquals("video", back.kind)
+        assertEquals(MediaKind.Video, back.filter)
         assertEquals(listOf(newer), back.recent)
-        assertEquals(6, back.restoreSerial)
+        assertEquals(6, back.restore.serial)
         assertFalse(back.pageBusy)
-        assertFalse(back.childBusy)
+        assertFalse(back.subfolders.busy)
         assertFalse(back.busy)
         // The notice belonged to the load that missed; going back to the page does not repeat it.
         assertFalse(back.anchorMissing)

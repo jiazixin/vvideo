@@ -36,10 +36,11 @@ import coil3.ImageLoader
 import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.EmptyState
 import dev.vvideo.ui.component.mediaDuration
-import dev.vvideo.ui.theme.LocalVV
+import dev.vvideo.ui.theme.LocalVVColors
 
 /** The search box under the folder's app bar. */
 @Composable
@@ -48,11 +49,11 @@ internal fun FolderSearchField(
     onQuery: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     val focus = LocalFocusManager.current
     Row(
         modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp)).background(c.bgInput).height(40.dp)
+            .clip(RoundedCornerShape(10.dp)).background(colors.bgInput).height(40.dp)
             .padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -60,22 +61,26 @@ internal fun FolderSearchField(
             painterResource(R.drawable.ic_search),
             null,
             Modifier.size(20.dp),
-            tint = c.textSecondary
+            tint = colors.textSecondary
         )
         Box(
             Modifier.weight(1f).padding(horizontal = 8.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             if (query.isEmpty()) {
-                Text(stringResource(R.string.search_hint), color = c.textSecondary, maxLines = 1)
+                Text(
+                    stringResource(R.string.search_hint),
+                    color = colors.textSecondary,
+                    maxLines = 1
+                )
             }
             BasicTextField(
                 query,
                 onQuery,
                 Modifier.fillMaxWidth(),
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.textPrimary),
-                cursorBrush = SolidColor(c.accentFill),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.textPrimary),
+                cursorBrush = SolidColor(colors.accentFill),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() })
             )
@@ -95,12 +100,11 @@ internal fun FolderSearchResults(
     search: SearchState,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     onOpen: (Long) -> Unit,
     onMedia: (Media) -> Unit,
     onRetry: () -> Unit
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     val result = search.result
     when {
         result == null && search.error -> EmptyState(
@@ -118,7 +122,7 @@ internal fun FolderSearchResults(
         else -> LazyColumn(Modifier.fillMaxSize()) {
             if (result.directories.isNotEmpty()) {
                 item("folders-title") { SectionTitle(stringResource(R.string.search_folders)) }
-                items(result.directories, key = { "folder:${it.id}" }) { dir ->
+                items(result.directories, key = { folderKey(it.id) }) { dir ->
                     LibraryRow(
                         dir.id.toString(),
                         dir.name,
@@ -129,7 +133,7 @@ internal fun FolderSearchResults(
             if (result.items.isNotEmpty()) {
                 item("media-title") { SectionTitle(stringResource(R.string.search_media)) }
                 items(result.items, key = { "media:${it.id}" }) { media ->
-                    SearchMediaRow(media, loader, connection, thumbnail) { onMedia(media) }
+                    SearchMediaRow(media, loader, connection) { onMedia(media) }
                 }
             }
             if (result.truncated) {
@@ -138,7 +142,7 @@ internal fun FolderSearchResults(
                         stringResource(R.string.search_truncated),
                         Modifier.padding(20.dp),
                         style = MaterialTheme.typography.bodySmall,
-                        color = c.textSecondary
+                        color = colors.textSecondary
                     )
                 }
             }
@@ -152,7 +156,7 @@ private fun SectionTitle(text: String) {
         text,
         Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
         style = MaterialTheme.typography.labelLarge,
-        color = LocalVV.current.textSecondary
+        color = LocalVVColors.current.textSecondary
     )
 }
 
@@ -161,25 +165,28 @@ private fun SearchMediaRow(
     media: Media,
     loader: ImageLoader,
     connection: Connection,
-    thumbnail: (Connection, Media) -> String,
     onClick: () -> Unit
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(c.bgRaised)) {
-            Thumbnail(media, connection, loader, thumbnail) {}
+        Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(colors.bgRaised)) {
+            Thumbnail(media, connection, loader) {}
         }
         Column(Modifier.weight(1f)) {
             Text(media.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
-                if (media.kind == "video") mediaDuration(media.durationMs) else stringResource(R.string.tab_photo),
+                if (media.kind == MediaKind.Video) {
+                    mediaDuration(media.durationMs)
+                } else {
+                    stringResource(R.string.tab_photo)
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = c.textSecondary
+                color = colors.textSecondary
             )
         }
     }

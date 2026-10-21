@@ -1,6 +1,9 @@
 package dev.vvideo.data.library
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PagingGateTest {
@@ -9,63 +12,63 @@ class PagingGateTest {
     @Test
     fun oppositeEdgeAskedDuringRequestRunsAfterIt() {
         val gate = PagingGate()
-        assertTrue(gate.begin(false))
-        assertFalse(gate.begin(true))
-        assertEquals(true, gate.end(false))
-        assertTrue(gate.begin(true))
-        assertNull(gate.end(true))
+        assertTrue(gate.begin(PageEdge.Next))
+        assertFalse(gate.begin(PageEdge.Previous))
+        assertEquals(PageEdge.Previous, gate.end(PageResult.Empty))
+        assertTrue(gate.begin(PageEdge.Previous))
+        assertNull(gate.end(PageResult.Items))
     }
 
     @Test
     fun exhaustedEdgeStaysClosedUntilOppositeLoads() {
         val gate = PagingGate()
-        assertTrue(gate.begin(false))
-        assertNull(gate.end(false))
-        assertFalse(gate.begin(false))
-        assertTrue(gate.begin(true))
-        assertNull(gate.end(true))
-        assertTrue(gate.begin(false))
+        assertTrue(gate.begin(PageEdge.Next))
+        assertNull(gate.end(PageResult.Empty))
+        assertFalse(gate.begin(PageEdge.Next))
+        assertTrue(gate.begin(PageEdge.Previous))
+        assertNull(gate.end(PageResult.Items))
+        assertTrue(gate.begin(PageEdge.Next))
     }
 
     @Test
     fun repeatedSameEdgeIsNotQueued() {
         val gate = PagingGate()
-        assertTrue(gate.begin(false))
-        assertFalse(gate.begin(false))
-        assertNull(gate.end(true))
-        assertTrue(gate.begin(false))
+        assertTrue(gate.begin(PageEdge.Next))
+        assertFalse(gate.begin(PageEdge.Next))
+        assertNull(gate.end(PageResult.Items))
+        assertTrue(gate.begin(PageEdge.Next))
     }
 
     @Test
     fun closedEdgeIsNeitherStartedNorKept() {
         val gate = PagingGate()
-        assertTrue(gate.begin(true))
-        assertNull(gate.end(false))
-        assertTrue(gate.begin(false))
-        assertFalse(gate.begin(true))
-        assertNull(gate.end(false))
-        assertFalse(gate.begin(false))
-        assertFalse(gate.begin(true))
+        assertTrue(gate.begin(PageEdge.Previous))
+        assertNull(gate.end(PageResult.Empty))
+        assertTrue(gate.begin(PageEdge.Next))
+        assertFalse(gate.begin(PageEdge.Previous))
+        assertNull(gate.end(PageResult.Empty))
+        assertFalse(gate.begin(PageEdge.Next))
+        assertFalse(gate.begin(PageEdge.Previous))
     }
 
     @Test
     fun failureKeepsBothEdgesAndTheKeptRequest() {
         val gate = PagingGate()
-        assertTrue(gate.begin(false))
-        assertFalse(gate.begin(true))
-        assertEquals(true, gate.end(null))
-        assertTrue(gate.begin(true))
-        assertNull(gate.end(null))
-        assertTrue(gate.begin(false))
+        assertTrue(gate.begin(PageEdge.Next))
+        assertFalse(gate.begin(PageEdge.Previous))
+        assertEquals(PageEdge.Previous, gate.end(PageResult.Failed))
+        assertTrue(gate.begin(PageEdge.Previous))
+        assertNull(gate.end(PageResult.Failed))
+        assertTrue(gate.begin(PageEdge.Next))
     }
 
     @Test
     fun resetForgetsRunningAndKeptRequests() {
         val gate = PagingGate()
-        gate.begin(false)
-        gate.begin(true)
+        gate.begin(PageEdge.Next)
+        gate.begin(PageEdge.Previous)
         gate.reset()
-        assertNull(gate.end(true))
-        assertTrue(gate.begin(true))
+        assertNull(gate.end(PageResult.Items))
+        assertTrue(gate.begin(PageEdge.Previous))
     }
 }

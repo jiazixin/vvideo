@@ -1,23 +1,65 @@
 package dev.vvideo.feature.library
 
-import androidx.compose.animation.*
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
-import androidx.compose.ui.res.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.vvideo.R
-import dev.vvideo.ui.component.*
-import dev.vvideo.ui.theme.LocalVV
+import dev.vvideo.data.library.remote.HTTP_UNAUTHORIZED
+import dev.vvideo.ui.component.ActionIcon
+import dev.vvideo.ui.component.EmptyState
+import dev.vvideo.ui.component.LetterAvatar
+import dev.vvideo.ui.theme.LocalVVColors
 import dev.vvideo.ui.theme.Motion
 import dev.vvideo.ui.theme.fade
 import dev.vvideo.ui.theme.move
 import kotlinx.coroutines.delay
+
+/** A refresh behind a shown list waits this long before it shows a spinner. */
+private const val SPINNER_DELAY_MS = 300L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,13 +70,13 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onConnection: () -> Unit = onSettings
 ) {
-    val c = LocalVV.current
+    val colors = LocalVVColors.current
     val quick = fade<Float>()
     val slow = fade<Float>(Motion.CHANGE)
-    val resize = move<androidx.compose.ui.unit.IntSize>()
+    val resize = move<IntSize>()
     val status = when {
         state.busy && state.libraries.isEmpty() -> R.string.status_connecting
-        state.error && state.errorStatus == 401 -> R.string.status_bad_token
+        state.error && state.errorStatus == HTTP_UNAUTHORIZED -> R.string.status_bad_token
         state.error && state.errorStatus == 0 -> R.string.status_waiting_network
         else -> R.string.home_title
     }
@@ -43,14 +85,14 @@ fun HomeScreen(
     var spinner by remember { mutableStateOf(state.busy) }
     LaunchedEffect(state.busy) {
         if (state.busy) {
-            if (state.libraries.isNotEmpty()) delay(300)
+            if (state.libraries.isNotEmpty()) delay(SPINNER_DELAY_MS)
             spinner = true
         } else spinner = false
     }
     // The title only acts while it reports a problem: retry, or fix the credential.
     val action =
-        if (!state.error || state.busy) null else if (state.errorStatus == 401) onConnection else onRetry
-    Scaffold(containerColor = c.bgSurface, topBar = {
+        if (!state.error || state.busy) null else if (state.errorStatus == HTTP_UNAUTHORIZED) onConnection else onRetry
+    Scaffold(containerColor = colors.bgSurface, topBar = {
         TopAppBar(
             expandedHeight = 56.dp,
             title = {
@@ -69,7 +111,7 @@ fun HomeScreen(
                         )
                     }
                     val color by animateColorAsState(
-                        if (state.errorStatus == 401) c.warn else c.textPrimary,
+                        if (state.errorStatus == HTTP_UNAUTHORIZED) colors.warn else colors.textPrimary,
                         fade(),
                         label = "home-title-color"
                     )
@@ -77,14 +119,14 @@ fun HomeScreen(
                         status,
                         transitionSpec = {
                             fadeIn(quick) togetherWith fadeOut(quick) using
-                                SizeTransform(clip = false) { _, _ -> resize }
+                                    SizeTransform(clip = false) { _, _ -> resize }
                         },
                         label = "home-title"
                     ) { Text(stringResource(it), color = color) }
                 }
             },
             actions = { ActionIcon(R.drawable.ic_settings, R.string.settings, onSettings) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgSurface)
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
         )
     }) { padding ->
         // The library list fades in once on arrival; its rows have no entrance animation of their own.
@@ -126,8 +168,8 @@ fun LibraryRow(
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    val c = LocalVV.current
-    Column(Modifier.background(if (pinned) c.pinnedRow else c.bgSurface)) {
+    val colors = LocalVVColors.current
+    Column(Modifier.background(if (pinned) colors.pinnedRow else colors.bgSurface)) {
         Row(
             Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .heightIn(min = if (compact) 64.dp else 72.dp)
@@ -142,7 +184,7 @@ fun LibraryRow(
                         name,
                         Modifier.weight(1f),
                         style = MaterialTheme.typography.titleSmall,
-                        color = if (!healthy) c.warn else c.textPrimary,
+                        color = if (!healthy) colors.warn else colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -150,14 +192,18 @@ fun LibraryRow(
                         painterResource(R.drawable.ic_pin),
                         null,
                         Modifier.size(16.dp),
-                        tint = c.textTertiary
+                        tint = colors.textTertiary
                     )
                     else if (time != null) Text(
                         time,
                         style = MaterialTheme.typography.bodySmall,
-                        color = c.textSecondary
+                        color = colors.textSecondary
                     )
-                    else Icon(painterResource(R.drawable.ic_chevron), null, tint = c.textTertiary)
+                    else Icon(
+                        painterResource(R.drawable.ic_chevron),
+                        null,
+                        tint = colors.textTertiary
+                    )
                 }
                 if (subtitle != null) Row(
                     Modifier.padding(top = 3.dp),
@@ -166,11 +212,11 @@ fun LibraryRow(
                 ) {
                     if (pinned) Box(
                         Modifier.size(7.dp)
-                            .background(if (healthy) c.online else c.warn, CircleShape)
+                            .background(if (healthy) colors.online else colors.warn, CircleShape)
                     )
                     Text(
                         subtitle,
-                        color = if (!healthy) c.warn else c.textSecondary,
+                        color = if (!healthy) colors.warn else colors.textSecondary,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -178,6 +224,6 @@ fun LibraryRow(
                 }
             }
         }
-        HorizontalDivider(Modifier.padding(start = 76.dp), color = c.divider)
+        HorizontalDivider(Modifier.padding(start = 76.dp), color = colors.divider)
     }
 }

@@ -1,75 +1,63 @@
 package dev.vvideo.data.settings
 
 import android.content.Context
-import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.vvideo.model.ThemeMode
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import java.security.MessageDigest
 
 private val Context.settings by preferencesDataStore("connection")
 
-/** The media cache budgets offered in Settings, in decimal bytes. */
-val CACHE_BUDGETS = listOf(1_000_000_000L, 5_000_000_000L, 10_000_000_000L)
-const val DEFAULT_CACHE_BUDGET = 5_000_000_000L
-
-data class Connection(
-    val address: String = "",
-    val token: String = "",
-    val budget: Long = DEFAULT_CACHE_BUDGET,
-    val lastDirectory: Long = 0L
-) {
-    val configured: Boolean get() = address.isNotBlank() && token.isNotBlank()
-
-    // Connection is immutable. Compute its cache/bookmark namespace once rather
-    // than constructing a digest and 32 formatters during UI recomposition.
-    val id: String = MessageDigest.getInstance("SHA-256").digest(address.toByteArray())
-        .joinToString("") { "%02x".format(it) }
-}
+// Stored key names; changing one loses what users already saved under it.
+private val ADDRESS_KEY = stringPreferencesKey("address")
+private val TOKEN_KEY = stringPreferencesKey("token")
+private val BUDGET_KEY = longPreferencesKey("budget")
+private val THEME_KEY = stringPreferencesKey("theme")
+private val LAST_DIRECTORY_KEY = longPreferencesKey("recent")
 
 class SettingsRepository(private val context: Context) {
-    private val address = stringPreferencesKey("address")
-    private val token = stringPreferencesKey("token")
-    private val budget = longPreferencesKey("budget")
-    private val themeKey = stringPreferencesKey("theme")
-    val theme = context.settings.data.map { it[themeKey] ?: "system" }
+    val theme: Flow<ThemeMode> = context.settings.data.map { ThemeMode.fromKey(it[THEME_KEY]) }
 
-    suspend fun setTheme(value: String) {
-        require(value in setOf("system", "light", "dark"))
-        context.settings.edit { it[themeKey] = value }
+    suspend fun setTheme(mode: ThemeMode) {
+        context.settings.edit { it[THEME_KEY] = mode.key }
     }
 
-    private val recent = longPreferencesKey("recent")
-    val connection = context.settings.data.map {
+    val connection: Flow<Connection> = context.settings.data.map {
         Connection(
-            it[address].orEmpty(),
-            it[token].orEmpty(),
-            it[budget] ?: DEFAULT_CACHE_BUDGET,
-            it[recent] ?: 0L
+            address = it[ADDRESS_KEY].orEmpty(),
+            token = it[TOKEN_KEY].orEmpty(),
+            budget = it[BUDGET_KEY] ?: DEFAULT_CACHE_BUDGET,
+            lastDirectory = it[LAST_DIRECTORY_KEY] ?: 0L
         )
     }
 
-    fun candidate(url: String, credential: String): Connection {
+    /** A connection to try before saving it; throws for an invalid address or a blank token. */
+    fun candidate(url: String, token: String): Connection {
         val canonical = ConnectionPolicy.canonical(url)
-        require(credential.isNotBlank())
-        return Connection(canonical, credential)
+        require(token.isNotBlank())
+        return Connection(canonical, token)
     }
 
-    suspend fun connect(url: String, credential: String) {
+    suspend fun connect(url: String, token: String) {
         val canonical = ConnectionPolicy.canonical(url)
-        require(credential.isNotBlank())
+        require(token.isNotBlank())
         context.settings.edit {
-            if (it[address] != canonical) it.remove(recent)
-            it[address] = canonical
-            it[token] = credential
+            if (it[ADDRESS_KEY] != canonical) it.remove(LAST_DIRECTORY_KEY)
+            it[ADDRESS_KEY] = canonical
+            it[TOKEN_KEY] = token
         }
     }
 
     suspend fun setBudget(bytes: Long) {
         require(bytes in CACHE_BUDGETS)
-        context.settings.edit { it[budget] = bytes }
+        context.settings.edit { it[BUDGET_KEY] = bytes }
     }
 
-    suspend fun recent(directory: Long) {
-        context.settings.edit { it[recent] = directory }
+    /** The folder a cold start reopens; 0 opens the library list. */
+    suspend fun setLastDirectory(directoryId: Long) {
+        context.settings.edit { it[LAST_DIRECTORY_KEY] = directoryId }
     }
 }

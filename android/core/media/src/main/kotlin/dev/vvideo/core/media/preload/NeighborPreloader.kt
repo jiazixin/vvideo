@@ -8,14 +8,33 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadataMutations
 import dev.vvideo.core.media.cache.VideoCache
-import dev.vvideo.core.media.model.*
-import kotlinx.coroutines.*
+import dev.vvideo.core.media.datasource.authorizationHeaders
+import dev.vvideo.core.media.model.ByteRange
+import dev.vvideo.core.media.model.PlaybackItem
+import dev.vvideo.core.media.model.PreloadBudget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicLong
+
+private const val PRELOAD_TIMEOUT_MS = 3000
+private const val INDEX_READ_BUFFER_BYTES = 4096
+
+/** A preload index larger than this is not read. */
+private const val MAX_INDEX_BYTES = 64 * 1024
+
+/** At most this many hinted ranges of one video are preloaded. */
+private const val MAX_HINT_RANGES = 4
+private const val CACHE_WRITE_BUFFER_BYTES = 64 * 1024
 
 // One worker and a conflated mailbox prevent quick swipes from building up
 // sockets, jobs or media-source references. CacheWriter cancellation closes its
@@ -26,8 +45,10 @@ class NeighborPreloader(private val cache: VideoCache) {
     private val requests = Channel<Pair<Long, PlaybackItem?>>(Channel.CONFLATED)
     private val generation = AtomicLong()
     private val gate = Any()
+
     @Volatile
     private var writer: CacheWriter? = null
+
     @Volatile
     private var connection: HttpURLConnection? = null
     private val worker = scope.launch {
@@ -80,52 +101,54 @@ class NeighborPreloader(private val cache: VideoCache) {
         if (previous != null) scope.launch { previous.disconnect() }
     }
 
+    /** The byte ranges the server suggests preloading for [item], such as a trailing moov box. */
     private fun hints(item: PlaybackItem, serial: Long): List<ByteRange> {
-        val c = URL(item.indexUrl).openConnection() as HttpURLConnection
+        val request = URL(item.indexUrl).openConnection() as HttpURLConnection
         synchronized(gate) {
             check(serial == generation.get())
-            connection = c
+            connection = request
         }
-        c.connectTimeout = 3000
-        c.readTimeout = 3000
-        c.instanceFollowRedirects = false
-        c.setRequestProperty("Authorization", "Bearer ${item.token}")
+        request.connectTimeout = PRELOAD_TIMEOUT_MS
+        request.readTimeout = PRELOAD_TIMEOUT_MS
+        request.instanceFollowRedirects = false
+        authorizationHeaders(item.token).forEach { (name, value) -> request.setRequestProperty(name, value) }
         return try {
-            if (c.responseCode != 200) return emptyList()
-            val text = c.inputStream.use { stream ->
+            if (request.responseCode != HttpURLConnection.HTTP_OK) return emptyList()
+            val text = request.inputStream.use { stream ->
                 val out = ByteArrayOutputStream()
-                val buffer = ByteArray(4096)
+                val buffer = ByteArray(INDEX_READ_BUFFER_BYTES)
                 while (true) {
                     check(serial == generation.get())
-                    val n = stream.read(buffer)
-                    if (n < 0) break
-                    check(out.size() + n <= 64 * 1024)
-                    out.write(buffer, 0, n)
+                    val read = stream.read(buffer)
+                    if (read < 0) break
+                    check(out.size() + read <= MAX_INDEX_BYTES)
+                    out.write(buffer, 0, read)
                 }
                 out.toString("UTF-8")
             }
-            val j = JSONObject(text)
-            if (j.getString("version") != item.version) return emptyList()
-            val a = j.getJSONArray("ranges")
-            List(minOf(a.length(), 4)) {
-                val r = a.getJSONObject(it)
-                ByteRange(r.getLong("offset"), r.getLong("length"))
+            val json = JSONObject(text)
+            if (json.getString("version") != item.version) return emptyList()
+            val ranges = json.getJSONArray("ranges")
+            List(minOf(ranges.length(), MAX_HINT_RANGES)) {
+                val range = ranges.getJSONObject(it)
+                ByteRange(range.getLong("offset"), range.getLong("length"))
             }
         } finally {
-            c.disconnect()
+            request.disconnect()
             connection = null
         }
     }
 
     private fun fill(item: PlaybackItem, range: ByteRange, serial: Long) {
         val factory = CacheDataSource.Factory().setCache(cache.cache).setUpstreamDataSourceFactory(
-            DefaultHttpDataSource.Factory().setConnectTimeoutMs(3000).setReadTimeoutMs(3000)
-                .setDefaultRequestProperties(mapOf("Authorization" to "Bearer ${item.token}"))
+            DefaultHttpDataSource.Factory().setConnectTimeoutMs(PRELOAD_TIMEOUT_MS)
+                .setReadTimeoutMs(PRELOAD_TIMEOUT_MS)
+                .setDefaultRequestProperties(authorizationHeaders(item.token))
         ).setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
-        val ds = factory.createDataSource()
+        val dataSource = factory.createDataSource()
         val spec = DataSpec.Builder().setUri(Uri.parse(item.url)).setKey(item.cacheKey)
             .setPosition(range.offset).setLength(range.length).build()
-        val task = CacheWriter(ds, spec, ByteArray(64 * 1024), null)
+        val task = CacheWriter(dataSource, spec, ByteArray(CACHE_WRITE_BUFFER_BYTES), null)
         synchronized(gate) {
             check(serial == generation.get())
             writer = task
@@ -133,7 +156,7 @@ class NeighborPreloader(private val cache: VideoCache) {
         try {
             task.cache()
         } finally {
-            ds.close()
+            dataSource.close()
             writer = null
         }
     }

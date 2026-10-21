@@ -1,10 +1,12 @@
 package dev.vvideo.feature.player
 
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.Player
+
+/** A long press plays at this speed until it is released. */
+private const val HOLD_SPEED = 2f
 
 /** Tap recognition yields vertical movement to the pager. Only the seek bar consumes drags. */
 fun Modifier.viewerGestures(
@@ -27,7 +29,7 @@ fun Modifier.viewerGestures(
         onLongPress = {
             originalSpeed = player.playbackParameters.speed
             held = true
-            player.setPlaybackSpeed(2f)
+            player.setPlaybackSpeed(HOLD_SPEED)
             onHold(true)
         },
         onPress = {

@@ -1,9 +1,7 @@
 package dev.vvideo.feature.library
 
 import dev.vvideo.model.Directory
-
-fun pathLabel(path: List<Directory>): String =
-    path.dropLast(1).takeLast(2).joinToString(" › ") { it.name }
+import dev.vvideo.ui.component.pathLabel
 
 /**
  * The destination page shown while its first load is still running, built only
@@ -12,19 +10,38 @@ fun pathLabel(path: List<Directory>): String =
  */
 fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
     val ancestor = state.path.indexOfFirst { it.id == id }
-    val child = state.children.firstOrNull { it.id == id }
+    val child = state.subfolders.items.firstOrNull { it.id == id }
     val path = when {
         ancestor >= 0 -> state.path.take(ancestor + 1)
         child != null && state.path.lastOrNull()?.id == child.parentId -> state.path + child
         child != null -> listOf(child)
         else -> state.libraries.firstOrNull { it.directoryId == id }
-            ?.let { listOf(Directory(id, it.id, 0, it.name, 0)) }
+            ?.let {
+                listOf(
+                    Directory(
+                        id = id,
+                        libraryId = it.id,
+                        parentId = 0,
+                        name = it.name,
+                        revision = 0
+                    )
+                )
+            }
     }
     // A recent entry knows its name and label but not its ancestors.
     val recent =
         if (path == null) state.recent.firstOrNull { it.bookmark.directory == id }?.bookmark else null
-    val target =
-        path?.last() ?: recent?.let { Directory(id, it.library, 0, it.name, 0) } ?: return null
+    val target = path?.last()
+        ?: recent?.let {
+            Directory(
+                id = id,
+                libraryId = it.library,
+                parentId = 0,
+                name = it.name,
+                revision = 0
+            )
+        }
+        ?: return null
     return LibraryUiState(
         recent = state.recent,
         libraries = state.libraries,
@@ -32,7 +49,7 @@ fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
         path = path ?: listOf(target),
         pathLabel = recent?.pathLabel ?: pathLabel(path.orEmpty()),
         busy = true,
-        restoreSerial = state.restoreSerial,
+        restore = ScrollRestore(serial = state.restore.serial),
     )
 }
 
@@ -46,7 +63,7 @@ fun restoredPage(kept: LibraryUiState, current: LibraryUiState): LibraryUiState 
         recent = current.recent,
         libraries = current.libraries,
         pageBusy = false,
-        childBusy = false,
-        restoreSerial = current.restoreSerial,
+        subfolders = kept.subfolders.copy(busy = false),
+        restore = kept.restore.copy(serial = current.restore.serial),
         anchorMissing = false
     )

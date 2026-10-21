@@ -1,15 +1,21 @@
 package dev.vvideo.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.vvideo.model.ThemeMode
 
 @Immutable
 data class VVColors(
@@ -18,7 +24,8 @@ data class VVColors(
     val textPrimary: Color, val textSecondary: Color, val textTertiary: Color, val icon: Color,
     val accentText: Color, val accentFill: Color, val accentSoft: Color,
     val online: Color, val warn: Color, val error: Color,
-    val datePill: Color, val datePillText: Color, val isDark: Boolean,
+    val datePill: Color, val datePillText: Color,
+    val bannerBackground: Color, val bannerContent: Color, val isDark: Boolean,
 )
 
 val NightBlue = VVColors(
@@ -28,7 +35,8 @@ val NightBlue = VVColors(
     textTertiary = Color(0xFF6A7B8C), icon = Color(0xFFAEBBC8), accentText = Color(0xFF6AB3F8),
     accentFill = Color(0xFF2575CC), accentSoft = Color(0xFF1D3550), online = Color(0xFF5BC88A),
     warn = Color(0xFFE8B04B), error = Color(0xFFEF6B6B),
-    datePill = Color(0xEB1E2C3A), datePillText = Color(0xFFD3DEE8), isDark = true,
+    datePill = Color(0xEB1E2C3A), datePillText = Color(0xFFD3DEE8),
+    bannerBackground = Color(0xFF3A2F17), bannerContent = Color(0xFFF1D59C), isDark = true,
 )
 
 val Day = VVColors(
@@ -38,7 +46,8 @@ val Day = VVColors(
     textTertiary = Color(0xFF9AA4AE), icon = Color(0xFF5B6670), accentText = Color(0xFF2575CC),
     accentFill = Color(0xFF2575CC), accentSoft = Color(0xFFE3EFFB), online = Color(0xFF2E9E5E),
     warn = Color(0xFFB7791F), error = Color(0xFFD93F3F),
-    datePill = Color(0x8C283E54), datePillText = Color.White, isDark = false,
+    datePill = Color(0x8C283E54), datePillText = Color.White,
+    bannerBackground = Color(0xFFFFF4DE), bannerContent = Color(0xFF7A4E00), isDark = false,
 )
 
 val AvatarGradients: List<Brush> = listOf(
@@ -47,9 +56,10 @@ val AvatarGradients: List<Brush> = listOf(
     0xFFF287A6 to 0xFFC94F72,
 ).map { (top, bottom) -> Brush.verticalGradient(listOf(Color(top), Color(bottom))) }
 
-val LocalVV = staticCompositionLocalOf { NightBlue }
+/** The blue avatar gradient, also behind the server and app icons in Settings and setup. */
+val ServerGradient: Brush = AvatarGradients[5]
 
-enum class ThemeMode { System, Light, Dark }
+val LocalVVColors = staticCompositionLocalOf { NightBlue }
 
 @Composable
 fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
@@ -58,31 +68,34 @@ fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> U
         ThemeMode.Dark -> true
         ThemeMode.Light -> false
     }
-    val c = if (dark) NightBlue else Day
+    val colors = if (dark) NightBlue else Day
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
-        primary = c.accentFill,
+        primary = colors.accentFill,
         onPrimary = Color.White,
-        primaryContainer = c.accentSoft,
-        onPrimaryContainer = c.accentText,
-        background = c.bgPage,
-        surface = c.bgSurface,
-        onBackground = c.textPrimary,
-        onSurface = c.textPrimary,
-        onSurfaceVariant = c.textSecondary,
-        surfaceVariant = c.bgPlaceholder,
-        surfaceContainer = c.bgRaised,
-        surfaceContainerHigh = c.bgRaised,
-        surfaceContainerLow = c.bgSurface,
+        primaryContainer = colors.accentSoft,
+        onPrimaryContainer = colors.accentText,
+        background = colors.bgPage,
+        surface = colors.bgSurface,
+        onBackground = colors.textPrimary,
+        onSurface = colors.textPrimary,
+        onSurfaceVariant = colors.textSecondary,
+        surfaceVariant = colors.bgPlaceholder,
+        surfaceContainer = colors.bgRaised,
+        surfaceContainerHigh = colors.bgRaised,
+        surfaceContainerLow = colors.bgSurface,
         surfaceTint = Color.Transparent,
-        secondary = c.accentText,
+        secondary = colors.accentText,
         onSecondary = Color.White,
-        secondaryContainer = c.accentSoft,
-        onSecondaryContainer = c.accentText,
-        outline = c.divider,
-        outlineVariant = c.divider,
-        error = c.error,
+        secondaryContainer = colors.accentSoft,
+        onSecondaryContainer = colors.accentText,
+        outline = colors.divider,
+        outlineVariant = colors.divider,
+        error = colors.error,
     )
-    CompositionLocalProvider(LocalVV provides c, LocalAnimations provides animationsEnabled()) {
+    CompositionLocalProvider(
+        LocalVVColors provides colors,
+        LocalAnimations provides animationsEnabled()
+    ) {
         MaterialTheme(colorScheme = scheme, typography = VVTypography, content = content)
     }
 }
@@ -105,13 +118,3 @@ val VVTypography = Typography(
     labelMedium = type(12, 16, true),
     labelSmall = type(13, 18, true),
 )
-
-object VVDimens {
-    val appBar = 56.dp
-    val row = 72.dp
-    val avatar = 52.dp
-    val albumMargin = 8.dp
-    val albumGap = 2.dp
-    val albumRadius = 16.dp
-    val touchTarget = 48.dp
-}

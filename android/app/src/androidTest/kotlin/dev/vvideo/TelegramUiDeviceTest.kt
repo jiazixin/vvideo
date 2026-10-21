@@ -7,8 +7,13 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.*
 import dev.vvideo.app.*
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.feature.library.LibraryViewModel
+import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
+import dev.vvideo.model.SortDirection
+import dev.vvideo.model.SortField
+import dev.vvideo.model.ThemeMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
@@ -51,12 +56,18 @@ class TelegramUiDeviceTest {
                 vm = ViewModelProvider(activity)[LibraryViewModel::class.java]
             }
             withTimeout(15000) { vm.state.first { it.libraries.isNotEmpty() && !it.busy } }
-            withContext(Dispatchers.Main) { vm.open(root, Sort("name", "asc")) }
+            withContext(Dispatchers.Main) {
+                vm.open(
+                    root,
+                    Sort(SortField.Name, SortDirection.Ascending)
+                )
+            }
             withTimeout(15000) { vm.state.first { it.directory?.id == root && !it.busy && it.albums.isNotEmpty() } }
             delay(800)
             click("视频")
-            val videos = withTimeout(10000) { vm.state.first { !it.busy && it.kind == "video" } }
-            assertTrue(videos.albums.flatMap { it.items }.all { it.kind == "video" })
+            val videos =
+                withTimeout(10000) { vm.state.first { !it.busy && it.filter == MediaKind.Video } }
+            assertTrue(videos.albums.flatMap { it.items }.all { it.kind == MediaKind.Video })
             // Entering a filter flushes the latest unfiltered viewport. Once that
             // flush completes, filtered viewport/save/stop must not alter the bookmark.
             delay(700)
@@ -68,10 +79,11 @@ class TelegramUiDeviceTest {
             delay(700)
             assertEquals(before?.anchor, app.graph.database.bookmarks().get(c.id, root)?.anchor)
             click("照片")
-            val photos = withTimeout(10000) { vm.state.first { !it.busy && it.kind == "image" } }
-            assertTrue(photos.albums.flatMap { it.items }.all { it.kind == "image" })
+            val photos =
+                withTimeout(10000) { vm.state.first { !it.busy && it.filter == MediaKind.Image } }
+            assertTrue(photos.albums.flatMap { it.items }.all { it.kind == MediaKind.Image })
             click("全部")
-            withTimeout(10000) { vm.state.first { !it.busy && it.kind.isEmpty() } }
+            withTimeout(10000) { vm.state.first { !it.busy && it.filter == null } }
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("设置")), 5000))
             assertFalse(device.hasObject(By.text("最近浏览")))
@@ -79,8 +91,8 @@ class TelegramUiDeviceTest {
             click("主题")
             click("深色")
             assertEquals(
-                "dark",
-                withTimeout(3000) { app.graph.settings.theme.first { it == "dark" } })
+                ThemeMode.Dark,
+                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Dark } })
             click("存储用量")
             assertTrue(device.wait(Until.hasObject(By.text("缓存上限")), 5000))
             assertTrue(device.hasObject(By.text("视频片段")))
@@ -95,8 +107,8 @@ class TelegramUiDeviceTest {
             click("主题")
             click("浅色")
             assertEquals(
-                "light",
-                withTimeout(3000) { app.graph.settings.theme.first { it == "light" } })
+                ThemeMode.Light,
+                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Light } })
             delay(1000)
             device.takeScreenshot(
                 java.io.File(

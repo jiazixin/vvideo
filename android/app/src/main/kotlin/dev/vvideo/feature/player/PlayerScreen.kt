@@ -1,40 +1,37 @@
 package dev.vvideo.feature.player
 
-import android.content.Context
 import android.content.res.Configuration
 import android.os.SystemClock
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import coil3.ImageLoader
-import coil3.compose.AsyncImage
-import coil3.network.NetworkHeaders
-import coil3.network.httpHeaders
-import coil3.request.ImageRequest
 import dev.vvideo.R
-import dev.vvideo.core.media.model.PlaybackItem
 import dev.vvideo.core.media.playback.PlaybackSession
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.model.Media
 import dev.vvideo.ui.component.BulletinHost
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -46,7 +43,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 @Composable
 fun PlayerRoute(
     vm: PlayerViewModel,
-    c: Connection,
+    connection: Connection,
     loader: ImageLoader,
     create: suspend (String) -> PlaybackSession,
     release: suspend (PlaybackSession) -> Unit,
@@ -63,7 +60,7 @@ fun PlayerRoute(
         val index = state.items.indexOfFirst { it.id == state.initialId }
         if (index >= 0) pager.scrollToPage(index)
     }
-    val session by rememberPlaybackSession(c, create, release)
+    val session by rememberPlaybackSession(connection, create, release)
     val foreground by rememberForeground(onStop = { session?.pause() })
     var controlsVisible by remember { mutableStateOf(true) }
     var dragging by remember { mutableStateOf(false) }
@@ -116,7 +113,7 @@ fun PlayerRoute(
                         vm.selected(it.id)
                         val opening = it.id == state.initialId && active.state.value.id.isEmpty()
                         active.select(
-                            it.playback(c),
+                            it.playback(connection),
                             if (opening && initialSelectionMs > 0) {
                                 initialSelectionMs
                             } else {
@@ -137,14 +134,13 @@ fun PlayerRoute(
     ) {
         val settled = playback.firstFrame && !playback.buffering && !pager.isScrollInProgress
         if (settled && foreground && !leaving) {
-            active.preload(state.items.getOrNull(pager.settledPage + 1)?.playback(c))
+            active.preload(state.items.getOrNull(pager.settledPage + 1)?.playback(connection))
         }
     }
     LaunchedEffect(pager, state.items.size, leaving) {
         if (leaving) return@LaunchedEffect
         snapshotFlow { pager.settledPage }.distinctUntilChanged().collect { index ->
-            if (index >= state.items.size - 3) vm.page(false)
-            if (index < 2 && state.items.isNotEmpty()) vm.page(true)
+            requestNearbyPages(index, state.items.size, vm::page)
         }
     }
     LaunchedEffect(playback.id) {
@@ -158,7 +154,7 @@ fun PlayerRoute(
     // pager rests they name the new page even before the player has switched to it,
     // so nothing from the previous video stays on screen.
     val swiping = pager.isScrollInProgress
-    val currentKey = currentItem?.playback(c)?.cacheKey
+    val currentKey = currentItem?.playback(connection)?.cacheKey
     val sessionOnPage = currentKey != null && playback.id == currentKey
     if (detailsOpen && currentItem != null) {
         MediaDetailsSheet(currentItem, state.pathLabel) { detailsOpen = false }
@@ -180,7 +176,10 @@ fun PlayerRoute(
                     if (control == EdgeControl.Brightness) levels.brightness() else levels.volume()
                 },
                 onAdjust = { control, level ->
-                    if (control == EdgeControl.Brightness) levels.setBrightness(level) else levels.setVolume(level)
+                    when (control) {
+                        EdgeControl.Brightness -> levels.setBrightness(level)
+                        EdgeControl.Volume -> levels.setVolume(level)
+                    }
                     edgeLevel = control to level
                 },
                 onEnd = { edgeLevel = null }
@@ -199,11 +198,11 @@ fun PlayerRoute(
         ) { index ->
             val item = state.items[index]
             val selected = pager.settledPage == index && !pager.isScrollInProgress
-            val itemKey = item.playback(c).cacheKey
+            val itemKey = item.playback(connection).cacheKey
             val failed = selected && playback.error && playback.id == itemKey
             VideoPage(
                 item,
-                c,
+                connection,
                 loader,
                 covered = !selected || playback.id != itemKey || !playback.firstFrame,
                 failed = failed,
@@ -211,7 +210,7 @@ fun PlayerRoute(
                 onDetails = { detailsOpen = true },
                 onRetry = {
                     vm.retry(item.id)
-                    active.select(item.playback(c))
+                    active.select(item.playback(connection))
                 }
             )
         }
@@ -246,7 +245,13 @@ fun PlayerRoute(
                 !playback.buffering && !pager.isScrollInProgress
         if (showPlay) PlayButton({ active.player.play() }, Modifier.align(Alignment.Center))
         if (holding) SpeedHoldLabel(Modifier.align(Alignment.TopCenter))
-        edgeLevel?.let { (control, level) -> EdgeLevelLabel(control, level, Modifier.align(Alignment.TopCenter)) }
+        edgeLevel?.let { (control, level) ->
+            EdgeLevelLabel(
+                control,
+                level,
+                Modifier.align(Alignment.TopCenter)
+            )
+        }
         if (seekChain.seconds > 0) {
             SeekFeedback(
                 seekChain.seconds,
@@ -264,210 +269,6 @@ fun PlayerRoute(
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
             )
-        }
-    }
-}
-
-fun Media.playback(c: Connection) = PlaybackItem(
-    c.id,
-    libraryId,
-    id,
-    version,
-    "${c.address}/v1/media/$id/bytes?version=$version",
-    "${c.address}/v1/media/$id/index?version=$version",
-    c.token,
-    size,
-    durationMs
-)
-
-/** An authorized image request for this media's [resource], such as "thumbnail" or "bytes". */
-internal fun Media.imageRequest(context: Context, c: Connection, resource: String): ImageRequest =
-    ImageRequest.Builder(context)
-        .data("${c.address}/v1/media/$id/$resource?version=$version")
-        .httpHeaders(NetworkHeaders.Builder().set("Authorization", "Bearer ${c.token}").build())
-        .build()
-
-// Photos page left and right through the folder's image queue, like a phone
-// gallery; videos keep the vertical feed. Zoom belongs to the page in front:
-// the pager stands still while it is enlarged, and one-finger drags pan the
-// photo instead.
-@Composable
-fun PhotoScreen(
-    state: PlayerUiState,
-    c: Connection,
-    loader: ImageLoader,
-    onBack: () -> Unit,
-    onRetry: () -> Unit,
-    onSelected: (String) -> Unit,
-    onPage: (Boolean) -> Unit,
-    leaving: Boolean = false
-) {
-    // Sized from the loaded queue so the first frame is already the tapped photo.
-    val pager = key(
-        state.initialId,
-        state.items.isEmpty()
-    ) {
-        rememberPagerState(initialPage = state.items.indexOfFirst { it.id == state.initialId }
-            .coerceAtLeast(0), pageCount = { state.items.size })
-    }
-    // The laid-out key names the page in front even in the one composition where
-    // pages arrived ahead of it and its index has not been matched again yet.
-    val frontKey by remember(pager) {
-        derivedStateOf {
-            pager.layoutInfo.visiblePagesInfo.firstOrNull { it.index == pager.currentPage }?.key
-        }
-    }
-    val item =
-        state.items.firstOrNull { it.id == frontKey } ?: state.items.getOrNull(pager.currentPage)
-    val scaleState = remember(item?.id) { mutableFloatStateOf(1f) }
-    var scale by scaleState
-    // Composition follows only the enlarged/full-view flip; the scale itself is
-    // read while drawing, so a pinch does not recompose the pager every frame.
-    val zoomed by remember(scaleState) { derivedStateOf { scaleState.floatValue > 1f } }
-    val latest by rememberUpdatedState(state)
-    var offset by remember(item?.id) { mutableStateOf(Offset.Zero) }
-    var controls by remember { mutableStateOf(true) }
-    var details by remember { mutableStateOf(false) }
-    val transform = rememberTransformableState { zoom, pan, _ ->
-        scale = (scale * zoom).coerceIn(1f, 4f)
-        offset = if (scale == 1f) Offset.Zero else offset + pan
-    }
-    // A pinch released a hair above full view would keep the pager locked with
-    // nothing visibly enlarged, so it settles back to full view.
-    LaunchedEffect(transform.isTransformInProgress) {
-        if (!transform.isTransformInProgress && scale < 1.1f) {
-            scale = 1f
-            offset = Offset.Zero
-        }
-    }
-    LaunchedEffect(pager, state.items.size, leaving) {
-        if (leaving) return@LaunchedEffect
-        snapshotFlow { pager.settledPage }.distinctUntilChanged().collect { index ->
-            latest.items.getOrNull(index)?.let { onSelected(it.id) }
-            if (index >= latest.items.size - 3) onPage(false)
-            if (index < 2 && latest.items.isNotEmpty()) onPage(true)
-        }
-    }
-    if (details && item != null) MediaDetailsSheet(item, state.pathLabel) { details = false }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // Neighbours are composed ahead with their thumbnail only, so a swipe never
-        // drags in an empty page. The original is fetched once a page comes in front
-        // and kept until the pager rests on another page: one original at rest, two
-        // while a swipe is under way.
-        val resting = !pager.isScrollInProgress
-        // The gap keeps two photos apart while a swipe shows both.
-        HorizontalPager(
-            state = pager,
-            key = { state.items[it].id },
-            beyondViewportPageCount = 1,
-            pageSpacing = 16.dp,
-            userScrollEnabled = !zoomed,
-            modifier = Modifier.fillMaxSize()
-        ) { index ->
-            val photo = state.items[index]
-            val front = photo.id == item?.id
-            PhotoPage(
-                photo, c, loader, front, resting, if (front) {
-                {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
-                }
-            } else null,
-                Modifier.pointerInput(photo.id, front) {
-                    detectTapGestures(onTap = { controls = !controls }, onDoubleTap = { point ->
-                        if (front) {
-                            if (scale > 1f) {
-                                scale = 1f
-                                offset = Offset.Zero
-                            } else {
-                                scale = 2.5f
-                                offset = Offset(
-                                    (size.width / 2f - point.x) * 1.5f,
-                                    (size.height / 2f - point.y) * 1.5f
-                                )
-                            }
-                        }
-                    })
-                }.then(
-                    if (front) Modifier.transformable(
-                        transform,
-                        canPan = { scale > 1f }) else Modifier
-                )
-            )
-        }
-        if (state.error && state.items.isEmpty()) Column(
-            Modifier.align(Alignment.Center).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(stringResource(R.string.photo_failed), color = Color.White)
-            Button(onClick = onRetry) { Text(stringResource(R.string.retry)) }
-        }
-        FadingChrome(
-            controls && !pager.isScrollInProgress,
-            item,
-            onBack,
-            { details = true },
-            Modifier.align(Alignment.TopCenter)
-        )
-    }
-}
-
-@Composable
-private fun PhotoPage(
-    item: Media,
-    c: Connection,
-    loader: ImageLoader,
-    front: Boolean,
-    resting: Boolean,
-    zoom: (androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    val image =
-        if (zoom != null) Modifier.fillMaxSize().graphicsLayer(zoom) else Modifier.fillMaxSize()
-    // A page being swiped away keeps its original until the pager rests, so it
-    // does not fall back to its thumbnail while still on screen.
-    var original by remember { mutableStateOf(front) }
-    var attempt by remember(item.version) { mutableIntStateOf(0) }
-    var failed by remember(item.version, attempt) { mutableStateOf(false) }
-    var loaded by remember(item.version, attempt) { mutableStateOf(false) }
-    LaunchedEffect(front, resting) {
-        if (front) original = true else if (resting) {
-            original = false
-            loaded = false
-        }
-    }
-    val context = LocalContext.current
-    val request = remember(item.id, item.version, c.token, attempt) {
-        item.imageRequest(context, c, "bytes")
-    }
-    val thumb = remember(item.id, item.version, c.token) {
-        item.imageRequest(context, c, "thumbnail")
-    }
-    Box(modifier.fillMaxSize()) {
-        if (!loaded || !original) AsyncImage(
-            thumb,
-            null,
-            imageLoader = loader,
-            contentScale = ContentScale.Fit,
-            modifier = image
-        )
-        if (original) AsyncImage(
-            request,
-            item.name,
-            imageLoader = loader,
-            contentScale = ContentScale.Fit,
-            onSuccess = { loaded = true },
-            onError = { failed = true },
-            modifier = image
-        )
-        if (failed) Column(
-            Modifier.align(Alignment.Center).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(stringResource(R.string.photo_failed), color = Color.White)
-            Button(onClick = { attempt++ }) { Text(stringResource(R.string.retry)) }
         }
     }
 }

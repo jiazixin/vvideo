@@ -15,11 +15,11 @@ class ChildrenWindowTest {
     fun evictionKeepsBothEdgesRecoverable() {
         val window = ChildrenWindow()
         window.reset(page(0))
-        for (n in 1..9) window.add(page(n), false)
+        for (n in 1..9) window.add(page(n), PageEdge.Next)
         assertEquals(300, window.items.size)
         assertEquals(700L, window.items.first().id)
         assertEquals("previous-7", window.previous)
-        for (n in 6 downTo 0) window.add(page(n), true)
+        for (n in 6 downTo 0) window.add(page(n), PageEdge.Previous)
         assertEquals(0L, window.items.first().id)
         assertEquals("next-2", window.next)
         assertEquals("", window.previous)

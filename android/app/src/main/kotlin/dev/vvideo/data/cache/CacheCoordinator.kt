@@ -8,19 +8,28 @@ import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import dev.vvideo.core.media.cache.VideoCache
 import dev.vvideo.core.media.playback.PlaybackSession
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import okio.Path.Companion.toOkioPath
 import java.io.File
 
 /** Below this the caches are still created, however little space is free. */
 private const val MIN_CACHE_BYTES = 64L * 1024 * 1024
 
-/** Free space left to the system: 5% of the disk, at most this much. */
+/** Free space left to the system: 5% of the disk (one twentieth), at most this much. */
 private const val MAX_FREE_SPACE_GUARD = 1_000_000_000L
+private const val FREE_SPACE_GUARD_DIVISOR = 20
+
+/** Tenths of the budget for video bytes and for images. */
+private const val VIDEO_TENTHS = 9
+private const val IMAGE_TENTHS = 1
 
 /** In-memory decoded image cache, independent of the disk budget. */
 private const val IMAGE_MEMORY_BYTES = 32L * 1024 * 1024
@@ -34,12 +43,12 @@ data class CacheUsage(
     val total: Long get() = video + images + overhead
 }
 
-@UnstableApi
 /**
  * Owns the video byte cache and the image loader, which share one disk budget
  * (nine tenths for video, one tenth for images). Reconfiguring or clearing
  * releases every playback session first, so no player reads a closed cache.
  */
+@UnstableApi
 class CacheCoordinator(private val context: Context) {
     private val mutex = Mutex()
     private var video: VideoCache? = null
@@ -63,16 +72,16 @@ class CacheCoordinator(private val context: Context) {
             val disk = StatFs(context.cacheDir.absolutePath)
             val reclaimable = (disk.availableBytes + if (clear) 0 else existingBytes)
                 .coerceAtLeast(MIN_CACHE_BYTES)
-            val guard = minOf(disk.totalBytes / 20, MAX_FREE_SPACE_GUARD)
+            val guard = minOf(disk.totalBytes / FREE_SPACE_GUARD_DIVISOR, MAX_FREE_SPACE_GUARD)
             val usable = minOf(budget, (reclaimable - guard).coerceAtLeast(MIN_CACHE_BYTES))
-            video = VideoCache.open(context, usable * 9 / 10)
+            video = VideoCache.open(context, usable * VIDEO_TENTHS / 10)
             val imageDir = File(context.cacheDir, "images")
             mutableLoader.value = ImageLoader.Builder(context)
                 .memoryCache { MemoryCache.Builder().maxSizeBytes(IMAGE_MEMORY_BYTES).build() }
                 .diskCache {
                     DiskCache.Builder()
                         .directory(imageDir.toOkioPath())
-                        .maxSizeBytes(usable / 10)
+                        .maxSizeBytes(usable * IMAGE_TENTHS / 10)
                         .build()
                 }
                 .build()

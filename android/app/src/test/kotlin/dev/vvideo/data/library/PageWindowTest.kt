@@ -1,6 +1,9 @@
 package dev.vvideo.data.library
 
 import dev.vvideo.model.*
+import dev.vvideo.model.CaptureSource
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaStatus
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,7 +16,7 @@ class PageWindowTest {
                 "l",
                 1,
                 "n",
-                "video",
+                MediaKind.Video,
                 1,
                 1,
                 0,
@@ -21,9 +24,9 @@ class PageWindowTest {
                 1,
                 0,
                 0,
-                "ready",
+                MediaStatus.Ready,
                 "",
-                "mtime"
+                CaptureSource.Modified
             )
         }
         return MediaPage(

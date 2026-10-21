@@ -1,12 +1,27 @@
 package dev.vvideo.data.library.remote
 
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.model.*
+import dev.vvideo.model.CaptureSource
+import dev.vvideo.model.ChildrenPage
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Library
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaPage
+import dev.vvideo.model.MediaStatus
+import dev.vvideo.model.SearchResult
+import dev.vvideo.model.Sort
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import okhttp3.*
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okio.Buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -17,18 +32,33 @@ import kotlin.coroutines.resumeWithException
 /** The largest JSON response the client reads. */
 private const val MAX_RESPONSE_BYTES = 4L * 1024 * 1024
 
+/** Bytes read from the response body per step while counting against [MAX_RESPONSE_BYTES]. */
+private const val READ_STEP_BYTES = 8192L
+
 /** Media items per page; the server allows up to 200. */
 private const val PAGE_SIZE = 100
+
+private const val CONNECT_TIMEOUT_SECONDS = 5L
+private const val READ_TIMEOUT_SECONDS = 10L
+
+const val HTTP_UNAUTHORIZED = 401
+private const val HTTP_CONFLICT = 409
+
+/** Reported for a server too old to page subfolders backwards. */
+private const val HTTP_UPGRADE_REQUIRED = 426
 
 class ServiceFailure(val status: Int) : IOException("service response $status")
 
 class RevisionChanged : IOException("directory revision changed")
 
+/** The HTTP status of a failed service response, or 0 when the server was not reached. */
+fun Throwable.serviceStatus(): Int = (this as? ServiceFailure)?.status ?: 0
+
 /** Client for the server's authenticated /v1 JSON API. */
 class LibraryApi {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .followRedirects(false)
         .build()
 
@@ -38,10 +68,12 @@ class LibraryApi {
         params: Map<String, String> = emptyMap()
     ): String {
         val url = (connection.address + path).toHttpUrl().newBuilder().apply {
-            params.filterValues { it.isNotEmpty() }.forEach { (k, v) -> addQueryParameter(k, v) }
+            params.filterValues { it.isNotEmpty() }
+                .forEach { (name, value) -> addQueryParameter(name, value) }
         }.build()
         val call = client.newCall(
-            Request.Builder().url(url).header("Authorization", "Bearer ${connection.token}").build()
+            Request.Builder().url(url).header(AUTHORIZATION_HEADER, connection.authorization())
+                .build()
         )
         return suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation { call.cancel() }
@@ -51,17 +83,18 @@ class LibraryApi {
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    response.use { r ->
+                    response.use {
                         try {
-                            if (r.code == 409) throw RevisionChanged()
-                            if (!r.isSuccessful) throw ServiceFailure(r.code)
-                            val source = r.body?.source() ?: throw IOException("empty response")
-                            val buffer = okio.Buffer()
+                            if (response.code == HTTP_CONFLICT) throw RevisionChanged()
+                            if (!response.isSuccessful) throw ServiceFailure(response.code)
+                            val source =
+                                response.body?.source() ?: throw IOException("empty response")
+                            val buffer = Buffer()
                             var total = 0L
                             while (true) {
-                                val count = source.read(buffer, 8192)
-                                if (count < 0) break
-                                total += count
+                                val read = source.read(buffer, READ_STEP_BYTES)
+                                if (read < 0) break
+                                total += read
                                 if (total > MAX_RESPONSE_BYTES) throw IOException("response exceeds bound")
                             }
                             if (continuation.isActive) continuation.resume(buffer.readUtf8())
@@ -74,121 +107,126 @@ class LibraryApi {
         }
     }
 
-    suspend fun libraries(c: Connection): List<Library> = withContext(Dispatchers.IO) {
-        JSONArray(get(c, "/v1/libraries")).objects().map {
+    suspend fun libraries(connection: Connection): List<Library> = withContext(Dispatchers.IO) {
+        JSONArray(get(connection, "/v1/libraries")).objects().map {
             Library(
-                it.getString("id"),
-                it.getString("name"),
-                it.getLong("directory_id"),
-                it.getBoolean("healthy")
+                id = it.getString("id"),
+                name = it.getString("name"),
+                directoryId = it.getLong("directory_id"),
+                healthy = it.getBoolean("healthy")
             )
         }
     }
 
-    suspend fun path(c: Connection, id: Long): List<Directory> = withContext(Dispatchers.IO) {
-        JSONArray(get(c, "/v1/directories/$id/path")).objects().map(::directory)
-    }
+    suspend fun path(connection: Connection, directoryId: Long): List<Directory> =
+        withContext(Dispatchers.IO) {
+            JSONArray(get(connection, "/v1/directories/$directoryId/path")).objects()
+                .map(::directory)
+        }
 
     suspend fun children(
-        c: Connection,
-        dir: Long,
+        connection: Connection,
+        directoryId: Long,
         cursor: String = "",
-        previous: Boolean = false
+        edge: PageEdge = PageEdge.Next
     ): ChildrenPage = withContext(Dispatchers.IO) {
-        val j = JSONObject(
+        val json = JSONObject(
             get(
-                c,
-                "/v1/directories/$dir/children",
-                mapOf("cursor" to cursor, "previous" to previous.toString())
+                connection,
+                "/v1/directories/$directoryId/children",
+                mapOf("cursor" to cursor, "previous" to (edge == PageEdge.Previous).toString())
             )
         )
-        if (cursor.isNotEmpty() && !j.has("previous")) throw ServiceFailure(426)
+        if (cursor.isNotEmpty() && !json.has("previous")) throw ServiceFailure(HTTP_UPGRADE_REQUIRED)
         ChildrenPage(
-            j.getJSONArray("items").objects().map(::directory),
-            j.optString("next"),
-            j.optString("previous")
+            items = json.getJSONArray("items").objects().map(::directory),
+            next = json.optString("next"),
+            previous = json.optString("previous")
         )
     }
 
+    /** One page of a folder's media; a null [kind] lists every kind. */
     suspend fun page(
-        c: Connection,
-        dir: Long,
+        connection: Connection,
+        directoryId: Long,
         sort: Sort,
         cursor: String = "",
-        previous: Boolean = false,
+        edge: PageEdge = PageEdge.Next,
         anchor: String = "",
         fallback: String = "",
-        kind: String = ""
+        kind: MediaKind? = null
     ): MediaPage = withContext(Dispatchers.IO) {
-        val j = JSONObject(
+        val json = JSONObject(
             get(
-                c,
-                "/v1/directories/$dir/media",
+                connection,
+                "/v1/directories/$directoryId/media",
                 mapOf(
-                    "sort" to sort.field,
-                    "direction" to sort.direction,
+                    "sort" to sort.field.wire,
+                    "direction" to sort.direction.wire,
                     "cursor" to cursor,
-                    "previous" to previous.toString(),
+                    "previous" to (edge == PageEdge.Previous).toString(),
                     "anchor" to anchor,
                     "fallback" to fallback,
-                    "kind" to kind,
+                    "kind" to kind?.wire.orEmpty(),
                     "limit" to PAGE_SIZE.toString()
                 )
             )
         )
         MediaPage(
-            directory(j.getJSONObject("directory")),
-            j.getJSONArray("items").objects().map(::media),
-            j.optString("next"),
-            j.optString("previous"),
-            j.optString("anchor"),
-            j.optBoolean("anchor_found"),
-            j.getBoolean("healthy")
+            directory = directory(json.getJSONObject("directory")),
+            items = json.getJSONArray("items").objects().map(::media),
+            next = json.optString("next"),
+            previous = json.optString("previous"),
+            anchor = json.optString("anchor"),
+            anchorFound = json.optBoolean("anchor_found"),
+            healthy = json.getBoolean("healthy")
         )
     }
 
-    suspend fun search(c: Connection, dir: Long, query: String): SearchResult = withContext(Dispatchers.IO) {
-        val j = JSONObject(get(c, "/v1/directories/$dir/search", mapOf("q" to query)))
-        SearchResult(
-            j.getJSONArray("directories").objects().map(::directory),
-            j.getJSONArray("items").objects().map(::media),
-            j.optBoolean("truncated")
-        )
-    }
+    suspend fun search(connection: Connection, directoryId: Long, query: String): SearchResult =
+        withContext(Dispatchers.IO) {
+            val json = JSONObject(
+                get(
+                    connection,
+                    "/v1/directories/$directoryId/search",
+                    mapOf("q" to query)
+                )
+            )
+            SearchResult(
+                directories = json.getJSONArray("directories").objects().map(::directory),
+                items = json.getJSONArray("items").objects().map(::media),
+                truncated = json.optBoolean("truncated")
+            )
+        }
 
-    suspend fun media(c: Connection, id: String): Media =
-        withContext(Dispatchers.IO) { media(JSONObject(get(c, "/v1/media/$id"))) }
+    suspend fun media(connection: Connection, id: String): Media =
+        withContext(Dispatchers.IO) { media(JSONObject(get(connection, "/v1/media/$id"))) }
 
-    fun thumbnail(c: Connection, m: Media) =
-        "${c.address}/v1/media/${m.id}/thumbnail?version=${m.version}"
-
-    fun bytes(c: Connection, m: Media) = "${c.address}/v1/media/${m.id}/bytes?version=${m.version}"
-
-    private fun directory(j: JSONObject) = Directory(
-        j.getLong("id"),
-        j.getString("library_id"),
-        j.optLong("parent_id"),
-        j.getString("name"),
-        j.getLong("revision")
+    private fun directory(json: JSONObject) = Directory(
+        id = json.getLong("id"),
+        libraryId = json.getString("library_id"),
+        parentId = json.optLong("parent_id"),
+        name = json.getString("name"),
+        revision = json.getLong("revision")
     )
 
-    private fun media(j: JSONObject) = Media(
-        j.getString("id"),
-        j.getString("version"),
-        j.getString("library_id"),
-        j.getLong("directory_id"),
-        j.getString("name"),
-        j.getString("kind"),
-        j.optInt("width", 1),
-        j.optInt("height", 1),
-        j.optInt("rotation"),
-        j.optLong("duration_ms"),
-        j.getLong("size"),
-        j.getLong("effective_time"),
-        j.getLong("mtime"),
-        j.getString("status"),
-        j.optString("captured_raw"),
-        j.optString("captured_source")
+    private fun media(json: JSONObject) = Media(
+        id = json.getString("id"),
+        version = json.getString("version"),
+        libraryId = json.getString("library_id"),
+        directoryId = json.getLong("directory_id"),
+        name = json.getString("name"),
+        kind = MediaKind.fromWire(json.getString("kind")),
+        width = json.optInt("width", 1),
+        height = json.optInt("height", 1),
+        rotation = json.optInt("rotation"),
+        durationMs = json.optLong("duration_ms"),
+        size = json.getLong("size"),
+        effectiveTime = json.getLong("effective_time"),
+        mtime = json.getLong("mtime"),
+        status = MediaStatus.fromWire(json.getString("status")),
+        capturedRaw = json.optString("captured_raw"),
+        capturedSource = CaptureSource.fromWire(json.optString("captured_source"))
     )
 
     private fun JSONArray.objects() = List(length()) { getJSONObject(it) }

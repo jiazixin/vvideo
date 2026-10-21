@@ -1,20 +1,36 @@
 package dev.vvideo.feature.library
 
-import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.vvideo.data.library.ChildrenWindow
+import dev.vvideo.data.library.LibraryRepository
+import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.library.PageWindow
-import dev.vvideo.data.library.local.BookmarkDao
+import dev.vvideo.data.library.anchorFallback
 import dev.vvideo.data.library.local.BookmarkEntity
-import dev.vvideo.data.library.remote.LibraryApi
 import dev.vvideo.data.library.remote.RevisionChanged
+import dev.vvideo.data.library.remote.serviceStatus
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.data.settings.SettingsRepository
-import dev.vvideo.model.*
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.Sort
+import dev.vvideo.model.SortDirection
+import dev.vvideo.model.SortField
 import dev.vvideo.ui.component.TimeLabels
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import org.json.JSONObject
+import dev.vvideo.ui.component.pathLabel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Loads that finish sooner slide straight into loaded content; slower ones reveal
 // the destination with its placeholder. Tuning value, not a measured threshold.
@@ -23,80 +39,44 @@ private const val REVEAL_DELAY_MS = 120L
 /** Typing pauses this long before a search request is sent. */
 private const val SEARCH_DEBOUNCE_MS = 300L
 
-/** A name search within the open folder and its subfolders; an empty query shows the folder. */
-data class SearchState(
-    val query: String = "",
-    val result: SearchResult? = null,
-    val busy: Boolean = false,
-    val error: Boolean = false
-) {
-    val active: Boolean get() = query.isNotBlank()
-}
+/** While the list moves, its position is written to the bookmark at most this often. */
+private const val BOOKMARK_SAVE_DELAY_MS = 500L
 
-// Row geometry depends on the measured width and is settled by the album item.
-data class Album(
-    val items: List<Media>,
-    val dateLabel: String? = null,
-    val dayLabel: String? = null
-)
+/** Media per album. */
+private const val ALBUM_SIZE = 10
 
-data class RecentFolder(val bookmark: BookmarkEntity, val timeLabel: String)
-
-data class LibraryUiState(
-    val recent: List<RecentFolder> = emptyList(),
-    val kind: String = "",
-    val hasMedia: Boolean = false,
-    val hasPrevious: Boolean = false,
-    val pageBusy: Boolean = false,
-    val libraries: List<Library> = emptyList(),
-    val directory: Directory? = null,
-    val children: List<Directory> = emptyList(),
-    val childNext: String = "",
-    val childPrevious: String = "",
-    val childBusy: Boolean = false,
-    val path: List<Directory> = emptyList(),
-    val pathLabel: String = "",
-    val errorStatus: Int = 0,
-    val albums: List<Album> = emptyList(),
-    val sort: Sort = Sort(),
-    val busy: Boolean = false,
-    val error: Boolean = false,
-    val healthy: Boolean = true,
-    val restoreAnchor: String = "",
-    val restoreKey: String = "",
-    val restoreOffset: Int = 0,
-    val restoreWidth: Int = 0,
-    val restoreSerial: Long = 0,
-    val anchorMissing: Boolean = false,
-    val search: SearchState = SearchState()
-)
+/** No reported position: the list has not been shown since it was (re)loaded. */
+private val NO_POSITION = FolderPosition("", 0, 0)
 
 class LibraryViewModel(
-    private val api: LibraryApi,
-    private val bookmarks: BookmarkDao,
-    private val settings: SettingsRepository,
+    private val repository: LibraryRepository,
     private val persistScope: CoroutineScope,
     private val timeLabels: TimeLabels? = null
 ) : ViewModel() {
-    private val mutable = MutableStateFlow(LibraryUiState())
-    val state = mutable.asStateFlow()
-    private val window = PageWindow()
-    private val childrenWindow = dev.vvideo.data.library.ChildrenWindow()
-    private var viewportKey = ""
-    private var viewportOffset = 0
-    private var viewportWidth = 0
+    private val _state = MutableStateFlow(LibraryUiState())
+    val state: StateFlow<LibraryUiState> = _state.asStateFlow()
+    private val mediaWindow = PageWindow()
+    private val subfolderWindow = ChildrenWindow()
     private val positions = FolderPositions()
     private var connection = Connection()
-    private var recentRequest: Job? = null
-    private var request: Job? = null
-    private var pageRequest: Job? = null
-    private var childRequest: Job? = null
+
+    /** The position the shown list last reported. */
+    private var shownPosition = NO_POSITION
+
+    private var recentJob: Job? = null
+    private var openJob: Job? = null
+    private var pageJob: Job? = null
+    private var subfolderJob: Job? = null
+    private var searchJob: Job? = null
+    private var saveJob: Job? = null
+
+    /** Bumped by every cancellation; replies to an older round are dropped. */
     private var generation = 0L
 
     // True while another directory loads behind the still displayed page; that
     // page must neither show loading UI nor page or save against the new window.
     private var loading = false
-    private val blocked get() = loading || mutable.value.busy
+    private val blocked get() = loading || _state.value.busy
 
     // Directory whose pages the windows hold; 0 once that page was left for home.
     private var windowDirectory = 0L
@@ -107,384 +87,406 @@ class LibraryViewModel(
     private class KeptPage(
         val state: LibraryUiState,
         val bookmark: BookmarkEntity?,
-        val viewportKey: String,
-        val viewportOffset: Int,
-        val viewportWidth: Int
+        val position: FolderPosition
     )
 
     private var kept: KeptPage? = null
-    private var searchRequest: Job? = null
+
+    private var paginating = false
+    private var canPageNext = true
+    private var canPagePrevious = true
+    private var bookmark: BookmarkEntity? = null
 
     private fun cancelRequests() {
         generation++
-        request?.cancel()
-        pageRequest?.cancel()
-        childRequest?.cancel()
-        searchRequest?.cancel()
+        openJob?.cancel()
+        pageJob?.cancel()
+        subfolderJob?.cancel()
+        searchJob?.cancel()
         paginating = false
         loading = false
     }
 
-    private var paginating = false
-    private var loadedNext = true
-    private var loadedPrevious = true
-    private var bookmark: BookmarkEntity? = null
-    private var saveJob: Job? = null
-
-    // A refresh of the same connection keeps the shown libraries until the reply replaces them.
-    fun connect(c: Connection, refresh: Boolean = false) {
-        val sameConnection = connection.id == c.id && connection.token == c.token
-        if (!refresh && sameConnection && mutable.value.libraries.isNotEmpty()) return
-        flush()
-        cancelRequests()
-        if (!sameConnection) positions.clear()
-        viewportKey = ""
+    /** Clears what belongs to the shown folder before another one, or none, is shown. */
+    private fun forgetShownFolder() {
+        shownPosition = NO_POSITION
         bookmark = null
         kept = null
         windowDirectory = 0
-        val previousRecent = if (connection.id == c.id) mutable.value.recent else emptyList()
-        val previousLibraries =
-            if (connection.id == c.id && connection.token == c.token) mutable.value.libraries else emptyList()
-        connection = c
-        recentRequest?.cancel()
-        recentRequest = viewModelScope.launch {
-            bookmarks.recent(c.id).collectLatest { records ->
-                val recent = withContext(Dispatchers.Default) {
-                    records.map {
-                        RecentFolder(
-                            it,
-                            timeLabels?.recent(it.visitedAt).orEmpty()
-                        )
-                    }
-                }
-                mutable.value = mutable.value.copy(recent = recent)
-            }
-        }
-        request = viewModelScope.launch {
-            mutable.value =
+    }
+
+    // A refresh of the same connection keeps the shown libraries until the reply replaces them.
+    fun connect(newConnection: Connection, refresh: Boolean = false) {
+        val sameServer = connection.id == newConnection.id
+        val sameConnection = sameServer && connection.token == newConnection.token
+        if (!refresh && sameConnection && _state.value.libraries.isNotEmpty()) return
+        flush()
+        cancelRequests()
+        if (!sameConnection) positions.clear()
+        forgetShownFolder()
+        val previousRecent = if (sameServer) _state.value.recent else emptyList()
+        val previousLibraries = if (sameConnection) _state.value.libraries else emptyList()
+        connection = newConnection
+        watchRecentFolders(newConnection.id)
+        openJob = viewModelScope.launch {
+            _state.value =
                 LibraryUiState(busy = true, recent = previousRecent, libraries = previousLibraries)
             try {
-                val libs = api.libraries(c)
-                mutable.value = mutable.value.copy(libraries = libs, busy = false)
-                if (c.lastDirectory != 0L) open(c.lastDirectory)
+                val libraries = repository.libraries(newConnection)
+                _state.value = _state.value.copy(libraries = libraries, busy = false)
+                if (newConnection.lastDirectory != 0L) open(newConnection.lastDirectory)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                mutable.value = mutable.value.copy(
-                    busy = false,
-                    error = true,
-                    errorStatus = (e as? dev.vvideo.data.library.remote.ServiceFailure)?.status ?: 0
-                )
+                _state.value =
+                    _state.value.copy(busy = false, error = true, errorStatus = e.serviceStatus())
             }
         }
     }
 
+    private fun watchRecentFolders(connectionId: String) {
+        recentJob?.cancel()
+        recentJob = viewModelScope.launch {
+            repository.recentFolders(connectionId).collectLatest { records ->
+                val recent = withContext(Dispatchers.Default) {
+                    records.map { RecentFolder(it, timeLabels?.recent(it.visitedAt).orEmpty()) }
+                }
+                _state.value = _state.value.copy(recent = recent)
+            }
+        }
+    }
+
+    /** Asks the list to scroll back to where it was, after returning to the page. */
     fun resume() {
-        val s = mutable.value
         if (blocked) return
-        val b = bookmark
-        mutable.value = s.copy(
-            restoreKey = viewportKey,
-            restoreAnchor = b?.anchor.orEmpty(),
-            restoreOffset = if (viewportKey.isNotEmpty()) viewportOffset else b?.pixelOffset ?: 0,
-            restoreWidth = if (viewportKey.isNotEmpty()) viewportWidth else b?.width ?: 0,
-            restoreSerial = s.restoreSerial + 1
+        val current = _state.value
+        val saved = bookmark
+        val reported = shownPosition.key.isNotEmpty()
+        _state.value = current.copy(
+            restore = ScrollRestore(
+                key = shownPosition.key,
+                anchor = saved?.anchor.orEmpty(),
+                offset = if (reported) shownPosition.offset else saved?.pixelOffset ?: 0,
+                width = if (reported) shownPosition.width else saved?.width ?: 0,
+                serial = current.restore.serial + 1
+            )
         )
     }
 
     // The notice belongs to the load that missed the anchor; resuming the page or
     // coming back from a viewer does not repeat it.
     fun anchorNoticeShown() {
-        if (mutable.value.anchorMissing) mutable.value = mutable.value.copy(anchorMissing = false)
+        if (_state.value.anchorMissing) _state.value = _state.value.copy(anchorMissing = false)
     }
 
-    fun viewport(key: String, offset: Int, width: Int) {
+    /** The first visible row [key], scrolled [offset] px into a list [width] px wide. */
+    fun reportViewport(key: String, offset: Int, width: Int) {
         if (blocked) return
-        viewportKey = key
-        viewportOffset = offset
-        viewportWidth = width
-        val index = mutable.value.albums.indexOfFirst { albumKey(it) == key }
+        shownPosition = FolderPosition(key, offset, width)
+        val index = _state.value.albums.indexOfFirst { albumKey(it) == key }
         if (index >= 0) save(index, offset, width)
     }
 
     fun back() {
-        val d = mutable.value.directory ?: return
-        if (d.parentId != 0L) open(d.parentId) else roots()
+        val directory = _state.value.directory ?: return
+        if (directory.parentId != 0L) open(directory.parentId) else roots()
     }
 
     /** Searches the open folder for [query] after a short pause; a blank query ends the search. */
     fun search(query: String) {
-        val directory = mutable.value.directory ?: return
-        searchRequest?.cancel()
+        val directory = _state.value.directory ?: return
+        searchJob?.cancel()
         if (query.isBlank()) {
-            mutable.value = mutable.value.copy(search = SearchState(query))
+            _state.value = _state.value.copy(search = SearchState(query))
             return
         }
-        mutable.value = mutable.value.copy(search = mutable.value.search.copy(query = query, busy = true, error = false))
-        val c = connection
-        searchRequest = viewModelScope.launch {
+        _state.value = _state.value.copy(
+            search = _state.value.search.copy(
+                query = query,
+                busy = true,
+                error = false
+            )
+        )
+        val searchConnection = connection
+        searchJob = viewModelScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
             val outcome = try {
-                SearchState(query, api.search(c, directory.id, query.trim()))
+                SearchState(query, repository.search(searchConnection, directory.id, query.trim()))
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                mutable.value.search.copy(busy = false, error = true)
+                _state.value.search.copy(busy = false, error = true)
             }
-            if (mutable.value.directory?.id == directory.id && mutable.value.search.query == query) {
-                mutable.value = mutable.value.copy(search = outcome)
+            if (_state.value.directory?.id == directory.id && _state.value.search.query == query) {
+                _state.value = _state.value.copy(search = outcome)
             }
         }
     }
 
+    /** Shows the library list. */
     fun roots() {
         leaveFolder()
         flush()
         cancelRequests()
-        viewportKey = ""
-        bookmark = null
-        kept = null
-        windowDirectory = 0
-        mutable.value =
-            LibraryUiState(libraries = mutable.value.libraries, recent = mutable.value.recent)
-        viewModelScope.launch { settings.recent(0) }
+        forgetShownFolder()
+        _state.value =
+            LibraryUiState(libraries = _state.value.libraries, recent = _state.value.recent)
+        viewModelScope.launch { repository.setLastDirectory(0) }
     }
 
+    /**
+     * Opens folder [id]. Without [requestedSort], [filter] or [fromStart] it returns
+     * to the position this session or the folder's bookmark left it at.
+     */
     fun open(
         id: Long,
-        override: Sort? = null,
+        requestedSort: Sort? = null,
         refresh: Boolean = false,
-        kind: String = "",
+        filter: MediaKind? = null,
         fromStart: Boolean = false
     ) {
-        val leftKey = viewportKey
-        val leftOffset = viewportOffset
-        val leftWidth = viewportWidth
-        val restore = override == null && kind.isEmpty() && !fromStart
+        val left = shownPosition
+        val restore = requestedSort == null && filter == null && !fromStart
         // A refresh keeps the folder where it is; a new sort, filter or jump starts it over.
-        if (mutable.value.directory?.id != id || restore) leaveFolder()
+        if (_state.value.directory?.id != id || restore) leaveFolder()
         if (!restore) positions.forget(id)
         flush()
         cancelRequests()
-        viewportKey = ""
+        shownPosition = NO_POSITION
         // Opening any folder, including one found by a search, ends the search.
-        if (mutable.value.search != SearchState()) mutable.value = mutable.value.copy(search = SearchState())
+        if (_state.value.search != SearchState()) _state.value =
+            _state.value.copy(search = SearchState())
         kept?.let { page ->
-            if (page.state.directory?.id == id && override == null && !refresh && kind.isEmpty() && !fromStart) {
-                restore(page)
+            if (page.state.directory?.id == id && restore && !refresh) {
+                restoreKept(page)
                 return
             }
         }
         loading = true
-        val origin = mutable.value
+        val origin = _state.value
         val leaving = origin.directory?.id != id
-        if (!leaving) mutable.value = origin.copy(busy = true, error = false, kind = kind)
-        request = viewModelScope.launch {
+        if (!leaving) _state.value = origin.copy(busy = true, error = false, filter = filter)
+        openJob = viewModelScope.launch {
             // The displayed page stays intact while another directory loads; only a slow
             // load reveals the destination early, carrying its own first-load placeholder.
-            // A destination that cannot be named yet marks the displayed page busy instead.
-            val pending = if (leaving) pendingDirectory(origin, id) else null
-            val reveal = if (leaving) launch {
-                delay(REVEAL_DELAY_MS)
-                if (pending == null) {
-                    mutable.value = mutable.value.copy(busy = true)
-                    return@launch
-                }
-                // Only a settled page that owns the windows can be returned to as it was.
-                if (windowDirectory != 0L && origin.directory?.id == windowDirectory && !origin.busy) {
-                    kept = KeptPage(origin, bookmark, leftKey, leftOffset, leftWidth)
-                }
-                // The placeholder was built from the state at the tap; lists refreshed since then stay.
-                bookmark = null
-                mutable.value =
-                    mutable.value.let { pending.copy(recent = it.recent, libraries = it.libraries) }
-            } else null
-            val saved = if (refresh && bookmark?.directory == id) {
-                bookmark
-            } else {
-                bookmarks.get(connection.id, id)
-            }
-            val sort = override ?: saved?.let { Sort(it.sort, it.direction) } ?: Sort()
+            val reveal = if (leaving) revealLater(origin, id, left) else null
+            val saved = if (refresh && bookmark?.directory == id) bookmark else repository.bookmark(
+                connection.id,
+                id
+            )
+            val sort = requestedSort ?: saved?.let {
+                Sort(SortField.fromWire(it.sort), SortDirection.fromWire(it.direction))
+            } ?: Sort()
             try {
-                var page: MediaPage? = null
-                repeat(5) {
-                    if (page == null) try {
-                        page = api.page(
-                            connection,
-                            id,
-                            sort,
-                            anchor = if (restore) saved?.anchor.orEmpty() else "",
-                            fallback = if (restore) saved?.fallback.orEmpty() else "",
-                            kind = kind
-                        )
-                    } catch (e: RevisionChanged) {
-                        delay(700)
-                    }
-                }
-                var initial = page ?: throw RevisionChanged()
-                if (restore && saved != null && !initial.anchorFound && saved.neighbor.isNotEmpty()) {
-                    initial = api.page(
-                        connection,
-                        id,
-                        sort,
-                        anchor = saved.neighbor,
-                        fallback = saved.fallback,
-                        kind = kind
-                    )
-                }
-                val children = api.children(connection, id)
-                val old = origin.path
-                val existing = old.indexOfFirst { it.id == id }
-                var path = when {
-                    existing >= 0 -> old.take(existing + 1)
-                    old.lastOrNull()?.id == initial.directory.parentId -> old + initial.directory
-                    else -> listOf(initial.directory)
-                }
-                if (path.size == 1 && initial.directory.parentId != 0L) {
-                    try {
-                        path = api.path(connection, id)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // Browsing remains available if an older service has no directory endpoint.
-                    }
-                }
-                val preparedAlbums = albums(sort, initial.items)
-                val left = if (restore) positions[id] else null
+                val first =
+                    repository.firstPage(connection, id, sort, if (restore) saved else null, filter)
+                val subfolders = repository.children(connection, id)
+                val path = resolvePath(origin.path, id, first.directory)
+                val albums = albums(sort, first.items)
+                val returnedTo = if (restore) positions[id] else null
                 // Nothing suspends from here to the published state: the windows, the
                 // bookmark and the page change together, and a late reveal must not undo it.
                 reveal?.cancel()
-                window.reset(initial)
-                childrenWindow.reset(children)
+                mediaWindow.reset(first)
+                subfolderWindow.reset(subfolders)
                 windowDirectory = id
                 kept = null
-                loadedNext = true
-                loadedPrevious = initial.previous.isNotEmpty()
-                bookmark = if (override == null && saved != null) saved else BookmarkEntity(
+                canPageNext = true
+                canPagePrevious = first.previous.isNotEmpty()
+                bookmark = if (requestedSort == null && saved != null) saved else BookmarkEntity(
                     connection.id,
                     id,
-                    initial.directory.libraryId,
-                    sort.field,
-                    sort.direction
+                    first.directory.libraryId,
+                    sort.field.wire,
+                    sort.direction.wire
                 )
                 loading = false
-                mutable.value = mutable.value.copy(
-                    directory = initial.directory,
-                    kind = kind,
-                    children = children.items,
-                    childNext = children.next,
-                    childPrevious = children.previous,
-                    childBusy = false,
+                val current = _state.value
+                _state.value = current.copy(
+                    directory = first.directory,
+                    filter = filter,
+                    subfolders = Subfolders(subfolders.items, subfolders.next, subfolders.previous),
                     pageBusy = false,
                     path = path,
                     pathLabel = pathLabel(path),
                     sort = sort,
-                    hasMedia = initial.items.isNotEmpty() || (kind.isNotEmpty() && mutable.value.hasMedia),
-                    hasPrevious = window.previous.isNotEmpty(),
-                    albums = preparedAlbums,
+                    hasMedia = first.items.isNotEmpty() || (filter != null && current.hasMedia),
+                    hasPrevious = mediaWindow.previous.isNotEmpty(),
+                    albums = albums,
                     busy = false,
                     error = false,
                     errorStatus = 0,
-                    healthy = initial.healthy,
-                    restoreKey = left?.key.orEmpty(),
-                    restoreAnchor = if (restore) saved?.anchor.orEmpty() else "",
-                    restoreOffset = left?.offset ?: if (restore) saved?.pixelOffset ?: 0 else 0,
-                    restoreWidth = left?.width ?: saved?.width ?: 0,
-                    restoreSerial = mutable.value.restoreSerial + 1,
-                    anchorMissing = restore && anchorMoved(saved?.anchor.orEmpty(), initial)
+                    healthy = first.healthy,
+                    restore = ScrollRestore(
+                        key = returnedTo?.key.orEmpty(),
+                        anchor = if (restore) saved?.anchor.orEmpty() else "",
+                        offset = returnedTo?.offset ?: if (restore) saved?.pixelOffset ?: 0 else 0,
+                        width = returnedTo?.width ?: saved?.width ?: 0,
+                        serial = current.restore.serial + 1
+                    ),
+                    anchorMissing = restore && anchorMoved(saved?.anchor.orEmpty(), first)
                 )
-                val record = checkNotNull(bookmark).copy(
-                    name = initial.directory.name,
-                    pathLabel = pathLabel(path),
-                    visitedAt = System.currentTimeMillis(),
-                    hiddenFromRecent = false
-                )
-                bookmark = record
-                bookmarks.visit(record)
-                if (initial.healthy) settings.recent(id)
+                recordVisit(id, first.directory, path, first.healthy)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 reveal?.cancel()
                 loading = false
-                mutable.value = mutable.value.copy(
-                    busy = false,
-                    error = true,
-                    errorStatus = (e as? dev.vvideo.data.library.remote.ServiceFailure)?.status ?: 0
-                )
+                _state.value =
+                    _state.value.copy(busy = false, error = true, errorStatus = e.serviceStatus())
             }
         }
     }
 
-    // Keys of a filtered list do not place the unfiltered one, so only an unfiltered
-    // page is remembered; viewportKey is blank until the shown page reported a position.
-    private fun leaveFolder() {
-        val s = mutable.value
-        val d = s.directory ?: return
-        if (s.kind.isEmpty()) positions.leave(d.id, FolderPosition(viewportKey, viewportOffset, viewportWidth))
+    /**
+     * Shows the destination's placeholder in place of [origin] once the load is slow
+     * enough to notice, keeping [origin] to return to. A destination that cannot be
+     * named yet marks the displayed page busy instead.
+     */
+    private fun CoroutineScope.revealLater(
+        origin: LibraryUiState,
+        id: Long,
+        left: FolderPosition
+    ): Job {
+        val pending = pendingDirectory(origin, id)
+        return launch {
+            delay(REVEAL_DELAY_MS)
+            if (pending == null) {
+                _state.value = _state.value.copy(busy = true)
+                return@launch
+            }
+            // Only a settled page that owns the windows can be returned to as it was.
+            if (windowDirectory != 0L && origin.directory?.id == windowDirectory && !origin.busy) {
+                kept = KeptPage(origin, bookmark, left)
+            }
+            // The placeholder was built from the state at the tap; lists refreshed since then stay.
+            bookmark = null
+            _state.value =
+                _state.value.let { pending.copy(recent = it.recent, libraries = it.libraries) }
+        }
     }
 
-    private fun restore(page: KeptPage) {
+    /** The path down to [directory], from the [known] path when it leads there, else from the server. */
+    private suspend fun resolvePath(
+        known: List<Directory>,
+        id: Long,
+        directory: Directory
+    ): List<Directory> {
+        val existing = known.indexOfFirst { it.id == id }
+        val path = when {
+            existing >= 0 -> known.take(existing + 1)
+            known.lastOrNull()?.id == directory.parentId -> known + directory
+            else -> listOf(directory)
+        }
+        if (path.size != 1 || directory.parentId == 0L) return path
+        return try {
+            repository.path(connection, id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Browsing remains available if an older service has no directory endpoint.
+            path
+        }
+    }
+
+    /** Records the opened folder for the recent list and, while it is reachable, for a cold start. */
+    private suspend fun recordVisit(
+        id: Long,
+        directory: Directory,
+        path: List<Directory>,
+        healthy: Boolean
+    ) {
+        val record = checkNotNull(bookmark).copy(
+            name = directory.name,
+            pathLabel = pathLabel(path),
+            visitedAt = System.currentTimeMillis(),
+            hiddenFromRecent = false
+        )
+        bookmark = record
+        repository.recordVisit(record)
+        if (healthy) repository.setLastDirectory(id)
+    }
+
+    // Keys of a filtered list do not place the unfiltered one, so only an unfiltered
+    // page is remembered; the position key is blank until the shown page reported one.
+    private fun leaveFolder() {
+        val current = _state.value
+        val directory = current.directory ?: return
+        if (current.filter == null) positions.leave(directory.id, shownPosition)
+    }
+
+    private fun restoreKept(page: KeptPage) {
         kept = null
         bookmark = page.bookmark
-        viewportKey = page.viewportKey
-        viewportOffset = page.viewportOffset
-        viewportWidth = page.viewportWidth
-        mutable.value = restoredPage(page.state, mutable.value)
+        shownPosition = page.position
+        _state.value = restoredPage(page.state, _state.value)
         resume()
     }
 
-    private suspend fun albums(sort: Sort = mutable.value.sort, items: List<Media> = window.items) =
+    private suspend fun albums(
+        sort: Sort = _state.value.sort,
+        items: List<Media> = mediaWindow.items
+    ) =
         withContext(Dispatchers.Default) {
-            datedAlbums(
-                items.chunked(10).map { Album(it) },
-                sort,
-                timeLabels
-            )
+            datedAlbums(items.chunked(ALBUM_SIZE).map { Album(it) }, sort, timeLabels)
         }
 
-    fun filter(kind: String) {
-        require(kind in setOf("", "video", "image"))
-        val s = mutable.value
-        s.directory?.let { open(it.id, s.sort, kind = kind, fromStart = true) }
+    /** Shows only [kind] media of the open folder from its start; null shows every kind. */
+    fun setFilter(kind: MediaKind?) {
+        val current = _state.value
+        current.directory?.let { open(it.id, current.sort, filter = kind, fromStart = true) }
     }
 
     fun jumpToStart() {
-        val s = mutable.value
-        s.directory?.let { open(it.id, s.sort, kind = s.kind, fromStart = true) }
+        val current = _state.value
+        current.directory?.let {
+            open(
+                it.id,
+                current.sort,
+                filter = current.filter,
+                fromStart = true
+            )
+        }
     }
 
     // A published window is ready for paging even while open() persists its visit.
     // Blocking on the whole request Job can discard the only visible-edge event.
-    fun page(previous: Boolean) {
-        if (paginating || blocked || (!previous && !loadedNext) || (previous && !loadedPrevious)) return
-        val d = mutable.value.directory ?: return
-        val cursor = if (previous) window.previous else window.next
+    fun page(edge: PageEdge) {
+        val previous = edge == PageEdge.Previous
+        if (paginating || blocked || (!previous && !canPageNext) || (previous && !canPagePrevious)) return
+        val directory = _state.value.directory ?: return
+        val cursor = if (previous) mediaWindow.previous else mediaWindow.next
         if (cursor.isEmpty()) return
         paginating = true
-        mutable.value = mutable.value.copy(pageBusy = true)
+        _state.value = _state.value.copy(pageBusy = true)
         val round = generation
-        val sort = mutable.value.sort
-        pageRequest = viewModelScope.launch {
+        val sort = _state.value.sort
+        pageJob = viewModelScope.launch {
             try {
-                val page =
-                    api.page(connection, d.id, sort, cursor, previous, kind = mutable.value.kind)
+                val page = repository.page(
+                    connection,
+                    directory.id,
+                    sort,
+                    cursor,
+                    edge,
+                    _state.value.filter
+                )
                 ensureActive()
                 if (round != generation) return@launch
                 if (page.items.isEmpty()) {
-                    if (previous) loadedPrevious = false else loadedNext = false
+                    if (previous) canPagePrevious = false else canPageNext = false
                 } else {
                     if (previous) {
-                        window.prepend(page)
-                        loadedNext = true
+                        mediaWindow.prepend(page)
+                        canPageNext = true
                     } else {
-                        window.append(page)
-                        loadedPrevious = true
+                        mediaWindow.append(page)
+                        canPagePrevious = true
                     }
-                    val preparedAlbums = albums()
-                    mutable.value = mutable.value.copy(
-                        albums = preparedAlbums,
-                        hasPrevious = window.previous.isNotEmpty(),
+                    val albums = albums()
+                    _state.value = _state.value.copy(
+                        albums = albums,
+                        hasPrevious = mediaWindow.previous.isNotEmpty(),
                         error = false,
                         errorStatus = 0
                     )
@@ -492,105 +494,106 @@ class LibraryViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: RevisionChanged) {
-                open(d.id, refresh = true, kind = mutable.value.kind)
+                open(directory.id, refresh = true, filter = _state.value.filter)
             } catch (e: Exception) {
-                mutable.value = mutable.value.copy(
-                    error = true,
-                    errorStatus = (e as? dev.vvideo.data.library.remote.ServiceFailure)?.status ?: 0
-                )
+                _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
             } finally {
                 if (round == generation) {
                     paginating = false
-                    mutable.value = mutable.value.copy(pageBusy = false)
+                    _state.value = _state.value.copy(pageBusy = false)
                 }
             }
         }
     }
 
-    fun moreChildren(previous: Boolean = false) {
-        val s = mutable.value
-        val d = s.directory ?: return
-        val cursor = if (previous) s.childPrevious else s.childNext
-        if (cursor.isEmpty() || childRequest?.isActive == true || blocked) return
+    fun moreSubfolders(edge: PageEdge = PageEdge.Next) {
+        val current = _state.value
+        val directory = current.directory ?: return
+        val cursor =
+            if (edge == PageEdge.Previous) current.subfolders.previous else current.subfolders.next
+        if (cursor.isEmpty() || subfolderJob?.isActive == true || blocked) return
         val round = generation
-        childRequest = viewModelScope.launch {
-            mutable.value = mutable.value.copy(childBusy = true)
+        subfolderJob = viewModelScope.launch {
+            _state.value = _state.value.copy(subfolders = _state.value.subfolders.copy(busy = true))
             try {
-                val p = api.children(connection, d.id, cursor, previous)
+                val page = repository.children(connection, directory.id, cursor, edge)
                 ensureActive()
                 if (round == generation) {
-                    if (p.items.isNotEmpty()) childrenWindow.add(p, previous)
-                    mutable.value = mutable.value.copy(
-                        children = childrenWindow.items,
-                        childNext = if (!previous && p.items.isEmpty()) "" else childrenWindow.next,
-                        childPrevious = if (previous && p.items.isEmpty()) "" else childrenWindow.previous,
+                    val exhausted = page.items.isEmpty()
+                    if (!exhausted) subfolderWindow.add(page, edge)
+                    _state.value = _state.value.copy(
+                        subfolders = _state.value.subfolders.copy(
+                            items = subfolderWindow.items,
+                            next = if (edge == PageEdge.Next && exhausted) "" else subfolderWindow.next,
+                            previous = if (edge == PageEdge.Previous && exhausted) "" else subfolderWindow.previous
+                        ),
                         error = false
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (round == generation) mutable.value = mutable.value.copy(
-                    error = true,
-                    errorStatus = (e as? dev.vvideo.data.library.remote.ServiceFailure)?.status ?: 0
-                )
+                if (round == generation) {
+                    _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
+                }
             } finally {
-                if (round == generation) mutable.value = mutable.value.copy(childBusy = false)
+                if (round == generation) {
+                    _state.value =
+                        _state.value.copy(subfolders = _state.value.subfolders.copy(busy = false))
+                }
             }
         }
     }
 
-    fun save(album: Int, offset: Int, width: Int) {
-        val s = mutable.value
-        if (blocked || s.error || !s.healthy || s.kind.isNotEmpty()) return
-        val group = s.albums.getOrNull(album) ?: return
-        val item = group.items.firstOrNull() ?: return
+    /** Remembers album [albumIndex], scrolled [offset] px into a list [width] px wide, as the bookmark. */
+    fun save(albumIndex: Int, offset: Int, width: Int) {
+        val current = _state.value
+        if (blocked || current.error || !current.healthy || current.filter != null) return
+        val album = current.albums.getOrNull(albumIndex) ?: return
+        val first = album.items.firstOrNull() ?: return
         val base = bookmark ?: return
-        val key = when (s.sort.field) {
-            "name" -> item.name
-            "mtime" -> item.mtime.toString()
-            else -> item.effectiveTime.toString()
-        }
-        val fallback = Base64.encodeToString(
-            JSONObject().put("directory_id", item.directoryId)
-                .put("revision", s.directory?.revision ?: 0).put("sort", s.sort.field)
-                .put("direction", s.sort.direction).put("kind", "").put("key", key)
-                .put("id", item.id).toString().toByteArray(),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
-        val record = base.copy(
-            anchor = item.id,
-            neighbor = group.items.getOrNull(1)?.id.orEmpty(),
-            fallback = fallback,
+        val revision = current.directory?.revision ?: 0L
+        bookmark = base.copy(
+            anchor = first.id,
+            neighbor = album.items.getOrNull(1)?.id.orEmpty(),
+            fallback = anchorFallback(first, revision, current.sort),
             pixelOffset = offset,
             width = width,
-            revision = s.directory?.revision ?: 0,
+            revision = revision,
             savedAt = System.currentTimeMillis()
         )
-        bookmark = record
         if (saveJob?.isActive != true) saveJob = persistScope.launch {
-            delay(500)
-            bookmark?.let { bookmarks.put(it) }
+            delay(BOOKMARK_SAVE_DELAY_MS)
+            bookmark?.let { repository.saveBookmark(it) }
         }
     }
 
+    /** Writes the bookmark now instead of after the save delay. */
     fun flush() {
-        if (mutable.value.kind.isNotEmpty()) return
+        if (_state.value.filter != null) return
         val record = bookmark ?: return
         saveJob?.cancel()
-        persistScope.launch { bookmarks.put(record) }
+        persistScope.launch { repository.saveBookmark(record) }
     }
 
     fun sort(sort: Sort) {
-        val d = mutable.value.directory ?: return
-        if (mutable.value.kind.isNotEmpty()) {
-            open(d.id, sort, kind = mutable.value.kind, fromStart = true)
+        val current = _state.value
+        val directory = current.directory ?: return
+        if (current.filter != null) {
+            open(directory.id, sort, filter = current.filter, fromStart = true)
             return
         }
-        bookmark = BookmarkEntity(connection.id, d.id, d.libraryId, sort.field, sort.direction)
-        val cleared = checkNotNull(bookmark)
-        persistScope.launch { bookmarks.put(cleared) }
-        open(d.id, sort, kind = mutable.value.kind)
+        val cleared =
+            BookmarkEntity(
+                connection.id,
+                directory.id,
+                directory.libraryId,
+                sort.field.wire,
+                sort.direction.wire
+            )
+        bookmark = cleared
+        persistScope.launch { repository.saveBookmark(cleared) }
+        open(directory.id, sort)
     }
 
     override fun onCleared() {

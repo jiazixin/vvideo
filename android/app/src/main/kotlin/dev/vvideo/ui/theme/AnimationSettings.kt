@@ -4,9 +4,25 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import androidx.compose.runtime.*
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,8 +87,8 @@ fun <T> move(ms: Int = Motion.CHANGE): FiniteAnimationSpec<T> =
 // content below slides instead of jumping.
 @Composable
 fun barEnter(): EnterTransition =
-    fadeIn(fade()) + expandVertically(move(), expandFrom = androidx.compose.ui.Alignment.Top)
+    fadeIn(fade()) + expandVertically(move(), expandFrom = Alignment.Top)
 
 @Composable
 fun barExit(): ExitTransition =
-    fadeOut(fade()) + shrinkVertically(move(), shrinkTowards = androidx.compose.ui.Alignment.Top)
+    fadeOut(fade()) + shrinkVertically(move(), shrinkTowards = Alignment.Top)

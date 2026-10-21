@@ -1,12 +1,18 @@
 package dev.vvideo.feature.player
 
+import dev.vvideo.model.CaptureSource
 import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaStatus
 import org.junit.Assert.*
 import org.junit.Test
 
 class ExitSnapshotTest {
     private val photo =
-        Media("7", "v", "l", 1, "n.jpg", "image", 4, 3, 0, 0, 1, 0, 0, "ready", "", "mtime")
+        Media(
+            "7", "v", "l", 1, "n.jpg", MediaKind.Image, 4, 3, 0, 0, 1, 0, 0,
+            MediaStatus.Ready, "", CaptureSource.Modified
+        )
     private val shown =
         PlayerUiState(pathLabel = "media › large", initialId = "7", items = listOf(photo))
 

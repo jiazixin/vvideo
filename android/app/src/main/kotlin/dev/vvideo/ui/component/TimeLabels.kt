@@ -1,7 +1,10 @@
 package dev.vvideo.ui.component
 
-import java.time.*
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 /** Formatting inputs come from resources; clock and zone are injectable for boundary tests. */
@@ -21,7 +24,7 @@ data class TimeLabels(
         val value = Instant.ofEpochMilli(millis).atZone(zone)
         val date = value.toLocalDate()
         val current = now.atZone(zone).toLocalDate()
-        val days = java.time.temporal.ChronoUnit.DAYS.between(date, current)
+        val days = ChronoUnit.DAYS.between(date, current)
         return when {
             days == 0L -> format(value, "HH:mm")
             days == 1L -> yesterday
