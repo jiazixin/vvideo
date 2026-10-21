@@ -64,4 +64,24 @@ class PageWindowTest {
         assertEquals(1, window.retainedPages)
         assertEquals("3000", window.items.first().id)
     }
+
+    // The server gives every page a previous cursor, so the window itself knows
+    // whether it starts at the folder's first media.
+    @Test
+    fun startIsKnownUntilItsPageIsEvicted() {
+        val window = PageWindow()
+        window.reset(page(0), fromStart = true)
+        assertTrue(window.atStart)
+        window.append(page(1))
+        window.append(page(2))
+        assertTrue(window.atStart)
+        window.append(page(3))
+        assertFalse(window.atStart)
+        window.prepend(page(0))
+        assertFalse(window.atStart)
+        window.reachedStart()
+        assertTrue(window.atStart)
+        window.reset(page(5))
+        assertFalse(window.atStart)
+    }
 }

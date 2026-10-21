@@ -86,12 +86,8 @@ def main():
         return snapshot()
 
     def album():
-        nodes = root()
-        bars = [n for n in nodes if n.get("text", "").startswith("子文件夹 ·")]
-        if not bars:
-            raise RuntimeError("Missing subfolder bar")
-        tap(bars[0])
-        click(snapshot(), "large")
+        # Subfolders are listed above the albums of the media root.
+        click(root(), "large")
         nodes = snapshot()
         if not matching(nodes, "large"):
             raise RuntimeError("Synthetic large album did not open")

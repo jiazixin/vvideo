@@ -119,9 +119,7 @@ fun LibraryRoute(
     LaunchedEffect(list, width) {
         snapshotFlow {
             list.layoutInfo.visibleItemsInfo.let { items ->
-                items.firstOrNull {
-                    it.key.toString().startsWith(ALBUM_KEY_PREFIX)
-                } ?: items.firstOrNull()
+                items.firstOrNull { isPositionKey(it.key.toString()) } ?: items.firstOrNull()
             }?.let { it.key to -it.offset }
         }.sample(VIEWPORT_SAMPLE_MS).collect { visible ->
             if (!restoring && visible != null) {
@@ -132,11 +130,12 @@ fun LibraryRoute(
     LaunchedEffect(list) {
         snapshotFlow { list.isScrollInProgress }.distinctUntilChanged().collect(onInteraction)
     }
-    LaunchedEffect(list, state.albums, state.subfolders.items) {
+    // hasPrevious decides whether the subfolder rows are listed, so it restarts this too.
+    LaunchedEffect(list, state.albums, state.subfolders.items, state.hasPrevious) {
         snapshotFlow { list.layoutInfo.visibleItemsInfo.map { it.key } }.distinctUntilChanged()
             .collect { keys ->
                 val subfolders = state.subfolders.items
-                if (state.albums.isEmpty() && subfolders.isNotEmpty()) {
+                if (subfoldersShown(state) && subfolders.isNotEmpty()) {
                     if (keys.contains(folderKey(subfolders.last().id))) vm.moreSubfolders(PageEdge.Next)
                     if (keys.contains(folderKey(subfolders.first().id))) vm.moreSubfolders(PageEdge.Previous)
                 }
@@ -198,7 +197,6 @@ fun LibraryRoute(
                 onBack = vm::back,
                 onOpen = vm::openDirectory,
                 onSort = vm::sort,
-                onMoreSubfolders = vm::moreSubfolders,
                 onRetry = {
                     screen.directory?.let { vm.open(it.id, refresh = true, filter = screen.filter) }
                         ?: vm.connect(connection.copy(lastDirectory = 0), refresh = true)

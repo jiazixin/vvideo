@@ -49,9 +49,6 @@
     <string name="tab_all">全部</string>
     <string name="tab_video">视频</string>
     <string name="tab_photo">照片</string>
-    <string name="subfolders_count">子文件夹 · %1$s</string>
-    <!-- Joins the subfolder names previewed in the subfolder bar. -->
-    <string name="list_separator">、</string>
     <string name="sort_title">排序方式</string>
     <!-- A sort as "field · direction", e.g. 拍摄 / 录制时间 · 最早在前. -->
     <string name="sort_label">%1$s · %2$s</string>
@@ -102,7 +99,6 @@
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
-    <string name="subfolders_note">子文件夹不会混进本层相册。</string>
     <string name="today">今天</string>
     <string name="yesterday">昨天</string>
     <string name="date_pattern">M月d日 EEE</string>

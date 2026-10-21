@@ -7,24 +7,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.vvideo.R
-import dev.vvideo.data.library.PageEdge
 import dev.vvideo.model.Sort
 import dev.vvideo.model.SortDirection
 import dev.vvideo.model.SortField
@@ -33,13 +24,6 @@ import dev.vvideo.ui.component.VVBottomSheet
 import dev.vvideo.ui.component.VVButton
 import dev.vvideo.ui.component.pathText
 import dev.vvideo.ui.theme.LocalVVColors
-import kotlinx.coroutines.flow.distinctUntilChanged
-
-/** The subfolder sheet covers at most this fraction of the screen height. */
-private const val SUBFOLDER_SHEET_MAX_HEIGHT = .82f
-
-/** A short complete subfolder list explains below it that subfolders stay out of the albums. */
-private const val SUBFOLDER_NOTE_MAX_COUNT = 5
 
 @Composable
 fun sortLabel(sort: Sort): String = stringResource(
@@ -108,63 +92,6 @@ fun SortSheet(state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Un
                     { onSort(state.sort.copy(direction = direction)) },
                     Modifier.weight(1f),
                     kind = ButtonKind.Secondary
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ChildrenSheet(
-    state: LibraryUiState,
-    onDismiss: () -> Unit,
-    onMore: (PageEdge) -> Unit,
-    onOpen: (Long) -> Unit
-) {
-    val list = rememberLazyListState()
-    LaunchedEffect(list, state.subfolders.items) {
-        snapshotFlow { list.layoutInfo.visibleItemsInfo.map { it.key } }.distinctUntilChanged()
-            .collect { keys ->
-                val subfolders = state.subfolders.items
-                if (subfolders.lastOrNull()
-                        ?.let { keys.contains(folderKey(it.id)) } == true
-                ) onMore(PageEdge.Next)
-                if (subfolders.firstOrNull()
-                        ?.let { keys.contains(folderKey(it.id)) } == true
-                ) onMore(PageEdge.Previous)
-            }
-    }
-    VVBottomSheet(
-        stringResource(
-            R.string.subfolders_count,
-            state.subfolders.items.size.toString() + if (state.subfolders.next.isNotEmpty()) "+" else ""
-        ), onDismiss
-    ) {
-        LazyColumn(
-            Modifier.fillMaxWidth()
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * SUBFOLDER_SHEET_MAX_HEIGHT),
-            state = list
-        ) {
-            items(
-                state.subfolders.items,
-                key = { folderKey(it.id) }) { dir ->
-                LibraryRow(
-                    dir.id.toString(),
-                    dir.name,
-                    compact = true,
-                    onClick = { onOpen(dir.id) })
-            }
-            if (state.subfolders.busy) item {
-                CircularProgressIndicator(
-                    Modifier.padding(12.dp).size(24.dp)
-                )
-            }
-            if (state.subfolders.next.isEmpty() && state.subfolders.items.size < SUBFOLDER_NOTE_MAX_COUNT) item {
-                Text(
-                    stringResource(R.string.subfolders_note),
-                    Modifier.padding(20.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LocalVVColors.current.textSecondary
                 )
             }
         }

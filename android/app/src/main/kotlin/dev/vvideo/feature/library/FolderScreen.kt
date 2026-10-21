@@ -16,11 +16,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -61,7 +59,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import dev.vvideo.R
-import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Directory
 import dev.vvideo.model.Media
@@ -89,11 +86,8 @@ private const val FLOATING_DATE_HOLD_MS = 1200L
 /** Index of the first album whose top row shows the jump-to-start button. */
 private const val JUMP_BUTTON_FIRST_ALBUM = 3
 
-/** Subfolder names previewed in the subfolder bar. */
-private const val SUBFOLDER_BAR_NAMES = 3
-
 /** The bottom sheets a folder page can open. */
-private enum class FolderSheet { Sort, Children, Info }
+private enum class FolderSheet { Sort, Info }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,7 +99,6 @@ fun FolderScreen(
     onBack: () -> Unit,
     onOpen: (Long) -> Unit,
     onSort: (Sort) -> Unit,
-    onMoreSubfolders: (PageEdge) -> Unit,
     onRetry: () -> Unit,
     onMedia: (Media) -> Unit,
     onFilter: (MediaKind?) -> Unit,
@@ -137,7 +130,7 @@ fun FolderScreen(
     BackHandler(menuOpen || sheet != null) { if (menuOpen) menuOpen = false else sheet = null }
     // Back first ends a search and returns to the folder's albums.
     BackHandler(state.search.active && !menuOpen && sheet == null) { onSearch("") }
-    FolderSheetHost(sheet, state, { sheet = null }, onSort, onMoreSubfolders, onOpen)
+    FolderSheetHost(sheet, state, { sheet = null }, onSort)
     val reveal =
         rememberListReveal(if (state.busy) null else Triple(directory.id, state.filter, state.sort))
     Scaffold(containerColor = colors.bgPage, topBar = {
@@ -197,19 +190,12 @@ private fun FolderSheetHost(
     sheet: FolderSheet?,
     state: LibraryUiState,
     onDismiss: () -> Unit,
-    onSort: (Sort) -> Unit,
-    onMoreSubfolders: (PageEdge) -> Unit,
-    onOpen: (Long) -> Unit
+    onSort: (Sort) -> Unit
 ) {
     when (sheet) {
         FolderSheet.Sort -> SortSheet(state, onDismiss) {
             onDismiss()
             onSort(it)
-        }
-
-        FolderSheet.Children -> ChildrenSheet(state, onDismiss, onMoreSubfolders) {
-            onDismiss()
-            onOpen(it)
         }
 
         FolderSheet.Info -> FolderInfoSheet(state, onDismiss)
@@ -242,7 +228,7 @@ private fun rememberListReveal(content: Any?): Animatable<Float, AnimationVector
     return reveal
 }
 
-/** The app bar with the bars that slide in under it: offline, media kind and subfolders. */
+/** The app bar with the bars that slide in under it: offline and media kind. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderTopBar(
@@ -285,11 +271,6 @@ private fun FolderTopBar(
                 onFilter
             )
         }
-        AnimatedVisibility(
-            state.albums.isNotEmpty() && state.subfolders.items.isNotEmpty() && !searching,
-            enter = barEnter(),
-            exit = barExit()
-        ) { SubfolderBar(state) { onSheet(FolderSheet.Children) } }
     }
 }
 
@@ -382,7 +363,7 @@ private fun FolderMenu(
     }
 }
 
-/** Subfolders when the folder has no media, otherwise its albums under their date rows. */
+/** The folder's subfolders, then its albums under their date rows; [libraryKeys] lists the same rows. */
 @Composable
 private fun FolderContentList(
     list: LazyListState,
@@ -399,13 +380,7 @@ private fun FolderContentList(
         modifier = Modifier.fillMaxSize().graphicsLayer { alpha = contentAlpha() },
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        // Zero-height key preserves a single mapping shared by restoration and pagination.
-        if (state.albums.isNotEmpty() && state.subfolders.items.isNotEmpty()) item(SUBFOLDER_BAR_KEY) {
-            Spacer(
-                Modifier.height(0.dp)
-            )
-        }
-        if (state.albums.isEmpty()) items(
+        if (subfoldersShown(state)) items(
             state.subfolders.items,
             key = { folderKey(it.id) },
             contentType = { "folder" }) { dir ->
@@ -585,36 +560,4 @@ fun DatePill(label: String) {
         color = LocalVVColors.current.datePillText,
         style = MaterialTheme.typography.labelSmall
     )
-}
-
-@Composable
-private fun SubfolderBar(state: LibraryUiState, onClick: () -> Unit) {
-    val colors = LocalVVColors.current
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 52.dp)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Box(
-            Modifier.size(32.dp).background(colors.accentSoft, CircleShape),
-            contentAlignment = Alignment.Center
-        ) { Icon(painterResource(R.drawable.ic_folder), null, tint = colors.accentText) }
-        Column(Modifier.weight(1f)) {
-            Text(
-                stringResource(
-                    R.string.subfolders_count,
-                    state.subfolders.items.size.toString() + if (state.subfolders.next.isNotEmpty()) "+" else ""
-                ), color = colors.accentText, style = MaterialTheme.typography.labelSmall
-            )
-            Text(
-                state.subfolders.items.take(SUBFOLDER_BAR_NAMES)
-                    .joinToString(stringResource(R.string.list_separator)) { it.name },
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Icon(painterResource(R.drawable.ic_chevron), null, tint = colors.textTertiary)
-    }
 }

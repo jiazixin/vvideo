@@ -809,3 +809,13 @@ device APK `95b97169e89e4688dfbc53608fd8a07327bba795c92160570d82191314de2d66`（
 - Go 改动：新增 `storage.Collect` 统一“查询—逐行扫描—检查 `rows.Err`—关闭”，替换 17 处手写循环；目录列名与扫描集中为 `directoryColumns`/`scanDirectory`；`RebuildGroups` 拆出按序遍历（认知复杂度 99→36，时间键改用整数绑定，比较语义不变）；`stage.merge` 拆为基线对比、单项观察与新增文件（59→阈值以下）；`Reconcile` 拆为清理孤立文件与清理缺文件台账（72→阈值以下），`Evict` 的删除抽成 `evictCover`；封面 FFmpeg 参数抽成 `coverArgs`；HEIF `readItem` 改用字段读取器；内建名 `close`、`open`/`Open` 同名、裸 return、无格式参数的 `fmt.Errorf` 等命名与可读性问题修正。净减少 89 行。
 - 未改：Kotlin 的长 Compose 函数（`PlayerRoute`、`LibraryRoute` 等）已在 d814486 拆分过，继续拆会改变重组范围、可能影响帧表现；`TelegramGroupedLayout` 为 Telegram 移植，保持与上游对照；`ST1005` 报的是以专有名词开头的错误信息。
 - 验证：macOS 与 Linux `go test -race` 通过；51 万行分组与深处定位 212 秒、搜索最慢 114 ms，与重构前（222 秒、116 ms）持平；Linux 黑盒端到端 345 项全部通过；HEIF 模糊测试 60 秒无发现。Kotlin 未改动，未重跑设备测试。`open-code-review-delegate` 审查 18/18 个 Go 文件，重构中自引入的一处 `sql.ErrNoRows` 误返回已在提交前修正。
+
+### 2026-10-22 混合目录子文件夹直接列出
+
+- 改动：既有子文件夹又有媒体的文件夹不再显示“子文件夹 · N”条和底部面板，而是把子文件夹作为列表行排在相册前，点一下进入（规则见 [DESIGN.md](DESIGN.md)“目录菜单与排序”）。服务端每页都带向前游标，客户端改为在分页窗口里记录“已加载的相册是否从开头开始”，子文件夹只在这种情况下显示。“回到开头”按钮也随之只在开头之前还有未加载内容、或已滚过第 3 个相册时显示；之前在开头它也一直显示。
+- 单元测试 70 项通过（新增 3 项：子文件夹排在相册前、不从开头开始时不显示子文件夹、分页窗口的开头标记），Lint 0 错误，debug/device/profile/release 与 benchmark 构建成功。
+- 设备测试（fixture，USB `adb reverse`）：`UiRedesignDeviceTest`、`TelegramUiDeviceTest` 通过；`PhotoDeviceTest` 1 项通过，`albumEndPositionSurvivesViewer` 因 fixture 根目录不满足前提被跳过（与上一轮相同）。
+- 黑盒 12 项通过：media 根目录 7 个子文件夹行全部在相册上方、无子文件夹条；点一下进入 `large`，返回后子文件夹行仍在；`mixed` 的 `nested` 在相册上方且可进入；滚进相册后回首页再进入停在相册；滚回子文件夹后强制停止再冷启动，回到顶部并显示子文件夹。首次实测发现“回到开头”后子文件夹不出现（服务端第一页也带向前游标），据此加入开头标记后重测通过。
+- 帧表现（profile APK，单次安装，测量时为修复下一条审查发现之前的构建）：`large` 相册 3 轮超限比例 0.76/0.67/0.78%，通过；media 根目录（子文件夹加相册）3 轮 1.47/0.09/0.17%，**1 轮超过 1% 门槛**，该轮最慢帧超出 4.4 ms；与历史记录中首轮偶发偏高的现象一致，本轮未做交替安装对比。
+- 审查：`open-code-review-delegate` 10/10 个文件，审查者与实现者为同一代理。有效发现 1 条（medium）：子文件夹加载更多的监听没有随“是否从开头开始”重启，超过 100 个子文件夹的混合目录在往前翻到开头后不会继续加载子文件夹；已修复，重跑单元测试、Lint 和构建，未重跑设备测试。最终 profile 包 `49e1a56a…` 已装回手机。
+- 测试前在应用沙箱内备份用户连接与书签，结束后还原并核对 md5 一致、删除备份；`adb reverse` 与 fixture 服务已停止。

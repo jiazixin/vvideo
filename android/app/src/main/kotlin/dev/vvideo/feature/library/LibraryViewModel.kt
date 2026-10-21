@@ -184,7 +184,7 @@ class LibraryViewModel(
         if (blocked) return
         shownPosition = FolderPosition(key, offset, width)
         val index = _state.value.albums.indexOfFirst { albumKey(it) == key }
-        if (index >= 0) save(index, offset, width)
+        if (index >= 0) save(index, offset, width) else if (isFolderKey(key)) saveStart()
     }
 
     fun back() {
@@ -300,7 +300,8 @@ class LibraryViewModel(
                 // Nothing suspends from here to the published state: the windows, the
                 // bookmark and the page change together, and a late reveal must not undo it.
                 reveal?.cancel()
-                mediaWindow.reset(first)
+                // Without an anchor the server starts at the folder's first media.
+                mediaWindow.reset(first, fromStart = !restore || saved?.anchor.isNullOrEmpty())
                 subfolderWindow.reset(subfolders)
                 windowDirectory = id
                 kept = null
@@ -324,7 +325,7 @@ class LibraryViewModel(
                     pathLabel = pathLabel(path),
                     sort = sort,
                     hasMedia = first.items.isNotEmpty() || (filter != null && current.hasMedia),
-                    hasPrevious = mediaWindow.previous.isNotEmpty(),
+                    hasPrevious = !mediaWindow.atStart,
                     albums = albums,
                     busy = false,
                     error = false,
@@ -499,7 +500,13 @@ class LibraryViewModel(
                 ensureActive()
                 if (round != generation) return@launch
                 if (page.items.isEmpty()) {
-                    if (previous) canPagePrevious = false else canPageNext = false
+                    if (previous) {
+                        canPagePrevious = false
+                        mediaWindow.reachedStart()
+                        _state.value = _state.value.copy(hasPrevious = false)
+                    } else {
+                        canPageNext = false
+                    }
                 } else {
                     if (previous) {
                         mediaWindow.prepend(page)
@@ -511,7 +518,7 @@ class LibraryViewModel(
                     val albums = albums()
                     _state.value = _state.value.copy(
                         albums = albums,
-                        hasPrevious = mediaWindow.previous.isNotEmpty(),
+                        hasPrevious = !mediaWindow.atStart,
                         error = false,
                         errorStatus = 0
                     )
@@ -587,6 +594,32 @@ class LibraryViewModel(
             revision = revision,
             savedAt = System.currentTimeMillis()
         )
+        scheduleSave()
+    }
+
+    /**
+     * Remembers the start of the folder as the bookmark: its subfolders sit above the
+     * first album, so a list scrolled to them is at its start.
+     */
+    private fun saveStart() {
+        val current = _state.value
+        if (blocked || current.error || !current.healthy || current.filter != null) return
+        if (current.albums.isEmpty() || current.hasPrevious) return
+        val base = bookmark ?: return
+        if (base.anchor.isEmpty()) return
+        bookmark = base.copy(
+            anchor = "",
+            neighbor = "",
+            fallback = "",
+            pixelOffset = 0,
+            width = 0,
+            revision = current.directory?.revision ?: 0L,
+            savedAt = System.currentTimeMillis()
+        )
+        scheduleSave()
+    }
+
+    private fun scheduleSave() {
         if (saveJob?.isActive != true) saveJob = persistScope.launch {
             delay(BOOKMARK_SAVE_DELAY_MS)
             bookmark?.let { repository.saveBookmark(it) }

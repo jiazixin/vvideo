@@ -3,7 +3,6 @@ package dev.vvideo.feature.library
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import coil3.ImageLoader
-import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
@@ -20,7 +19,6 @@ fun LibraryScreen(
     onBack: () -> Unit,
     onOpen: (Long) -> Unit,
     onSort: (Sort) -> Unit,
-    onMoreSubfolders: (PageEdge) -> Unit,
     onRetry: () -> Unit,
     onMedia: (Media) -> Unit,
     onFilter: (MediaKind?) -> Unit = {},
@@ -42,7 +40,6 @@ fun LibraryScreen(
         onBack = onBack,
         onOpen = onOpen,
         onSort = onSort,
-        onMoreSubfolders = onMoreSubfolders,
         onRetry = onRetry,
         onMedia = onMedia,
         onFilter = onFilter,

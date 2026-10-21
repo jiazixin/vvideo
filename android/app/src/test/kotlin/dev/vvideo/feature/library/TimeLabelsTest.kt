@@ -134,7 +134,7 @@ class TimeLabelsTest {
                 subfolders = Subfolders(listOf(Directory(4, "l", 1, "child", 1)))
             )
         val keys = libraryKeys(state)
-        assertEquals(listOf("subfolder-bar", "date:a", "album:a", "date:b", "album:b"), keys)
+        assertEquals(listOf("folder:4", "date:a", "album:a", "date:b", "album:b"), keys)
         assertEquals(4, restoreIndex(keys, albums, "missing", "b"))
         assertEquals(2, restoreIndex(keys, albums, "album:a", "b"))
         assertNull(restoreIndex(keys, albums, "gone", "gone"))

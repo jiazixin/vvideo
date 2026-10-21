@@ -11,9 +11,6 @@ private const val FOLDER_KEY_PREFIX = "folder:"
 /** Prefix of the lazy-list key of a date row; the rest is the first media ID of its album. */
 private const val DATE_KEY_PREFIX = "date:"
 
-/** Lazy-list key of the zero-height row that stands for the subfolder bar. */
-const val SUBFOLDER_BAR_KEY = "subfolder-bar"
-
 /** Lazy-list content type of date rows. */
 const val DATE_CONTENT_TYPE = "date"
 
@@ -26,16 +23,25 @@ fun folderKey(directoryId: Long): String = FOLDER_KEY_PREFIX + directoryId
 /** The lazy-list key of the date row above an album. */
 fun dateKey(album: Album): String = DATE_KEY_PREFIX + album.items.first().id
 
+/** Whether [key] is a subfolder row. */
+fun isFolderKey(key: String): Boolean = key.startsWith(FOLDER_KEY_PREFIX)
+
+/** Whether [key] is a row a list position is kept by: an album or a subfolder. */
+fun isPositionKey(key: String): Boolean = key.startsWith(ALBUM_KEY_PREFIX) || isFolderKey(key)
+
+/**
+ * Subfolders sit above the folder's first album, so they are listed only while the
+ * loaded albums start at the beginning; a window further in shows them once paging
+ * back reaches the start.
+ */
+fun subfoldersShown(state: LibraryUiState): Boolean = state.albums.isEmpty() || !state.hasPrevious
+
 /** The lazy-list keys of a folder page, in display order. */
 fun libraryKeys(state: LibraryUiState): List<String> = buildList {
-    if (state.albums.isEmpty()) {
-        addAll(state.subfolders.items.map { folderKey(it.id) })
-    } else {
-        if (state.subfolders.items.isNotEmpty()) add(SUBFOLDER_BAR_KEY)
-        state.albums.forEach { album ->
-            if (album.dateLabel != null) add(dateKey(album))
-            add(albumKey(album))
-        }
+    if (subfoldersShown(state)) addAll(state.subfolders.items.map { folderKey(it.id) })
+    state.albums.forEach { album ->
+        if (album.dateLabel != null) add(dateKey(album))
+        add(albumKey(album))
     }
 }
 

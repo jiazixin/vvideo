@@ -58,13 +58,8 @@ class LibraryScrollBenchmark {
                 }
                 check(device.hasObject(By.desc("设置"))) { "Synthetic home not reached" }
                 checkNotNull(device.wait(Until.findObject(By.text("media")), 5000)).click()
-                checkNotNull(
-                    device.wait(
-                        Until.findObject(By.textStartsWith("子文件夹 ·")),
-                        10000
-                    )
-                ).click()
-                checkNotNull(device.wait(Until.findObject(By.text("large")), 5000)).click()
+                // Subfolders are listed above the albums of a folder that has both.
+                checkNotNull(device.wait(Until.findObject(By.text("large")), 10000)).click()
             }
             check(
                 device.wait(
