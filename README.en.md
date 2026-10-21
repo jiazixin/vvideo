@@ -42,7 +42,7 @@ Scope of this release: home network only, original-quality playback, Android onl
 - SQLite in WAL mode with one writer and four read-only connections; the database lives on local disk while media may sit on a network mount.
 - Durable background jobs for `ffprobe` metadata and one WebP cover per video, with bounded concurrency and a disk-budgeted LRU cover cache. Scans, probes and covers keep running during playback, limited by their worker counts.
 - Global sorting by capture time, modification time or name, with cursor paging and stable anchors so clients can restore a position deep inside a folder. Name search covers a folder's whole subtree with bounded results.
-- Bearer-token API with HTTP Range, ETag and per-version checks, so a client never mixes bytes from an old and a new version of a file. Optional MP4 index hints let the client prefetch `moov` at its original offset.
+- Bearer-token API with HTTP Range, ETag and per-version checks, so a client never mixes bytes from an old and a new version of a file. Optional index hints let the client prefetch the MP4 `moov`, the MKV/WebM Cues and the TS duration tail at their original offsets.
 - Scheduled scans (cron), strict configuration validation, structured logs and graceful shutdown.
 
 **Android app (Kotlin, Compose, Media3)**
@@ -82,7 +82,7 @@ Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (inde
 │   ├── probe/          ffprobe and EXIF metadata
 │   ├── scanner/        two-pass directory observation and publication
 │   ├── storage/        SQLite ownership, connections and schema
-│   ├── streaming/      Range responses and MP4 index hints
+│   ├── streaming/      Range responses and container index hints
 │   └── thumbnail/      cover generation and LRU cache
 ├── tests/              cross-package Go integration tests
 ├── configs/            configuration example (local copies are git-ignored)

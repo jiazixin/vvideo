@@ -645,3 +645,13 @@ ADB 主机命令 exit 0 不代表测试成功：这是主动停止冻结 runner 
 整理后相册两轮超过 1% 门槛，未达标，如实保留。trace 对比显示超标轮与同一安装的正常轮 Compose 工作量相同（recompose 188 ms 对 188.8 ms，预取测量 80 对 74 ms），只有 `draw-VRI` 合计变慢（883 对 762 ms），更像设备侧波动；但整理前 18 轮未出现，不能据此宣称相册帧表现已通过。
 - **数据外移**：`allowBackup="false"` 外新增 `dataExtractionRules`（云备份与设备间传输均排除全部域）和 Android 11 及以下的 `fullBackupContent`；仅经 lint 验证，未实际做换机传输。
 - **手机状态**：测试会改写连接，测试前用 debug 包在应用沙箱内备份连接与书签，测试后还原并核对 md5 一致、删除备份，最后装回修复后的 `profile` 包。
+
+## 2026-10-21：TS / MKV 预加载索引提示
+
+起因：同日 iQOO 12 Pro 阶段追踪（分支 `claude/frosty-sutherland-117244` 的 `50f028f`，原始数据 `test-results/prefetch-2026-10-21/`）显示，有预取时 MP4/MOV 尾部 moov 已命中缓存，但 MKV 在轨道就绪前仍有一次 88 字节的尾部网络读取，TS 有一次 112,800 字节的尾部读取，原因是服务端没有为这两种容器提示范围。
+
+- `GET /v1/media/{id}/index` 新增：`.ts` 提示末尾 min(文件大小, 112,800) 字节，只依据索引中的版本大小，不读文件；`.mkv`/`.webm` 在第一个 Cluster 之前读取顶层元素，按 SeekHead 的 Cues 位置（相对 Segment 数据起点）给出整个 Cues 元素，Cues 先于 Cluster 出现时直接给出该元素。沿用 MP4 的解析上限（10000 个元素、5 秒、索引 32 MB），SeekHead 上限 1 MB；格式异常、超限或解析后文件版本变化时返回空范围，播放走普通 Range。`.m2ts`、`.avi` 不提示。客户端 8 MiB `PreloadBudget`、最多 4 个提示范围、版本缓存键均未改。
+- 行为依据：Media3 1.8.1 `media3-extractor` 字节码核对 `TsDurationReader.readLastPcrValue` 从 `length - min(112800, length)` 读取，`MatroskaExtractor` 以 `segmentContentPosition + SeekPosition` 作为 Cues 跳转位置。
+- 本机只读核对追踪样本：`05-h264.mkv`、`06-hevc.mkv`、`07-av1.mkv` 解析出的 Cues 偏移与长度（1205932/88、1313028/88、906513/88）和追踪里播放器的网络读取完全一致；`08-h264.ts`、`09-hevc.ts` 的提示（1183648、1328596 起 112,800 字节）同样一致。另 3 个下载 WebM 样本也能解析出尾部 Cues。
+- 测试：`internal/streaming` 新增 TS 末尾、SeekHead→Cues（已知/未知 Segment 大小）、Cluster 前 Cues、9 类异常回退、取消与超 32 MB Cues 的单元测试；`tests/` 新增经 API 的 MP4/MKV/WebM/TS/短 TS/损坏 MKV/AVI 用例，核对每个提示范围与 `/bytes` 同偏移返回的原字节一致、旧版本返回 409。`gofmt`、`go vet`（darwin、linux/amd64）与 `go test -race -count=1 ./...` 通过。
+- **未做真机复测**：预计每次 TS/MKV 切换省去一次网络往返（回环约 10–15 ms，Wi-Fi 可能更多），这是推算，不是实测；首帧门槛 750/500/500 ms 不变。手机为多会话共用，复测须经用户同意后另行安排。

@@ -3,16 +3,22 @@ package tests
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
+	"vvideo/internal/app"
 	"vvideo/internal/jobs"
+	"vvideo/internal/library"
 	"vvideo/internal/streaming"
 )
 
@@ -259,5 +265,102 @@ func TestStreamOutlivesServerWriteTimeout(t *testing.T) {
 	}
 	if received != len(data) || time.Since(started) < 300*time.Millisecond {
 		t.Fatalf("received %d of %d bytes in %s", received, len(data), time.Since(started))
+	}
+}
+
+// matroskaFixture builds a minimal Matroska file whose SeekHead names trailing
+// Cues, and returns it with the Cues range.
+func matroskaFixture() ([]byte, streaming.Range) {
+	element := func(id []byte, children ...[]byte) []byte {
+		size := binary.BigEndian.AppendUint64(nil, uint64(len(bytes.Join(children, nil)))|1<<56)
+		return slices.Concat(append(id, size...), bytes.Join(children, nil))
+	}
+	position := make([]byte, 8)
+	seekHead := func() []byte {
+		entry := element([]byte{0x4D, 0xBB}, element([]byte{0x53, 0xAB}, []byte{0x1C, 0x53, 0xBB, 0x6B}), element([]byte{0x53, 0xAC}, position))
+		return element([]byte{0x11, 0x4D, 0x9B, 0x74}, entry)
+	}
+	cluster := element([]byte{0x1F, 0x43, 0xB6, 0x75}, make([]byte, 64<<10))
+	binary.BigEndian.PutUint64(position, uint64(len(seekHead())+len(cluster)))
+	cues := element([]byte{0x1C, 0x53, 0xBB, 0x6B}, element([]byte{0xBB}))
+	data := slices.Concat(element([]byte{0x1A, 0x45, 0xDF, 0xA3}), element([]byte{0x18, 0x53, 0x80, 0x67}, seekHead(), cluster, cues))
+	return data, streaming.Range{Offset: int64(len(data) - len(cues)), Length: int64(len(cues))}
+}
+
+// Each container's hints are served for the current version only, and every
+// hinted range is the same bytes /bytes returns at that original offset.
+func TestIndexHintsPerContainer(t *testing.T) {
+	i, scan, root := setup(t)
+	box := func(kind string, n int) []byte {
+		b := make([]byte, n)
+		binary.BigEndian.PutUint32(b, uint32(n))
+		copy(b[4:8], kind)
+		return b
+	}
+	mkv, cues := matroskaFixture()
+	ts := bytes.Repeat(append([]byte{0x47}, make([]byte, 187)...), 1000)
+	files := map[string]struct {
+		data []byte
+		want []streaming.Range
+	}{
+		"clip.mp4":    {bytes.Join([][]byte{box("ftyp", 16), box("mdat", 4096), box("moov", 64)}, nil), []streaming.Range{{Offset: 0, Length: 16}, {Offset: 4112, Length: 64}}},
+		"clip.mkv":    {mkv, []streaming.Range{cues}},
+		"clip.webm":   {mkv, []streaming.Range{cues}},
+		"clip.ts":     {ts, []streaming.Range{{Offset: 188000 - 112800, Length: 112800}}},
+		"short.ts":    {ts[:1880], []streaming.Range{{Offset: 0, Length: 1880}}},
+		"broken.mkv":  {[]byte("not a matroska file"), []streaming.Range{}},
+		"unknown.avi": {mkv, []streaming.Range{}},
+	}
+	for name, f := range files {
+		if err := os.WriteFile(filepath.Join(root, name), f.data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scan.Run(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	libs, err := i.Libraries(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := i.List(t.Context(), libs[0].DirectoryID, library.ListOptions{})
+	if err != nil || len(page.Items) != len(files) {
+		t.Fatalf("listed %d of %d: %v", len(page.Items), len(files), err)
+	}
+	handler := (&app.App{Config: scan.Config, Index: i, Stream: streaming.New(i, jobs.NewPriority())}).Handler()
+	get := func(url, byteRange string) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(t.Context(), "GET", url, nil)
+		r.Header.Set("Authorization", "Bearer fixture")
+		if byteRange != "" {
+			r.Header.Set("Range", byteRange)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	for _, item := range page.Items {
+		t.Run(item.Name, func(t *testing.T) {
+			f := files[item.Name]
+			w := get("/v1/media/"+item.ID+"/index?version="+item.Version, "")
+			if w.Code != 200 {
+				t.Fatalf("status %d", w.Code)
+			}
+			var hints streaming.Hints
+			if err := json.Unmarshal(w.Body.Bytes(), &hints); err != nil {
+				t.Fatal(err)
+			}
+			if hints.Version != item.Version || hints.Size != int64(len(f.data)) || !slices.Equal(hints.Ranges, f.want) || hints.Ranges == nil {
+				t.Fatalf("hints %+v want %+v", hints, f.want)
+			}
+			for _, r := range hints.Ranges {
+				w := get("/v1/media/"+item.ID+"/bytes?version="+item.Version, fmt.Sprintf("bytes=%d-%d", r.Offset, r.Offset+r.Length-1))
+				if w.Code != 206 || !bytes.Equal(w.Body.Bytes(), f.data[r.Offset:r.Offset+r.Length]) {
+					t.Fatalf("range %+v served %d bytes, status %d", r, w.Body.Len(), w.Code)
+				}
+			}
+			if w := get("/v1/media/"+item.ID+"/index?version=stale", ""); w.Code != 409 {
+				t.Fatalf("stale version status %d", w.Code)
+			}
+		})
 	}
 }

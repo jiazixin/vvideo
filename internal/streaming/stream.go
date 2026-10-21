@@ -1,5 +1,5 @@
 // Package streaming serves original media bytes over HTTP Range requests and
-// locates the MP4 index boxes a client may prefetch.
+// locates the container index ranges a client may prefetch.
 package streaming
 
 import (
@@ -26,12 +26,17 @@ const (
 	// never cut off while a stalled client still releases its slot.
 	writeIdleTimeout = 60 * time.Second
 
-	// MP4 index search limits: a file whose moov box lies beyond these simply
-	// gets no hints and plays through ordinary Range requests.
+	// Index search limits: a file whose index lies beyond these simply gets
+	// no hints and plays through ordinary Range requests.
 	maxIndexBoxes   = 10000
 	indexSearchTime = 5 * time.Second
 	maxFtypSize     = 1 << 20
-	maxMoovSize     = 32 << 20
+	maxIndexSize    = 32 << 20
+
+	// tsTailBytes is the transport-stream tail Media3's TsExtractor reads for
+	// the last PCR before tracks are ready: its default timestamp search of
+	// 600 packets of 188 bytes.
+	tsTailBytes = 600 * 188
 )
 
 // Handler serves original media bytes with Range support. It rejects bytes
@@ -214,7 +219,7 @@ func MP4Ranges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, error) 
 				out = append(out, Range{Offset: offset, Length: length})
 			}
 		case "moov":
-			if length > maxMoovSize {
+			if length > maxIndexSize {
 				return nil, errors.New("index exceeds 32 MB")
 			}
 			out = append(out, Range{Offset: offset, Length: length})
@@ -223,4 +228,15 @@ func MP4Ranges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, error) 
 		offset += length
 	}
 	return nil, errors.New("ordinary MP4 index not found")
+}
+
+// TSRanges returns the last min(size, 112,800) bytes of a transport stream,
+// which Media3 reads for the duration before its tracks are ready. The range
+// depends only on the indexed size, so no file read is needed.
+func TSRanges(size int64) []Range {
+	if size <= 0 {
+		return []Range{}
+	}
+	n := min(size, tsTailBytes)
+	return []Range{{Offset: size - n, Length: n}}
 }

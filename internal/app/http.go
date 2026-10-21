@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -195,8 +196,16 @@ func (a *App) indexHints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hints := streaming.Hints{Version: item.Version, Size: item.Size, Ranges: []streaming.Range{}}
+	var parse func(context.Context, io.ReaderAt, int64) ([]streaming.Range, error)
 	switch strings.ToLower(filepath.Ext(item.Name)) {
 	case ".mp4", ".mov", ".m4v":
+		parse = streaming.MP4Ranges
+	case ".mkv", ".webm":
+		parse = streaming.MatroskaRanges
+	case ".ts":
+		hints.Ranges = streaming.TSRanges(item.Size)
+	}
+	if parse != nil {
 		f, validate, err := a.Index.OpenMedia(r.Context(), item)
 		if err != nil {
 			writeError(w, r, err)
@@ -205,7 +214,7 @@ func (a *App) indexHints(w http.ResponseWriter, r *http.Request) {
 		defer f.Close()
 		// Hints are optional: a malformed or oversized index falls back to
 		// ordinary Range playback with no ranges.
-		if ranges, err := streaming.MP4Ranges(r.Context(), f, item.Size); err == nil && validate() == nil {
+		if ranges, err := parse(r.Context(), f, item.Size); err == nil && validate() == nil {
 			hints.Ranges = ranges
 		}
 	}
