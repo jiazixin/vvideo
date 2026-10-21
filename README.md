@@ -42,7 +42,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 - SQLite WAL 模式，一个写连接、四个只读连接；数据库放本机磁盘，媒体可以位于网络挂载盘。
 - 持久化后台任务：`ffprobe` 元信息探测，每个视频生成一张 WebP 封面；并发受限，封面缓存按磁盘预算做 LRU 淘汰。播放期间扫描、探测和抽帧照常进行，由各自的并发数限制。
 - 按拍摄时间、修改时间或文件名全局排序，游标分页并带稳定锚点，客户端可以恢复到大目录深处的位置。按名称搜索覆盖整个子目录树，结果数量有上限。
-- Bearer 令牌鉴权的 API，支持 HTTP Range、ETag 和逐版本校验，客户端不会混用同一文件新旧版本的字节。可选的 MP4 索引提示让客户端按原始偏移预取 `moov`。
+- Bearer 令牌鉴权的 API，支持 HTTP Range、ETag 和逐版本校验，客户端不会混用同一文件新旧版本的字节。可选的索引提示让客户端按原始偏移预取 MP4 的 `moov`、MKV/WebM 的 Cues 和 TS 的末尾时长区。
 - 定时扫描（cron）、严格的配置校验、结构化日志和优雅退出。
 
 **安卓应用（Kotlin、Compose、Media3）**
@@ -82,7 +82,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 │   ├── probe/          ffprobe 与 EXIF 元信息
 │   ├── scanner/        两遍观测目录并发布结果
 │   ├── storage/        SQLite 独占、连接与 schema
-│   ├── streaming/      Range 响应与 MP4 索引提示
+│   ├── streaming/      Range 响应与容器索引提示
 │   └── thumbnail/      封面生成与 LRU 缓存
 ├── tests/              Go 跨包集成测试
 ├── configs/            配置示例（本地配置被 Git 忽略）

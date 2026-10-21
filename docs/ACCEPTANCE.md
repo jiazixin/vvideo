@@ -708,6 +708,17 @@ device APK `95b97169e89e4688dfbc53608fd8a07327bba795c92160570d82191314de2d66`（
 | 默认矩阵原始日志与汇总 | `final-controlled.log`、`final-controlled-summary.json` |
 | 4K 样本生成脚本 | `gen4k.sh` |
 
+## 2026-10-21：TS / MKV 预加载索引提示
+
+起因：同日 iQOO 12 Pro 阶段追踪（分支 `claude/frosty-sutherland-117244` 的 `50f028f`，原始数据 `test-results/prefetch-2026-10-21/`）显示，有预取时 MP4/MOV 尾部 moov 已命中缓存，但 MKV 在轨道就绪前仍有一次 88 字节的尾部网络读取，TS 有一次 112,800 字节的尾部读取，原因是服务端没有为这两种容器提示范围。
+
+- `GET /v1/media/{id}/index` 新增：`.ts` 提示末尾 min(文件大小, 112,800) 字节，只依据索引中的版本大小，不读文件；`.mkv`/`.webm` 在第一个 Cluster 之前读取顶层元素，按 SeekHead 的 Cues 位置（相对 Segment 数据起点）给出整个 Cues 元素，Cues 先于 Cluster 出现时直接给出该元素。沿用 MP4 的解析上限（10000 个元素、5 秒、索引 32 MB），SeekHead 上限 1 MB；格式异常、超限或解析后文件版本变化时返回空范围，播放走普通 Range。`.m2ts`、`.avi` 不提示。客户端 8 MiB `PreloadBudget`、最多 4 个提示范围、版本缓存键均未改。
+- 行为依据：Media3 1.8.1 `media3-extractor` 字节码核对 `TsDurationReader.readLastPcrValue` 从 `length - min(112800, length)` 读取，`MatroskaExtractor` 以 `segmentContentPosition + SeekPosition` 作为 Cues 跳转位置。
+- 本机只读核对追踪样本：`05-h264.mkv`、`06-hevc.mkv`、`07-av1.mkv` 解析出的 Cues 偏移与长度（1205932/88、1313028/88、906513/88）和追踪里播放器的网络读取完全一致；`08-h264.ts`、`09-hevc.ts` 的提示（1183648、1328596 起 112,800 字节）同样一致。另 3 个下载 WebM 样本也能解析出尾部 Cues。
+- 测试：`internal/streaming` 新增 TS 末尾、SeekHead→Cues（已知/未知 Segment 大小）、Cluster 前 Cues、9 类异常回退、取消与超 32 MB Cues 的单元测试；`tests/` 新增经 API 的 MP4/MKV/WebM/TS/短 TS/损坏 MKV/AVI 用例，核对每个提示范围与 `/bytes` 同偏移返回的原字节一致、旧版本返回 409。`gofmt`、`go vet`（darwin、linux/amd64）与 `go test -race -count=1 ./...` 通过。
+- **真机复测**：提交时只是推算（每次 TS/MKV 切换省去一次网络往返，回环约 10–15 ms）；经用户同意后的 A/B 实测见下节。首帧门槛 750/500/500 ms 不变。
+- **合并前审查**：`open-code-review-delegate`（提供方密钥 401 时的约定方式）审查 `6925a45` 的 `internal/app/http.go`、`internal/streaming/matroska.go`、`internal/streaming/stream.go` 与 `50f028f` 的 `DevicePlaybackTest.kt`，4/4 文件覆盖，无 critical/high/medium 发现；`*_test.go` 按工具默认规则排除。已知限制：SeekHead 链式指向另一个 SeekHead 时不跟随，按设计退回普通 Range。
+
 ### 服务端 TS/MKV 预取提示 A/B（6925a45）
 
 比较两种服务端：A 是 `b7ca5dc` 的 Go 源码（二进制 `59d384f9…`，由 50f028f 构建，该提交未改 Go 文件）；B 是 `claude/interesting-murdock-734060` 的 `6925a45`（二进制 `3ee656ba…`），给 TS 加提示末尾 112,800 字节，给 MKV 加提示 Cues 范围。除服务端二进制外条件都相同：
