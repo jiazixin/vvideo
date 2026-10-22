@@ -92,7 +92,7 @@ Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (inde
 └── docs/               design, API, deployment, decisions, plans and acceptance records
 ```
 
-Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规范.md](安卓目录规范.md) (Android) and the [project layout decision](docs/decisions/2026-10-08-project-layout.md), which also lists the project's documented exceptions.
+Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规范.md](安卓目录规范.md) (Android) and the [project layout decision](docs/decisions/2026-10-08-project-layout.md), which also lists the project's documented exceptions. [iOS目录规范.md](iOS目录规范.md) is a general iOS baseline kept with the repository; this project has no iOS app.
 
 ## Getting started
 
