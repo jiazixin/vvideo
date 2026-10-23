@@ -128,19 +128,30 @@ chmod 600 configs/config.local.yaml
 bin/vvideo --config configs/config.local.yaml
 ```
 
-SQLite 数据目录放在服务器本机磁盘，不要放在 SMB/NFS 上；媒体目录可以是网络挂载。发布构建可用 `-ldflags "-X main.version=v1.0.0"` 写入版本号，否则 `--version` 显示 Go 根据 Git 推导的版本。
+SQLite 数据目录放在服务器本机磁盘，不要放在 SMB/NFS 上；媒体目录可以是网络挂载。发布构建可用 `-ldflags "-X main.version=v1.0.0"` 写入版本号，否则 `--version` 显示 Go 根据 Git 推导的版本，输出形如 `vvideo v1.0.0 (revision=0123456789ab)`。
 
 ```text
+vvideo - serve an existing media library to the VVideo Android app
+
 Usage:
   vvideo [options]
 
 Options:
-  -c, --config <file>   Configuration file (default: ./configs/config.local.yaml)
-  -v, --version         Print version information and exit
-  -h, --help            Print this help and exit
+  -c, --config <file>  Configuration file (default: configs/config.local.yaml)
+  -h, --help           Print this help and exit
+      --version        Print version information and exit
+
+Environment:
+  CONFIG_FILE          Configuration file, used when --config is not given
+  VVIDEO_<SECTION>__<KEY>
+                       Override one setting, e.g. VVIDEO_AUTH__TOKEN or
+                       VVIDEO_CACHE__PATH; takes precedence over the file
+
+Relative paths inside the configuration file resolve against its directory.
+ffmpeg (with libwebp) and ffprobe must be on PATH.
 ```
 
-退出码：成功、`--help` 或 `--version` 为 0；命令行错误为 2；服务无法启动或运行失败为 1。启动失败时记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、配置文件及出错行、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作：进行中的 HTTP 请求最多再等 10 秒，之后仍未结束的连接（例如已停止读取的播放流）被关闭；整个停止过程不超过 30 秒。
+退出码：成功、`--help` 或 `--version` 为 0（帮助与版本输出到 stdout，不读取配置）；命令行错误为 2；服务无法启动或运行失败为 1。命令行错误、配置错误（含配置文件及出错行）和日志文件无法打开时，以 `vvideo: <错误>` 纯文本写入 stderr，命令行错误另附 `Run 'vvideo --help' for usage.`。日志就绪后的启动失败记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作：进行中的 HTTP 请求最多再等 10 秒，之后仍未结束的连接（例如已停止读取的播放流）被关闭；整个停止过程不超过 30 秒。
 
 ### 构建并安装安卓应用
 
@@ -159,7 +170,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 [configs/config.example.yaml](configs/config.example.yaml) 列出全部支持的字段。只有 `auth.token` 和至少一个 `media[].path` 是必填项，其余都有默认值。配置只在启动时读取，修改后需要重启。
 
-**选择配置文件。** `-c`/`--config`（也可写 `--config=<file>`，以最后一个为准）优先于 `CONFIG_FILE`，后者优先于工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式指定的文件为空、不存在、不可读或格式错误时报错；只有隐式默认文件允许不存在，此时必须由环境变量提供必填项。
+**选择配置文件。** `-c`/`--config`（也可写 `--config=<file>`；同时给出不同文件时报命令行错误）优先于 `CONFIG_FILE`，后者优先于工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式指定的文件为空、不存在、不可读或格式错误时报错；只有隐式默认文件允许不存在，此时必须由环境变量提供必填项。
 
 **优先级与环境变量。** `VVIDEO_*` 环境变量覆盖 YAML 文件，YAML 覆盖默认值。变量名为 `VVIDEO_` 加大写字段路径，层级之间用 `__` 连接，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA` 和 `VVIDEO_IGNORE` 用 `{"path": "..."}` 对象组成的 JSON 数组替换整个列表。未知或旧字段、重复键、YAML 别名和标签、类型错误、必填项为空都会被拒绝。不加载 `.env`，YAML 中也不做变量替换。
 

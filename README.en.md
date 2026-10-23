@@ -128,19 +128,30 @@ chmod 600 configs/config.local.yaml
 bin/vvideo --config configs/config.local.yaml
 ```
 
-Put the SQLite data directory on the server's local disk, not on SMB/NFS; media folders may be network mounts. For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git.
+Put the SQLite data directory on the server's local disk, not on SMB/NFS; media folders may be network mounts. For a release build, stamp the version with `-ldflags "-X main.version=v1.0.0"`; otherwise `--version` reports the version Go derives from Git, printed like `vvideo v1.0.0 (revision=0123456789ab)`.
 
 ```text
+vvideo - serve an existing media library to the VVideo Android app
+
 Usage:
   vvideo [options]
 
 Options:
-  -c, --config <file>   Configuration file (default: ./configs/config.local.yaml)
-  -v, --version         Print version information and exit
-  -h, --help            Print this help and exit
+  -c, --config <file>  Configuration file (default: configs/config.local.yaml)
+  -h, --help           Print this help and exit
+      --version        Print version information and exit
+
+Environment:
+  CONFIG_FILE          Configuration file, used when --config is not given
+  VVIDEO_<SECTION>__<KEY>
+                       Override one setting, e.g. VVIDEO_AUTH__TOKEN or
+                       VVIDEO_CACHE__PATH; takes precedence over the file
+
+Relative paths inside the configuration file resolve against its directory.
+ffmpeg (with libwebp) and ffprobe must be on PATH.
 ```
 
-The exit status is 0 on success, `--help` or `--version`; 2 for a command-line error; and 1 when the service cannot start or fails. A failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a configuration file and line, a database already locked by another process, or a port already in use. SIGTERM cancels background work: in-flight HTTP requests get up to 10 more seconds, after which connections still open (such as a stream to a client that stopped reading) are closed; the whole stop takes at most 30 seconds.
+The exit status is 0 on success, `--help` or `--version` (both print to stdout without reading configuration); 2 for a command-line error; and 1 when the service cannot start or fails. Command-line errors, configuration errors (including the file and line) and an unopenable log file are written to stderr as plain text `vvideo: <error>`; command-line errors add `Run 'vvideo --help' for usage.`. Once logging is set up, a failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a database already locked by another process, or a port already in use. SIGTERM cancels background work: in-flight HTTP requests get up to 10 more seconds, after which connections still open (such as a stream to a client that stopped reading) are closed; the whole stop takes at most 30 seconds.
 
 ### Build and install the Android app
 
@@ -159,7 +170,7 @@ Build variants, device tests and performance measurement are described in [andro
 
 [configs/config.example.yaml](configs/config.example.yaml) lists every supported field. Only `auth.token` and at least one `media[].path` are required; everything else has a default. Configuration is read once at startup, so changes need a restart.
 
-**Choosing the file.** `-c`/`--config` (also `--config=<file>`; the last one wins) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
+**Choosing the file.** `-c`/`--config` (also `--config=<file>`; naming different files is a command-line error) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
 
 **Precedence and environment variables.** `VVIDEO_*` environment variables override the YAML file, which overrides the defaults. A variable name is `VVIDEO_` plus the uppercase field path with `__` between levels, for example `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA` and `VVIDEO_IGNORE` replace the whole list with a JSON array of `{"path": "..."}` objects. Unknown or legacy fields, duplicate keys, YAML aliases and tags, wrong types and empty required values are rejected. There is no `.env` loading and no variable interpolation in YAML.
 

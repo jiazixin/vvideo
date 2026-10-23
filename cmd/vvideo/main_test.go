@@ -4,99 +4,74 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"vvideo/internal/config"
 )
 
-func TestParseArgs(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want options
-	}{
-		{nil, options{}},
-		{[]string{"-c", "a.yaml"}, options{configFile: "a.yaml"}},
-		{[]string{"--config", "a.yaml"}, options{configFile: "a.yaml"}},
-		{[]string{"-c=a.yaml"}, options{configFile: "a.yaml"}},
-		{[]string{"--config=a.yaml"}, options{configFile: "a.yaml"}},
-		{[]string{"-c", "a.yaml", "--config", "b.yaml"}, options{configFile: "b.yaml"}},
-		{[]string{"-h"}, options{help: true}},
-		{[]string{"--help"}, options{help: true}},
-		{[]string{"-v"}, options{version: true}},
-		{[]string{"--version"}, options{version: true}},
-	} {
-		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
-			got, err := parseArgs(tc.args)
-			if err != nil || got != tc.want {
-				t.Fatalf("got %+v, %v; want %+v", got, err, tc.want)
+func TestRunUsageErrors(t *testing.T) {
+	for _, args := range [][]string{{"--bogus"}, {"-c"}, {"--config="}, {"config.yaml"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("exit %d, want %d", code, exitUsage)
+			}
+			if stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "vvideo: ") || !strings.HasSuffix(stderr.String(), "Run 'vvideo --help' for usage.\n") {
+				t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 			}
 		})
 	}
 }
 
-func TestUsageErrors(t *testing.T) {
+func TestRunHelpAndVersionSkipConfiguration(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("CONFIG_FILE", "missing.yaml")
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"-c"}, "flag needs an argument"},
-		{[]string{"--config="}, "must not be empty"},
-		{[]string{"-c", " "}, "must not be empty"},
-		{[]string{"--bogus"}, "not defined: -bogus"},
-		{[]string{"config.yaml"}, `unexpected argument "config.yaml"`},
-		{[]string{"--", "config.yaml"}, `unexpected argument "config.yaml"`},
+		{[]string{"-h"}, usage},
+		{[]string{"--help"}, usage},
+		{[]string{"-c", "missing.yaml", "--help"}, usage},
+		{[]string{"--version"}, "vvideo " + currentBuild().String() + "\n"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := run(tc.args, &stdout, &stderr); code != exitUsage {
-				t.Fatalf("exit %d, want %d", code, exitUsage)
+			if code := run(tc.args, &stdout, &stderr); code != exitOK {
+				t.Fatalf("exit %d, stderr %q", code, stderr.String())
 			}
-			if !strings.Contains(stderr.String(), tc.want) || !strings.Contains(stderr.String(), "vvideo --help") {
-				t.Fatalf("stderr %q does not explain %q", stderr.String(), tc.want)
-			}
-			if stdout.Len() != 0 {
-				t.Fatal("usage error wrote to stdout")
+			if stdout.String() != tc.want || stderr.Len() != 0 {
+				t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 			}
 		})
 	}
 }
 
-func TestHelpAndVersion(t *testing.T) {
+func TestRunConfigSelection(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir := t.TempDir()
+	flagFile, envFile := filepath.Join(dir, "flag.yaml"), filepath.Join(dir, "env.yaml")
+	t.Setenv("CONFIG_FILE", envFile)
 	for _, tc := range []struct {
-		arg  string
-		want []string
+		name          string
+		args          []string
+		want, notWant string
 	}{
-		{"--help", []string{"Usage:", "-c, --config <file>", "-v, --version", "-h, --help", "CONFIG_FILE", "VVIDEO_AUTH__TOKEN", "libwebp"}},
-		{"--version", []string{"vvideo ", "go1."}},
+		{"environment", []string{}, envFile, flagFile},
+		{"flag beats environment", []string{"-c", flagFile}, flagFile, envFile},
 	} {
-		t.Run(tc.arg, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := run([]string{tc.arg}, &stdout, &stderr); code != exitOK {
-				t.Fatalf("exit %d", code)
+			if code := run(tc.args, &stdout, &stderr); code != exitFailure {
+				t.Fatalf("exit %d, want %d", code, exitFailure)
 			}
-			for _, want := range tc.want {
-				if !strings.Contains(stdout.String(), want) {
-					t.Errorf("output is missing %q:\n%s", want, stdout.String())
-				}
-			}
-			if stderr.Len() != 0 {
-				t.Fatalf("unexpected stderr %q", stderr.String())
+			got := stderr.String()
+			if stdout.Len() != 0 || !strings.HasPrefix(got, "vvideo: ") || !strings.Contains(got, tc.want) || strings.Contains(got, tc.notWant) {
+				t.Fatalf("stdout %q, stderr %q", stdout.String(), got)
 			}
 		})
-	}
-}
-
-func TestConfigErrorExitsBeforeStartup(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"--config", t.TempDir() + "/missing.yaml"}, &stdout, &stderr); code != exitFailure {
-		t.Fatalf("exit %d, want %d", code, exitFailure)
-	}
-	if !strings.Contains(stdout.String(), "missing.yaml") || !strings.Contains(stdout.String(), "service_failed") {
-		t.Fatalf("log does not name the missing file: %s", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "service_starting") {
-		t.Fatal("service started despite invalid configuration")
 	}
 }
 

@@ -35,37 +35,36 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run handles command-line usage with plain text. Configuration errors are
-// logged as JSON on stdout; once the configuration loads, everything goes to
-// the configured log output, level and format.
+// run reports usage and startup errors as plain text on stderr; once the
+// configuration loads, the service logs through its configured logger.
 func run(args []string, stdout, stderr io.Writer) int {
 	o, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "vvideo: %v\nRun 'vvideo --help' for usage.\n", err)
 		return exitUsage
 	}
+	build := currentBuild()
 	switch {
 	case o.help:
 		fmt.Fprint(stdout, usage)
 		return exitOK
 	case o.version:
-		fmt.Fprintln(stdout, versionString())
+		fmt.Fprintln(stdout, "vvideo", build)
 		return exitOK
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(stdout, nil)))
 	c, err := loadConfig(o.configFile)
 	if err != nil {
-		slog.Error("service_failed", "error", err.Error())
+		fmt.Fprintf(stderr, "vvideo: %v\n", err)
 		return exitFailure
 	}
 	logger, closeLog, err := newLogger(c, stdout, stderr)
 	if err != nil {
-		slog.Error("service_failed", "error", "log.file: "+err.Error())
+		fmt.Fprintf(stderr, "vvideo: log.file: %v\n", err)
 		return exitFailure
 	}
 	defer closeLog()
 	slog.SetDefault(logger)
-	if err := serve(c); err != nil {
+	if err := serve(c, build); err != nil {
 		slog.Error("service_failed", "error", err.Error())
 		return exitFailure
 	}
@@ -85,8 +84,8 @@ func loadConfig(configFile string) (config.Config, error) {
 	return c, nil
 }
 
-func serve(c config.Config) error {
-	slog.Info("service_starting", "version", versionString())
+func serve(c config.Config, build buildInfo) error {
+	slog.Info("service_starting", "version", build.String())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(ctx, c)

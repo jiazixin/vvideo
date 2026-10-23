@@ -117,11 +117,12 @@ jobs:
         run: |
           go build -trimpath -o "$RUNNER_TEMP/vvideo" ./cmd/vvideo
           got=$("$RUNNER_TEMP/vvideo" --version)
-          want="vvideo $TAG (commit $(git rev-parse HEAD | cut -c1-12), "
-          case "$got" in
-            "$want"*) echo "$got" ;;
-            *) printf 'version mismatch\n  got:  %s\n  want: %s...\n' "$got" "$want" >&2; exit 1 ;;
-          esac
+          want="vvideo $TAG (revision=$(git rev-parse HEAD | cut -c1-12))"
+          if [ "$got" != "$want" ]; then
+            printf 'version mismatch\n  got:  %s\n  want: %s\n' "$got" "$want" >&2
+            exit 1
+          fi
+          echo "$got"
       # .goreleaser.yaml attaches bin/android/*.apk and adds it to checksums.txt.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
