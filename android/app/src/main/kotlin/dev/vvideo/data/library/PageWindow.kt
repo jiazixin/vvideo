@@ -6,7 +6,7 @@ import dev.vvideo.model.MediaPage
 internal const val MAX_RESIDENT_PAGES = 3
 
 // At most three server pages stay resident; stable keys preserve visible media.
-class PageWindow {
+internal class PageWindow {
     private val pages = ArrayDeque<MediaPage>()
     val items get() = pages.flatMap { it.items }
     val next get() = pages.lastOrNull()?.next.orEmpty()

@@ -3,6 +3,7 @@ package scanner
 import (
 	"bufio"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
 	"vvideo/internal/config"
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
@@ -20,7 +22,12 @@ import (
 // verifies crash recovery rather than merely returning an injected Go error.
 func TestScanProcessCrashRecovery(t *testing.T) {
 	if base := os.Getenv("VV_CRASH_BASE"); base != "" {
-		c, err := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, filepath.Join(base, "media"))}})
+		env := map[string]string{"VVIDEO_AUTH__TOKEN": "test", "VVIDEO_MEDIA": fmt.Sprintf(`[{"path":%q}]`, filepath.Join(base, "media"))}
+		lookupEnv := func(k string) (string, bool) {
+			v, ok := env[k]
+			return v, ok
+		}
+		c, err := config.Load(config.Source{WorkDir: base, LookupEnv: lookupEnv})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,21 +43,21 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 		switch os.Getenv("VV_CRASH_MODE") {
 		case "transaction":
 			err = db.Write(t.Context(), 0, func(tx *sql.Tx) error {
-				if _, err := tx.Exec("UPDATE counters SET value=999999 WHERE name='thumbnail_bytes'"); err != nil {
+				if _, err := tx.ExecContext(t.Context(), "UPDATE counters SET value=999999 WHERE name='thumbnail_bytes'"); err != nil {
 					return err
 				}
 				ready()
 				return nil
 			})
 		case "claim":
-			q := &jobs.Queue{Store: db, Index: index, Now: time.Now}
+			q := jobs.NewQueue(index, nil, time.Now)
 			_, err = q.Claim(t.Context(), "probe")
 			if err == nil {
 				ready()
 			}
 		case "build":
 			batches := 0
-			s := &Scanner{Config: c, Index: index, Now: time.Now, Fault: func(at string) error {
+			s := &Scanner{Config: c, Index: index, now: time.Now, onStep: func(at string) error {
 				if at == "build" {
 					batches++
 					if batches == 2 {
@@ -69,7 +76,7 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s, root := fixture(t)
 			create(t, root, "old.mp4")
-			s.Now = func() time.Time { return time.Now().Add(-2 * time.Minute) }
+			s.now = func() time.Time { return time.Now().Add(-2 * time.Minute) }
 			if err := s.Run(t.Context(), false); err != nil {
 				t.Fatal(err)
 			}
@@ -137,10 +144,10 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 			}
 			defer db.Close()
 			var check string
-			if err = db.Reader.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
+			if err = db.QueryRow(t.Context(), "PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
 				t.Fatal("integrity", err, check)
 			}
-			foreign, err := db.Reader.Query("PRAGMA foreign_key_check")
+			foreign, err := db.Query(t.Context(), "PRAGMA foreign_key_check")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,12 +163,12 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 			}
 			if mode == "transaction" {
 				var n int
-				if err = db.Reader.QueryRow("SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&n); err != nil || n != 0 {
+				if err = db.QueryRow(t.Context(), "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&n); err != nil || n != 0 {
 					t.Fatal("uncommitted change survived", err, n)
 				}
 			}
 			if mode == "claim" {
-				q := jobs.Queue{Store: db, Index: index, Now: time.Now}
+				q := jobs.NewQueue(index, nil, time.Now)
 				j, err := q.Claim(t.Context(), "probe")
 				if err != nil || j.MediaID != original.ID || j.Version != original.Version || j.Attempts != 2 {
 					t.Fatal("running lease was not recovered", err, j)
@@ -172,17 +179,17 @@ func TestScanProcessCrashRecovery(t *testing.T) {
 				t.Fatal("partial candidate exposed", err)
 			}
 			var builds int
-			if err = db.Reader.QueryRow("SELECT count(*) FROM builds").Scan(&builds); err != nil || builds != 0 {
+			if err = db.QueryRow(t.Context(), "SELECT count(*) FROM builds").Scan(&builds); err != nil || builds != 0 {
 				t.Fatal("abandoned build retained", err)
 			}
 			if mode == "build" {
 				s.Index = index
-				s.Fault = nil
+				s.onStep = nil
 				if err = s.Run(t.Context(), false); err != nil {
 					t.Fatal(err)
 				}
 				var n int
-				if err = db.Reader.QueryRow("SELECT count(*) FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.generation=d.generation AND e.state='visible'").Scan(&n); err != nil || n != 258 {
+				if err = db.QueryRow(t.Context(), "SELECT count(*) FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.generation=d.generation AND e.state='visible'").Scan(&n); err != nil || n != 258 {
 					t.Fatal("rescan failed after crash", err, n)
 				}
 				restored, err := index.Media(t.Context(), original.ID)
@@ -214,7 +221,7 @@ func TestFilesystemScaleFirstAndUnchanged(t *testing.T) {
 	}
 	for round := range 3 {
 		if round == 2 {
-			if err := os.WriteFile(filepath.Join(root, "00000000.mp4"), []byte("changed source with new size"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "00000000.mp4"), []byte("changed source with new size"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -265,7 +272,7 @@ func TestConfirmedMissingDoesNotRewriteOnSteadyRescan(t *testing.T) {
 	// A temporary audit trigger counts actual membership UPDATEs, independent of
 	// the candidate-build instrumentation counter.
 	if err = s.Index.Store.Write(t.Context(), 0, func(tx *sql.Tx) error {
-		_, err := tx.Exec("CREATE TEMP TABLE scan_audit(n INTEGER);INSERT INTO scan_audit VALUES(0);CREATE TEMP TRIGGER audit_updates AFTER UPDATE ON main.entries BEGIN UPDATE scan_audit SET n=n+1;END;")
+		_, err := tx.ExecContext(t.Context(), "CREATE TEMP TABLE scan_audit(n INTEGER);INSERT INTO scan_audit VALUES(0);CREATE TEMP TRIGGER audit_updates AFTER UPDATE ON main.entries BEGIN UPDATE scan_audit SET n=n+1;END;")
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -281,7 +288,9 @@ func TestConfirmedMissingDoesNotRewriteOnSteadyRescan(t *testing.T) {
 		t.Fatal("steady missing tombstone invalidates cursors")
 	}
 	var updates int
-	if err = s.Index.Store.Writer.QueryRow("SELECT n FROM scan_audit").Scan(&updates); err != nil || updates != 0 {
+	if err = s.Index.Store.Write(t.Context(), 0, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), "SELECT n FROM scan_audit").Scan(&updates)
+	}); err != nil || updates != 0 {
 		t.Fatal("steady tombstone rewritten", err, updates)
 	}
 }
@@ -299,11 +308,11 @@ func TestStageCleanupIsScopedToOneStorage(t *testing.T) {
 	orphan := filepath.Join(namespace, "00000000-0000-4000-8000-000000000001.sqlite")
 	unrelated := filepath.Join(namespace, "notes.sqlite")
 	outside := filepath.Join(filepath.Dir(namespace), "other-storage", "00000000-0000-4000-8000-000000000002.sqlite")
-	if err = os.MkdirAll(filepath.Dir(outside), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(outside), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{orphan, unrelated, outside} {
-		if err = os.WriteFile(path, []byte("owned fixture"), 0600); err != nil {
+		if err = os.WriteFile(path, []byte("owned fixture"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -315,7 +324,7 @@ func TestStageCleanupIsScopedToOneStorage(t *testing.T) {
 	if err = s.Run(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(orphan); !os.IsNotExist(err) {
+	if _, err = os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("crashed stage retained", err)
 	}
 	for _, path := range []string{unrelated, outside, symlink} {

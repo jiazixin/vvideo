@@ -1,9 +1,10 @@
 package dev.vvideo.model
 
 /** What a media item is; [wire] is the server's value. */
-enum class MediaKind(val wire: String) {
+internal enum class MediaKind(val wire: String) {
     Video("video"),
-    Image("image");
+    Image("image"),
+    ;
 
     companion object {
         // The server only reports video or image; anything else opens like a photo, as before.
@@ -12,14 +13,16 @@ enum class MediaKind(val wire: String) {
 }
 
 /** The server's processing state of a media item, as far as the client distinguishes it. */
-enum class MediaStatus {
+internal enum class MediaStatus {
     Ready,
 
     /** Cover generation gave up for this version; the client stops waiting for it. */
     Failed,
 
     /** Still being probed or covered, or a state this client does not know. */
-    Pending;
+    Pending,
+
+    ;
 
     companion object {
         fun fromWire(value: String): MediaStatus = when (value) {
@@ -31,11 +34,12 @@ enum class MediaStatus {
 }
 
 /** Where a media item's capture time came from. */
-enum class CaptureSource {
+internal enum class CaptureSource {
     ExifOriginal,
     ContainerCreation,
     Modified,
-    Unknown;
+    Unknown,
+    ;
 
     companion object {
         fun fromWire(value: String): CaptureSource = when (value) {

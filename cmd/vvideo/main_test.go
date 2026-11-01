@@ -12,7 +12,7 @@ import (
 )
 
 func TestRunUsageErrors(t *testing.T) {
-	for _, args := range [][]string{{"--bogus"}, {"-c"}, {"--config="}, {"config.yaml"}} {
+	for _, args := range [][]string{{"--bogus"}, {"-c"}, {"--config="}, {"config.yaml"}, {"-c", "a", "-c", "b"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := run(args, &stdout, &stderr); code != exitUsage {
@@ -72,6 +72,56 @@ func TestRunConfigSelection(t *testing.T) {
 				t.Fatalf("stdout %q, stderr %q", stdout.String(), got)
 			}
 		})
+	}
+}
+
+func TestRunConfigErrors(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, tc := range []struct {
+		name, configFile string
+		args             []string
+		want             string
+	}{
+		{"blank CONFIG_FILE", " ", nil, "vvideo: config: CONFIG_FILE is set but empty\n"},
+		{"missing file", "", []string{"-c", "missing.yaml"}, "vvideo: config: open "},
+		{"invalid setting", "", nil, "vvideo: config: server.port: must be an integer between 1 and 65535\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.configFile != "" {
+				t.Setenv("CONFIG_FILE", tc.configFile)
+			}
+			t.Setenv("VVIDEO_SERVER__PORT", "0")
+			t.Setenv("VVIDEO_AUTH__TOKEN", "token")
+			t.Setenv("VVIDEO_MEDIA", `[{"path":"media"}]`)
+			var stdout, stderr bytes.Buffer
+			if code := run(tc.args, &stdout, &stderr); code != exitFailure {
+				t.Fatalf("exit %d, want %d", code, exitFailure)
+			}
+			if got := stderr.String(); stdout.Len() != 0 || !strings.HasPrefix(got, tc.want) || strings.Count(got, "\n") != 1 {
+				t.Fatalf("stdout %q, stderr %q; want stderr starting with %q", stdout.String(), got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunLogsFailuresOnceTheLoggerIsReady(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("PATH", "") // ffmpeg and ffprobe are missing, so startup fails
+	t.Setenv("VVIDEO_AUTH__TOKEN", "token")
+	t.Setenv("VVIDEO_MEDIA", `[{"path":"media"}]`)
+	defaultLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr); code != exitFailure {
+		t.Fatalf("exit %d, want %d", code, exitFailure)
+	}
+	got := stdout.String()
+	if stderr.Len() != 0 || !strings.Contains(got, `"msg":"service_starting"`) || !strings.Contains(got, `"msg":"service_failed"`) || !strings.Contains(got, "ffmpeg and ffprobe not found") {
+		t.Fatalf("stdout %q, stderr %q", got, stderr.String())
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Fatalf("startup failure left %v (%v) in the working directory", entries, err)
 	}
 }
 

@@ -4,7 +4,7 @@ import java.net.URI
 
 // Accepts an http or https server root for any host and reduces it to
 // scheme://host[:port], so the same server always maps to one connection id.
-object ConnectionPolicy {
+internal object ConnectionPolicy {
     fun canonical(url: String): String {
         val uri = URI(url.trim().trimEnd('/'))
         val scheme = uri.scheme?.lowercase()

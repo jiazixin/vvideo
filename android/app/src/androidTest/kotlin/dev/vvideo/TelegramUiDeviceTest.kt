@@ -5,24 +5,31 @@ import androidx.media3.common.util.UnstableApi
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
-import androidx.test.uiautomator.*
-import dev.vvideo.app.*
-import dev.vvideo.data.library.PageEdge
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import dev.vvideo.app.MainActivity
+import dev.vvideo.app.VVideoApplication
 import dev.vvideo.feature.library.LibraryViewModel
 import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
 import dev.vvideo.model.SortDirection
 import dev.vvideo.model.SortField
 import dev.vvideo.model.ThemeMode
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import org.junit.Assert.*
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @UnstableApi
 class TelegramUiDeviceTest {
     @Test
-    fun filtersPreserveBookmarksAndHomeThemeStorageReturn() = runBlocking<Unit> {
+    fun filtersPreserveBookmarksAndHomeThemeStorageReturn() = deviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = instrumentation.targetContext.applicationContext as VVideoApplication
         withTimeout(15000) { app.ready.first { it } }
@@ -59,7 +66,7 @@ class TelegramUiDeviceTest {
             withContext(Dispatchers.Main) {
                 vm.open(
                     root,
-                    Sort(SortField.Name, SortDirection.Ascending)
+                    Sort(SortField.Name, SortDirection.Ascending),
                 )
             }
             withTimeout(15000) { vm.state.first { it.directory?.id == root && !it.busy && it.albums.isNotEmpty() } }
@@ -92,15 +99,16 @@ class TelegramUiDeviceTest {
             click("深色")
             assertEquals(
                 ThemeMode.Dark,
-                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Dark } })
+                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Dark } },
+            )
             click("存储用量")
             assertTrue(device.wait(Until.hasObject(By.text("缓存上限")), 5000))
             assertTrue(device.hasObject(By.text("视频片段")))
             device.takeScreenshot(
                 java.io.File(
                     app.getExternalFilesDir(null),
-                    "telegram-storage-dark.png"
-                )
+                    "telegram-storage-dark.png",
+                ),
             )
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.text("主题")), 5000))
@@ -108,19 +116,21 @@ class TelegramUiDeviceTest {
             click("浅色")
             assertEquals(
                 ThemeMode.Light,
-                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Light } })
+                withTimeout(3000) { app.graph.settings.theme.first { it == ThemeMode.Light } },
+            )
             delay(1000)
             device.takeScreenshot(
                 java.io.File(
                     app.getExternalFilesDir(null),
-                    "telegram-settings-light.png"
-                )
+                    "telegram-settings-light.png",
+                ),
             )
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("设置")), 5000))
             assertFalse(device.hasObject(By.text("最近浏览")))
             assertTrue(
-                app.graph.database.bookmarks().recent(c.id).first().any { it.directory == root })
+                app.graph.database.bookmarks().recent(c.id).first().any { it.directory == root },
+            )
         } finally {
             app.graph.settings.setTheme(originalTheme)
             withContext(Dispatchers.Main) { activity.finish() }

@@ -1,6 +1,8 @@
 package dev.vvideo.core.media.model
 
-import org.junit.Assert.*
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PreloadBudgetTest {
@@ -13,8 +15,8 @@ class PreloadBudgetTest {
         assertFalse(
             PreloadBudget.allowed(
                 ByteRange(0, PreloadBudget.MAX_BYTES + 1),
-                Long.MAX_VALUE
-            )
+                Long.MAX_VALUE,
+            ),
         )
         assertFalse(PreloadBudget.allowed(ByteRange(0, -1), 5000))
     }
@@ -33,10 +35,9 @@ class PreloadBudgetTest {
 
     @Test
     fun versionsAndServersHaveSeparateCacheKeys() {
-        val a = PlaybackItem("server", "library", "media", "version", "url", "index", "token", 1, 1)
+        val a = PlaybackItem("server", "library", "media", "version", "url", "index", 1, 1)
         assertNotEquals(a.cacheKey, a.copy(version = "other").cacheKey)
         assertNotEquals(a.cacheKey, a.copy(server = "other").cacheKey)
         assertNotEquals(a.cacheKey, a.copy(library = "other").cacheKey)
-        assertEquals(a.cacheKey, a.copy(token = "renewed").cacheKey)
     }
 }

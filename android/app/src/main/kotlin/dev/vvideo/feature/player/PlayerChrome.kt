@@ -23,13 +23,13 @@ import dev.vvideo.R
 import dev.vvideo.model.Media
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.TimeLabels
-import kotlinx.coroutines.Dispatchers
+import dev.vvideo.ui.theme.LocalDispatchers
 import kotlinx.coroutines.withContext
 
-val TopViewerGradient =
+internal val TopViewerGradient =
     Brush.verticalGradient(listOf(Color.Black.copy(alpha = .62f), Color.Transparent))
 
-val BottomViewerGradient =
+internal val BottomViewerGradient =
     Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = .85f)))
 
 /**
@@ -37,21 +37,17 @@ val BottomViewerGradient =
  * is a direct button rather than a one-item menu.
  */
 @Composable
-fun PlayerChrome(
-    item: Media?,
-    onBack: () -> Unit,
-    onDetails: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+internal fun PlayerChrome(item: Media?, onBack: () -> Unit, onDetails: () -> Unit, modifier: Modifier = Modifier) {
     val pattern = stringResource(R.string.viewer_time_pattern)
+    val dispatchers = LocalDispatchers.current
     // Keyed by the item so a new page never shows the previous page's time while its own is formatted.
     val time by produceState("", item?.id, item?.effectiveTime, pattern) {
         value = ""
-        value = withContext(Dispatchers.Default) {
+        value = withContext(dispatchers.default) {
             item?.let {
                 TimeLabels.timestamp(
                     it.effectiveTime,
-                    pattern
+                    pattern,
                 )
             }.orEmpty()
         }
@@ -59,7 +55,7 @@ fun PlayerChrome(
     Row(
         modifier.fillMaxWidth().background(TopViewerGradient).statusBarsPadding()
             .padding(start = 4.dp, end = 4.dp, bottom = 32.dp).heightIn(min = 56.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         ActionIcon(R.drawable.ic_back, R.string.back, onBack, tint = Color.White)
         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
@@ -68,21 +64,23 @@ fun PlayerChrome(
                 color = Color.White,
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
             // Always laid out, so the name does not shift while the time is formatted.
             Text(
                 time,
                 color = Color.White.copy(alpha = .72f),
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 1
+                maxLines = 1,
             )
         }
-        if (item != null) ActionIcon(
-            R.drawable.ic_info,
-            R.string.media_details,
-            onDetails,
-            tint = Color.White
-        )
+        if (item != null) {
+            ActionIcon(
+                R.drawable.ic_info,
+                R.string.media_details,
+                onDetails,
+                tint = Color.White,
+            )
+        }
     }
 }

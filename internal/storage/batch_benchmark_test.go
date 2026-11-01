@@ -55,10 +55,10 @@ func BenchmarkBatchWrite(b *testing.B) {
 			}
 			var mode string
 			var synchronous int
-			if err := s.Writer.QueryRowContext(b.Context(), "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+			if err := s.writer.QueryRowContext(b.Context(), "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 				b.Fatalf("WAL required: %s, %v", mode, err)
 			}
-			if err := s.Writer.QueryRowContext(b.Context(), "PRAGMA synchronous").Scan(&synchronous); err != nil || synchronous != 2 {
+			if err := s.writer.QueryRowContext(b.Context(), "PRAGMA synchronous").Scan(&synchronous); err != nil || synchronous != 2 {
 				b.Fatalf("FULL required: %d, %v", synchronous, err)
 			}
 			s.Metrics.Commits.Store(0)
@@ -87,7 +87,7 @@ func BenchmarkBatchWrite(b *testing.B) {
 				iterations++
 			}
 			var count, total int
-			if err := s.Reader.QueryRowContext(b.Context(), "SELECT count(*),sum(mtime) FROM entries").Scan(&count, &total); err != nil || count != rows || total != rows*iterations {
+			if err := s.reader.QueryRowContext(b.Context(), "SELECT count(*),sum(mtime) FROM entries").Scan(&count, &total); err != nil || count != rows || total != rows*iterations {
 				b.Fatalf("lost writes: count=%d sum=%d iterations=%d err=%v", count, total, iterations, err)
 			}
 			if s.Metrics.Commits.Load() != int64(iterations*rows/batch) {

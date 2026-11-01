@@ -1,40 +1,28 @@
 package dev.vvideo.feature.library
 
-import dev.vvideo.model.MediaStatus
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.IOException
 
 class ThumbnailRetryTest {
     @Test
-    fun transientFailuresAndMissingCoversOfPendingMediaAreRetried() {
-        assertTrue(coverRetryable(null, MediaStatus.Ready))
-        assertTrue(coverRetryable(503, MediaStatus.Ready))
-        assertTrue(coverRetryable(429, MediaStatus.Ready))
-        assertTrue(coverRetryable(404, MediaStatus.Pending))
+    fun onlyTransportAndTransientStatusesRetryTwice() {
+        val failure = IOException("fixture")
+        assertNotNull(coverRetryDelay(failure, 0))
+        assertNotNull(coverRetryDelay(failure, 1, status = 503))
+        assertNotNull(coverRetryDelay(failure, 0, status = 429))
+        assertNull(coverRetryDelay(failure, 2, status = 503))
+        for (status in listOf(401, 403, 404, 408, 415, 500, 502, 504)) {
+            assertNull(coverRetryDelay(failure, 0, status = status))
+        }
+        assertNull(coverRetryDelay(IllegalArgumentException("invalid image"), 0))
     }
 
     @Test
-    fun permanentFailuresAreNotRetried() {
-        assertFalse(coverRetryable(404, MediaStatus.Ready))
-        assertFalse(coverRetryable(415, MediaStatus.Pending))
-        assertFalse(coverRetryable(401, MediaStatus.Ready))
-    }
-
-    @Test
-    fun retryAfterReadsSecondsOrAnHttpDate() {
-        assertEquals(5000L, retryAfterMs("5", 0))
-        val now = 1_760_000_000_000L
-        // Two seconds after `now`, as an RFC 1123 date.
-        assertEquals(2000L, retryAfterMs("Thu, 9 Oct 2025 08:53:22 GMT", now))
-        assertEquals(0L, retryAfterMs("Thu, 9 Oct 2025 08:53:00 GMT", now))
-    }
-
-    @Test
-    fun missingOrUnreadableRetryAfterFallsBackToTheBaseDelay() {
-        assertEquals(1000L, retryAfterMs(null, 0))
-        assertEquals(1000L, retryAfterMs("soon", 0))
-        assertEquals(1000L, retryAfterMs("-3", 0))
+    fun retryAfterIsRespectedAndLongWaitsAreRejected() {
+        assertEquals(5000L, coverRetryDelay(IOException(), 0, "5", 503))
+        assertNull(coverRetryDelay(IOException(), 0, "11", 503))
     }
 }

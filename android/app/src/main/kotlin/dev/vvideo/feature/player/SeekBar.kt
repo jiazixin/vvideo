@@ -29,7 +29,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -78,13 +77,11 @@ private const val PROGRESS_POLL_MS = 250L
 
 private const val CONTROLS_FADE_MS = 150
 
-val PlaybackSpeeds = listOf(2f, 1.5f, 1.25f, 1f, .75f, .5f)
+internal val PlaybackSpeeds = listOf(2f, 1.5f, 1.25f, 1f, .75f, .5f)
 
-fun speedLabel(speed: Float): String =
-    if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
+internal fun speedLabel(speed: Float): String = if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
 
 /** A drag along the bar: while [active], the thumb follows [target] (0..1) instead of the player. */
-@Stable
 private class SeekDrag {
     var active by mutableStateOf(false)
     var target by mutableFloatStateOf(0f)
@@ -95,7 +92,7 @@ private class SeekDrag {
  * the bar shows that page's own start instead of the previous video's progress.
  */
 @Composable
-fun SeekBar(
+internal fun SeekBar(
     player: Player,
     mediaId: String,
     live: Boolean,
@@ -107,7 +104,7 @@ fun SeekBar(
     modifier: Modifier = Modifier,
     frozen: Boolean = false,
     onSpeedMenu: (Boolean) -> Unit = {},
-    onDragging: (Boolean) -> Unit
+    onDragging: (Boolean) -> Unit,
 ) {
     var position by remember(mediaId) { mutableLongStateOf(0) }
     var duration by remember(mediaId) { mutableLongStateOf(0) }
@@ -154,11 +151,13 @@ fun SeekBar(
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
                 newPosition: Player.PositionInfo,
-                reason: Int
+                reason: Int,
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK ||
                     reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT
-                ) position = newPosition.positionMs.coerceAtLeast(0)
+                ) {
+                    position = newPosition.positionMs.coerceAtLeast(0)
+                }
             }
         }
         player.addListener(listener)
@@ -175,7 +174,7 @@ fun SeekBar(
     AnimatedVisibility(
         visible,
         enter = fadeIn(tween(CONTROLS_FADE_MS)),
-        exit = fadeOut(tween(CONTROLS_FADE_MS))
+        exit = fadeOut(tween(CONTROLS_FADE_MS)),
     ) {
         Column(modifier.padding(horizontal = 12.dp)) {
             SeekTrack(
@@ -183,48 +182,56 @@ fun SeekBar(
                 enabled = enabled,
                 durationMs = duration,
                 fraction = fraction,
-                bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(
-                    0f,
-                    1f
-                ) else 0f,
+                bufferedFraction = if (duration > 0) {
+                    (buffered.toFloat() / duration).coerceIn(
+                        0f,
+                        1f,
+                    )
+                } else {
+                    0f
+                },
                 drag = drag,
-                onDragging = onDragging
+                onDragging = onDragging,
             )
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 ActionIcon(
                     if (playing) R.drawable.ic_pause else R.drawable.ic_play,
                     if (playing) R.string.pause else R.string.play,
                     { if (playing) player.pause() else player.play() },
                     tint = Color.White,
-                    enabled = enabled
+                    enabled = enabled,
                 )
                 Text(
                     mediaDuration(if (drag.active) (drag.target * duration).toLong() else position),
                     color = Color.White,
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
                     " / " + mediaDuration(shownDuration),
                     color = Color.White.copy(alpha = .6f),
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelLarge,
                 )
                 Spacer(Modifier.weight(1f))
                 Box {
                     SpeedButton(speed, enabled) { speedMenu = !speedMenu }
-                    if (speedMenu) SpeedMenu(speed, { speedMenu = false }) {
-                        player.setPlaybackSpeed(it)
-                        speedMenu = false
+                    if (speedMenu) {
+                        SpeedMenu(speed, { speedMenu = false }) {
+                            player.setPlaybackSpeed(it)
+                            speedMenu = false
+                        }
                     }
                 }
-                if (landscape) ActionIcon(
-                    R.drawable.ic_fullscreen,
-                    R.string.fullscreen,
-                    onLandscape,
-                    tint = Color.White
-                )
+                if (landscape) {
+                    ActionIcon(
+                        R.drawable.ic_fullscreen,
+                        R.string.fullscreen,
+                        onLandscape,
+                        tint = Color.White,
+                    )
+                }
             }
         }
     }
@@ -237,7 +244,7 @@ private fun ThinProgress(fraction: Float, modifier: Modifier) {
         drawRect(Color.White.copy(alpha = .2f))
         drawRect(
             Color.White.copy(alpha = .85f),
-            size = size.copy(width = size.width * fraction)
+            size = size.copy(width = size.width * fraction),
         )
     }
 }
@@ -254,53 +261,63 @@ private fun SeekTrack(
     fraction: Float,
     bufferedFraction: Float,
     drag: SeekDrag,
-    onDragging: (Boolean) -> Unit
+    onDragging: (Boolean) -> Unit,
 ) {
     val seekDescription = stringResource(R.string.seek)
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-        if (drag.active) Text(
-            mediaDuration((drag.target * durationMs).toLong()),
-            Modifier.offset(
-                x = (maxWidth * drag.target - 24.dp).coerceIn(
-                    0.dp,
-                    (maxWidth - 48.dp).coerceAtLeast(0.dp)
-                ), y = (-28).dp
-            ).background(Color.Black.copy(alpha = .65f), RoundedCornerShape(10.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            color = Color.White,
-            style = MaterialTheme.typography.labelMedium
-        )
+        if (drag.active) {
+            Text(
+                mediaDuration((drag.target * durationMs).toLong()),
+                Modifier.offset(
+                    x = (maxWidth * drag.target - 24.dp).coerceIn(
+                        0.dp,
+                        (maxWidth - 48.dp).coerceAtLeast(0.dp),
+                    ),
+                    y = (-28).dp,
+                ).background(Color.Black.copy(alpha = .65f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
         Canvas(
-            Modifier.fillMaxWidth().height(40.dp).semantics {
+            Modifier.fillMaxWidth().height(48.dp).semantics {
                 contentDescription = seekDescription
                 progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                 setProgress { value ->
                     if (enabled && durationMs > 0) {
                         player.seekTo((value.coerceIn(0f, 1f) * durationMs).toLong())
                         true
-                    } else false
+                    } else {
+                        false
+                    }
                 }
             }.pointerInput(enabled, durationMs) {
-                if (enabled && durationMs > 0) detectDragGestures(onDragStart = { point ->
-                    drag.active = true
-                    drag.target = (point.x / size.width).coerceIn(0f, 1f)
-                    onDragging(true)
-                }, onDragEnd = {
-                    player.seekTo((drag.target * durationMs).toLong())
-                    drag.active = false
-                    onDragging(false)
-                }, onDragCancel = {
-                    drag.active = false
-                    onDragging(false)
-                }) { change, _ ->
-                    change.consume()
-                    drag.target = (change.position.x / size.width).coerceIn(0f, 1f)
+                if (enabled && durationMs > 0) {
+                    detectDragGestures(onDragStart = { point ->
+                        drag.active = true
+                        drag.target = (point.x / size.width).coerceIn(0f, 1f)
+                        onDragging(true)
+                    }, onDragEnd = {
+                        player.seekTo((drag.target * durationMs).toLong())
+                        drag.active = false
+                        onDragging(false)
+                    }, onDragCancel = {
+                        drag.active = false
+                        onDragging(false)
+                    }) { change, _ ->
+                        change.consume()
+                        drag.target = (change.position.x / size.width).coerceIn(0f, 1f)
+                    }
                 }
             }.pointerInput(enabled, durationMs) {
-                if (enabled && durationMs > 0) detectTapGestures { point ->
-                    player.seekTo(((point.x / size.width).coerceIn(0f, 1f) * durationMs).toLong())
+                if (enabled && durationMs > 0) {
+                    detectTapGestures { point ->
+                        player.seekTo(((point.x / size.width).coerceIn(0f, 1f) * durationMs).toLong())
+                    }
                 }
-            }) {
+            },
+        ) {
             val y = size.height / 2
             val stroke = (if (drag.active) 5.dp else 3.dp).toPx()
             drawLine(
@@ -308,26 +325,26 @@ private fun SeekTrack(
                 Offset(0f, y),
                 Offset(size.width, y),
                 stroke,
-                cap = StrokeCap.Round
+                cap = StrokeCap.Round,
             )
             drawLine(
                 Color.White.copy(alpha = .45f),
                 Offset(0f, y),
                 Offset(size.width * bufferedFraction, y),
                 stroke,
-                cap = StrokeCap.Round
+                cap = StrokeCap.Round,
             )
             drawLine(
                 Color.White,
                 Offset(0f, y),
                 Offset(size.width * fraction, y),
                 stroke,
-                cap = StrokeCap.Round
+                cap = StrokeCap.Round,
             )
             drawCircle(
                 Color.White,
                 (if (drag.active) 9.dp else 7.dp).toPx(),
-                Offset(size.width * fraction, y)
+                Offset(size.width * fraction, y),
             )
         }
     }
@@ -343,7 +360,8 @@ private fun SpeedButton(speed: Float, enabled: Boolean, onClick: () -> Unit) {
             .clickable(enabled = enabled, onClick = onClick).semantics {
                 contentDescription = speedDescription
                 role = Role.Button
-            }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center
+            }.padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             if (speed == 1f) {
@@ -352,7 +370,7 @@ private fun SpeedButton(speed: Float, enabled: Boolean, onClick: () -> Unit) {
                 stringResource(R.string.speed_value, speedLabel(speed))
             },
             color = if (speed == 1f) Color.White else ViewerColors.Accent,
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelLarge,
         )
     }
 }
@@ -367,49 +385,52 @@ private fun SpeedMenu(current: Float, onDismiss: () -> Unit, onSelect: (Float) -
                 anchorBounds: IntRect,
                 windowSize: IntSize,
                 layoutDirection: LayoutDirection,
-                popupContentSize: IntSize
+                popupContentSize: IntSize,
             ) = IntOffset(
                 (anchorBounds.right - popupContentSize.width).coerceIn(
                     0,
-                    (windowSize.width - popupContentSize.width).coerceAtLeast(0)
-                ), (anchorBounds.top - popupContentSize.height - gap).coerceAtLeast(0)
+                    (windowSize.width - popupContentSize.width).coerceAtLeast(0),
+                ),
+                (anchorBounds.top - popupContentSize.height - gap).coerceAtLeast(0),
             )
         }
     }
     Popup(
         popupPositionProvider = above,
         onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = true),
     ) {
         Column(
             Modifier.width(132.dp).shadow(8.dp, RoundedCornerShape(14.dp))
-                .background(ViewerColors.Sheet, RoundedCornerShape(14.dp)).padding(vertical = 6.dp)
+                .background(ViewerColors.Sheet, RoundedCornerShape(14.dp)).padding(vertical = 6.dp),
         ) {
             Text(
                 stringResource(R.string.speed),
                 Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 color = Color.White.copy(alpha = .56f),
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
             )
             for (option in PlaybackSpeeds) {
                 val selected = option == current
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable { onSelect(option) }
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onSelect(option) }
                         .semantics { this.selected = selected }.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         stringResource(R.string.speed_value, speedLabel(option)),
                         Modifier.weight(1f),
                         color = if (selected) ViewerColors.Accent else Color.White,
-                        style = MaterialTheme.typography.bodyLarge
+                        style = MaterialTheme.typography.bodyLarge,
                     )
-                    if (selected) Icon(
-                        painterResource(R.drawable.ic_check),
-                        null,
-                        Modifier.size(20.dp),
-                        tint = ViewerColors.Accent
-                    )
+                    if (selected) {
+                        Icon(
+                            painterResource(R.drawable.ic_check),
+                            null,
+                            Modifier.size(20.dp),
+                            tint = ViewerColors.Accent,
+                        )
+                    }
                 }
             }
         }

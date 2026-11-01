@@ -30,7 +30,7 @@ VVideo indexes an existing media library where it already lives. A Go service sc
 
 ## Project status
 
-**First release, partially accepted.** The server and app are implemented and tested on synthetic media and on a real phone (iQOO 12 Pro). Not yet verified: a full real library on a NAS, every codec/container combination, and a persistent production deployment. The latest warm-scroll frame measurements missed the 1% deadline-overrun target. The [acceptance record](docs/ACCEPTANCE.md) lists what was measured, on which build, and the known limitations.
+**First release, partially accepted.** The server and app are implemented and tested on synthetic media and on a real phone (iQOO 12 Pro). Not yet verified: a full real library on a NAS, every codec/container combination, and a persistent production deployment. After the final layout fix on 2026-11-01, all three warm-album rounds at 120 Hz met the 1% deadline-overrun target; actual 144 Hz, NAS and Wi-Fi conditions remain unverified. The [acceptance record](docs/ACCEPTANCE.md) lists what was measured, on which build, and the known limitations.
 
 Scope of this release: home network only, original-quality playback, Android only. Out of scope: public internet service, transcoding, iOS and recommendations.
 
@@ -62,7 +62,7 @@ The library size this was designed for (about 130,000 videos and 380,000 images)
 Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (index, jobs)
   Compose UI                           │  scanner ─▶ read-only media folders
   Media3 player ◀── Range bytes ───────┤  ffprobe / FFmpeg ─▶ cover cache
-  disk cache (1/5/10 GB)               └  REST API /v1
+  disk cache (1/5/10 GB)               └  REST API /api
 ```
 
 [docs/DESIGN.md](docs/DESIGN.md) describes the product behavior and performance targets, and [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) the server's scan, storage and performance rules.
@@ -74,7 +74,7 @@ Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (inde
 ├── .github/workflows/  CI and release workflows
 ├── cmd/vvideo/         server entry point (flags, logging, startup, shutdown)
 ├── internal/           server packages
-│   ├── app/            wiring of storage, workers and the HTTP API
+│   ├── app/            storage, workers, HTTP API and Range responses
 │   ├── config/         strict configuration loader
 │   ├── jobs/           durable job queue and playback-activity tracker
 │   ├── library/        published index: directories, media, paging, album anchors
@@ -82,8 +82,9 @@ Android app ──HTTP (Bearer token)──▶ Go service ──▶ SQLite (inde
 │   ├── probe/          ffprobe and EXIF metadata
 │   ├── scanner/        two-pass directory observation and publication
 │   ├── storage/        SQLite ownership, connections and schema
-│   ├── streaming/      Range responses and container index hints
-│   └── thumbnail/      cover generation and LRU cache
+│   ├── streaming/      original container index ranges
+│   ├── thumbnail/      cover generation and LRU cache
+│   └── timefmt/        UTC millisecond wire timestamps
 ├── tests/              cross-package Go integration tests
 ├── configs/            configuration example (local copies are git-ignored)
 ├── deploy/             systemd unit
@@ -151,7 +152,7 @@ Relative paths inside the configuration file resolve against its directory.
 ffmpeg (with libwebp) and ffprobe must be on PATH.
 ```
 
-The exit status is 0 on success, `--help` or `--version` (both print to stdout without reading configuration); 2 for a command-line error; and 1 when the service cannot start or fails. Command-line errors, configuration errors (including the file and line) and an unopenable log file are written to stderr as plain text `vvideo: <error>`; command-line errors add `Run 'vvideo --help' for usage.`. Once logging is set up, a failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a database already locked by another process, or a port already in use. SIGTERM cancels background work: in-flight HTTP requests get up to 10 more seconds, after which connections still open (such as a stream to a client that stopped reading) are closed; the whole stop takes at most 30 seconds.
+The exit status is 0 on success, `--help` or `--version` (both print to stdout without reading configuration); 2 for a command-line error; and 1 when the service cannot start or fails. Command-line errors are written to stderr as `vvideo: <error>` followed by a line `Run 'vvideo --help' for usage.`; configuration errors (including the file and line) and an unopenable log file are written as one line `vvideo: config: <error>` or `vvideo: log: <error>`. Error text is English, and a setting's error starts with its field path, for example `vvideo: config: server.port: must be an integer between 1 and 65535`. Once logging is set up, a failed start logs one `service_failed` event naming the cause, for example a missing `ffmpeg`/`ffprobe`, an FFmpeg build without `libwebp`, a database already locked by another process, or a port already in use. SIGTERM cancels background work: in-flight HTTP requests get up to 10 more seconds, after which connections still open (such as a stream to a client that stopped reading) are closed; the whole stop takes at most 30 seconds.
 
 ### Build and install the Android app
 
@@ -164,21 +165,23 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 Open Settings in the app and enter the server root URL (for example `http://192.168.1.10:8080`) and the token. HTTP and HTTPS are both accepted for any host. Plain HTTP does not encrypt the connection: anyone on the same network can read the token and the media.
 
+Tokens are stored encrypted with an Android Keystore AES/GCM key. This change retains no old API or plaintext-token compatibility path; upgrading an older development build requires entering the token again.
+
 Build variants, device tests and performance measurement are described in [android/README.md](android/README.md).
 
 ## Configuration
 
 [configs/config.example.yaml](configs/config.example.yaml) lists every supported field. Only `auth.token` and at least one `media[].path` are required; everything else has a default. Configuration is read once at startup, so changes need a restart.
 
-**Choosing the file.** `-c`/`--config` (also `--config=<file>`; naming different files is a command-line error) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
+**Choosing the file.** `-c`/`--config` (also `--config=<file>`; naming different files is a command-line error) takes precedence over `CONFIG_FILE`, which takes precedence over `configs/config.local.yaml` in the working directory. Relative selections resolve against the working directory. A `CONFIG_FILE` that is set but empty or blank fails with `CONFIG_FILE is set but empty` (exit status 1). An explicitly selected file that is empty, missing, unreadable or invalid is an error; only the implicit default may be absent, in which case environment variables must supply the required settings.
 
-**Precedence and environment variables.** `VVIDEO_*` environment variables override the YAML file, which overrides the defaults. A variable name is `VVIDEO_` plus the uppercase field path with `__` between levels, for example `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA` and `VVIDEO_IGNORE` replace the whole list with a JSON array of `{"path": "..."}` objects. Unknown or legacy fields, duplicate keys, YAML aliases and tags, wrong types and empty required values are rejected. There is no `.env` loading and no variable interpolation in YAML.
+**Precedence and environment variables.** `VVIDEO_*` environment variables override the YAML file, which overrides the defaults. A variable name is `VVIDEO_` plus the uppercase field path with `__` between levels, for example `VVIDEO_AUTH__TOKEN` or `VVIDEO_CACHE__PATH`. `VVIDEO_MEDIA` and `VVIDEO_IGNORE` replace the whole list with a JSON array of `{"path": "..."}` objects. Unknown or legacy fields, duplicate keys, YAML aliases and tags, wrong types and empty required values are rejected, as are `VVIDEO_*` variables that match no field (including names in the wrong case). There is no `.env` loading and no variable interpolation in YAML.
 
 | Setting | Meaning | Default |
 | --- | --- | --- |
 | `server.listen` | Host name or IP address without a port; write IPv6 as `::` | `0.0.0.0` |
 | `server.port` | TCP port, 1–65535 | `8080` |
-| `auth.token` | Bearer token clients must send | required |
+| `auth.token` | Bearer token clients must send: 1–4096 visible ASCII characters, no spaces | required |
 | `storage` | Data directory holding `data.sqlite` and the `.scan-tmp/` staging area | `data` |
 | `media[].path` | Media roots; they must not overlap | required |
 | `ignore[].path` | Exact files or directory subtrees inside a media root, not globs | none |
@@ -216,11 +219,22 @@ go test ./...
 android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) runs on every push to `main` and every pull request: `gofmt`, `go vet` (plus a macOS cross-check), `go test -race` and Linux amd64/arm64 cross-builds for the server; unit tests, lint, and the debug and profile builds for Android. CI also checks the release configuration with a GoReleaser snapshot. Pushing a `vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which signs the APK with the key stored in the repository secrets and publishes the server archives and the APK with GoReleaser; see [release signing](android/README.md#release-signing). Device tests and performance measurements need a phone and are not run in CI.
+[GitHub Actions CI](.github/workflows/ci.yml) runs on every push to `main` and every pull request: module verification, `tidy -diff`, `gofmt`, `goimports`, `go vet` (both Linux targets and macOS), Staticcheck, `go test -race`, govulncheck and Linux amd64/arm64 cross-builds for the server; ktlint, unit tests, zero-warning lint, debug/profile/release builds, and compilation of device-test and benchmark APKs for Android. CI also checks the release configuration with a GoReleaser snapshot. Pushing a `vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which signs the APK with the key stored in the repository secrets and publishes the server archives and the APK with GoReleaser; see [release signing](android/README.md#release-signing). Device tests and performance measurements need a phone and are not run in CI.
 
 `scripts/generate-media.py <dir>` creates a small synthetic library (H.264, HEVC and AV1 in MP4, MKV, TS and MOV, plus photos) for local testing. Never commit real media, tokens or server addresses.
 
 See [CONTRIBUTING](docs/CONTRIBUTING.md) for the workflow, code style and checks expected in a pull request. Contributors using AI agents should also follow [AGENTS.md](AGENTS.md).
+
+### Code exceptions
+
+| Rule | Practice | Reason | Scope | Revisit when |
+| --- | --- | --- | --- | --- |
+| [Go代码规范.md](Go代码规范.md) §7: `config.Source` has only `Path`, `Explicit`, `WorkDir` and `LookupEnv` | An extra `Environ []string` (`os.Environ()` in production) is used only for its names, to reject `VVIDEO_*` variables that match no field; values still come only from `LookupEnv` | `LookupEnv` cannot list variables, and rejecting misspelt or retired variables is part of the existing configuration contract (see Configuration) | `internal/config`, `cmd/vvideo` | Unknown `VVIDEO_*` variables are no longer rejected, or the convention gains a way to list them |
+| [Go代码规范.md](Go代码规范.md) §2: singular package names | Keep `internal/jobs` and the cross-package `tests` directory | The existing [project layout decision](docs/decisions/2026-10-08-project-layout.md) assigns these directories; package names match their directories | Go queue and cross-package tests | The project layout changes |
+| [Go代码规范.md](Go代码规范.md) §6: `os.OpenRoot` | Pinned directory descriptors, component-by-component `openat` / `O_NOFOLLOW`, and `filepath.IsLocal` | The [design](docs/DESIGN.md) forbids following even in-root media symlinks; local Go 1.27.3 `go doc os.Root` confirms that Root follows in-root links | `internal/mediafs`, Linux target and Darwin test adapter | The standard library provides equivalent no-follow and directory identity guarantees |
+| [Go代码规范.md](Go代码规范.md) §8: business-only Store API and two-argument Write | Controlled Query/QueryRow/BeginRead and `Write(ctx, rows, fn)`, with private connection fields; domain packages own business SQL | The [implementation rules](docs/IMPLEMENTATION.md) explicitly exclude media business SQL from storage and require row/transaction metrics; all primary writes still use one writer | `internal/storage` and domain callers | Database boundaries or performance metrics change |
+| [Go代码规范.md](Go代码规范.md) §7: stored time format | SQLite uses UTC Unix nanoseconds and integer sort keys; HTTP times use UTC millisecond RFC 3339 | [Version guards](docs/IMPLEMENTATION.md) retain filesystem precision, and pagination uses indexed ranges; wire precision must not reduce fingerprint precision | Internal index, job times and version guards; API format unchanged | Filesystem precision, storage or cursor design changes |
+| [Go代码规范.md](Go代码规范.md) §6: no-store throughout `/api/` | JSON and errors use no-store; successful versioned media/covers use private, immutable caching | The [design](docs/DESIGN.md) requires cache reuse; [API](docs/API.md) version keys and ETags prevent mixing bytes | Successful bytes/thumbnail binary responses only | Immutable version keys are removed or unversioned media is introduced |
 
 ## Documentation
 

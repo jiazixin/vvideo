@@ -1,6 +1,6 @@
 # 验证记录
 
-当前结论（2026-10-22，上线前全量模拟测试，见[文末](#2026-10-22上线前全量模拟测试)）：模拟环境下功能与回归检查通过，期间发现并修复 9 个缺陷；**整体验收仍未全部通过**：相册暖滚动 6 轮中 1 轮超过 1% 门槛，稀疏关键帧样本的 seek READY 超过 800/1000 ms（用户已接受的类别）。真实 NAS、真实媒体库与 Wi-Fi 由用户自测，不在本记录内。以下 2026-10-09 起的各节为历史记录。
+当前结论（2026-11-01，见[本次记录](#2026-11-01全仓规范检查与真机回归)）：全仓规范修复、服务端及 Android 构建/回归已执行，最新相册布局与末页游标问题已修复。最终 profile 包的 120 Hz 暖相册三轮均低于 1% 超时帧门槛。真实 NAS、完整真实媒体库、Wi-Fi 与实际 144 Hz 尚未验证；稀疏关键帧 seek 超过 800/1000 ms 仍按用户已接受类别如实记录。因此不宣称所有环境的完整验收已通过。以下各节保留历史结果，不能代替本次测量。
 
 历史结论（2026-10-09，UI 改版）：页面与配套接口已实现，构建和记录内真机行为检查通过；**整体验收尚未通过**，下载的 VP9/Vorbis WebM 有一轮 seek READY 1020ms，超过 1000ms 目标；最终UI包暖相册第一轮超deadline 4.23%，高于1%门槛。最新 UI 构建的测量记录见文末；下方旧版本结果仅作历史，不替代改版验收。真实大库、实际 NAS 挂载、OCR 与配套服务端部署仍未完成验收或执行。
 
@@ -819,3 +819,121 @@ device APK `95b97169e89e4688dfbc53608fd8a07327bba795c92160570d82191314de2d66`（
 - 帧表现（profile APK，单次安装，测量时为修复下一条审查发现之前的构建）：`large` 相册 3 轮超限比例 0.76/0.67/0.78%，通过；media 根目录（子文件夹加相册）3 轮 1.47/0.09/0.17%，**1 轮超过 1% 门槛**，该轮最慢帧超出 4.4 ms；与历史记录中首轮偶发偏高的现象一致，本轮未做交替安装对比。
 - 审查：`open-code-review-delegate` 10/10 个文件，审查者与实现者为同一代理。有效发现 1 条（medium）：子文件夹加载更多的监听没有随“是否从开头开始”重启，超过 100 个子文件夹的混合目录在往前翻到开头后不会继续加载子文件夹；已修复，重跑单元测试、Lint 和构建，未重跑设备测试。最终 profile 包 `49e1a56a…` 已装回手机。
 - 测试前在应用沙箱内备份用户连接与书签，结束后还原并核对 md5 一致、删除备份；`adb reverse` 与 fixture 服务已停止。
+
+### 2026-10-27 接口约定与安卓规范对齐（未提交）
+
+- 服务端（[代码规范.md](../代码规范.md) 第 5 节）：路径由 `/v1` 改为 `/api`，扫描改为 `POST /api/scans`；新增不鉴权的 `GET /healthz` 与 `GET /api/info`。中间件统一处理请求 ID（`X-Request-ID`）、panic 恢复与安全头，路由层 404/405 也返回 JSON。错误码改为 `unauthenticated`、`invalid_argument`（`details.fields`）、`not_found`、`method_not_allowed`、`internal`；`revision_changed`、`media_busy`、`thumbnail_pending`、`thumbnail_unavailable` 保留。传输类型集中到 `internal/app/wire.go`：`size_bytes`、`modified_at`/`effective_at`（UTC 毫秒 RFC 3339）、`next_cursor`/`previous_cursor`；库列表与目录路径返回 `{"items":[...]}`；索引提示返回 `offset_bytes`/`length_bytes`。日志器由构造参数注入 Queue、Scanner、Engine 与 App。按用户决定（项目未上线），新旧接口不并存。[API.md](API.md) 已重写。
+- 安卓客户端：按新接口改路径、字段与游标；`LibraryApi` 不再检查旧的升级状态码。
+- 安卓规范（[安卓代码规范.md](../安卓代码规范.md)）：
+  - 构建：新增 `android/.editorconfig`（ktlint `intellij_idea`）；三个模块加入 lint 配置（`warningsAsErrors`，baseline 首次运行生成）；CI 新增固定版本的 ktlint 步骤；Room 改用 Gradle 插件导出 schema；release R8 移除 `Log.d`/`Log.v`。
+  - 网络：`AppGraph` 只建一个 OkHttp 客户端。API 直接使用；Coil 用 `OkHttpNetworkFetcherFactory`；Media3 播放与预加载用 `OkHttpDataSource`，预加载用 `newBuilder()` 派生 3 秒超时；预加载索引请求也从 `HttpURLConnection` 改为 OkHttp，并限制 64 KiB。鉴权头由 `Authorization` 拦截器统一添加，只发往连接自身的源（scheme/host/port 一致），不跟随重定向；试连接的候选地址通过请求 tag 携带。`PlaybackItem` 与 `core/media` 不再持有令牌。
+  - 错误：`ServiceFailure` 保留 `X-Request-ID`；数据层按 `error.code` 映射为密封的 `LibraryError`（`Unreachable`/`Unauthenticated`/`Service`），`LibraryUiState` 不再含 HTTP 状态码。
+  - 秘密：令牌用 Android Keystore 的 AES/GCM 密钥加密后存入 DataStore（`TokenCipher`），存储键改为 `token_sealed`，**已安装的应用升级后需重新输入一次令牌**；`Connection.toString` 隐去令牌。备份规则本就排除全部数据。
+  - 协程：`AppDispatchers` 在 `AppGraph` 中构造并注入 `LibraryApi`、`SettingsRepository`、`CacheCoordinator`、`VideoCache`、`PlaybackSession`/`NeighborPreloader` 与 `LibraryViewModel`；可组合函数经 `LocalDispatchers` 读取；`PlayerViewModel` 中对挂起调用的 `runCatching` 改为重新抛出取消的 try/catch。
+  - 其他：ViewModel 工厂改为 `viewModelFactory { initializer { } }`；`BookmarkEntity` 只留在数据层，界面状态用领域模型 `Bookmark`；`core/media` 的 Media3 依赖改为 `implementation`，`PlaybackSession` 只暴露 `Player`，`@UnstableApi` 不再扩散到 app（只在 `core/media` 类与 `VideoViewerParts` 上 `@OptIn`）；去掉生产代码中唯一的 `!!`；日志 tag 改为 `private const val TAG`；全部通配符导入改为显式导入，超过 120 列的行已折行；新增 `LibraryErrorTest`，`SeekChainTest` 改用 `runTest`。
+- 保留：`network_security_config.xml` 对所有主机允许明文 HTTP，这是 2026-10-20 的用户决定（局域网 NAS 地址由用户输入，`domain-config` 无法列举），已在 `android/README.md` 记明。设备测试仍用 `runBlocking`：它们依赖真实时间等待界面与播放器，改为 `runTest` 会跳过其中的 `delay`。
+- 未做：Compose 结构项（设置、存储、连接页拆成 `XxxRoute` + 只接收状态的 `XxxScreen` 并各自成文件，每个公开 Screen 的 `@Preview`），以及 `LibraryViewModel` 的单元测试。这些是较大的界面改动，需要能编译验证后再做。
+- 验证：服务端 Go 全套检查（vet、staticcheck、race 测试、govulncheck 等）通过。安卓**未编译、未运行任何测试**：本机没有 JDK 21（Android Studio 自带的 JBR 是 25，Gradle 8.14 不支持），按用户要求不安装 JDK；ktlint 也未运行，只用脚本核对了通配符导入、未使用导入与行宽。需在有 JDK 21 的环境执行 `ktlint` 与 `./gradlew :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug :app:assembleDebug`（首次 lint 会生成 baseline），再由用户实机测试。
+- 审查：`ocr delegate rule` 规则由实现者自查，审查者与实现者为同一代理。
+
+## 2026-11-01：全仓规范检查与真机回归
+
+范围：Go 服务、Android 应用及媒体/benchmark 模块、构建与验证脚本。含任务开始前尚未提交的规范对齐工作。具体修复、项目例外、依赖理由和 OCR 覆盖清单见 [全仓审查记录](reviews/2026-11-01-compliance.md)。不存在独立 Web 或当前 iOS 工程。
+
+### 环境与证据边界
+
+- Go 1.27.3；macOS arm64 和本机 Linux arm64 容器实际执行测试，Linux amd64/arm64 交叉编译。Linux 容器限 2 CPU / 4 GiB、无网络，源码与模块缓存只读挂载；临时数据库在容器可写临时目录。不是实际 NAS 性能数据。
+- Android 固定 JDK 21、Gradle 8.14.3、AGP 8.13.2、Kotlin 2.2.21、API 36 / min 28。JDK 与临时工具只放在被忽略的 `test-results/toolchains/`，未写入项目机器专属路径。
+- iQOO 12 Pro（V2329A，Android 15）通过 USB `adb reverse` 访问 macOS 合成媒体服务。手机没有访问真实 NAS；没有扫描或修改用户原始媒体。
+- 布局性能修复前候选 profile APK SHA-256：`fa2775e6a29a1afd272356bcc2074b41483905726b4ccab89c45ea840fa1398c`；release APK：`de7882e74b118193ad473a1325a627485a76b6ce2f2bf7ddbb81297ff19c4b4a`。profile 是非调试、裁剪、profileable 的开发签名包；release 未配置正式签名，不能称已发布。
+- 最终布局与末页修复构建：profile SHA-256 `b484e17f9482b8ba9d44e37a108febc7851cb9a04dbb441ed7735d7efdc6ee81`，release SHA-256 `5168c73e4930ecdc8818b894d0326f6706370964cd0f16e333d21ee03b4f6300`。下述最新性能测量使用该 profile 包。
+- 原始日志、测量、备份及失败记录均在被忽略的 `test-results/compliance-2026-11-01/`。下表仅归纳实际结果；历史 2026-10-22 的 Linux 黑盒 345 项与 fuzz 数据不算本次重跑。
+
+### 服务端检查
+
+| 检查 | 命令/范围与结果 |
+| --- | --- |
+| 依赖与格式 | `go mod verify`、`go mod tidy -diff`、全仓 Go `gofmt` 与 `goimports -local vvideo` 通过 |
+| 静态检查 | `go vet ./...`、`staticcheck@v0.8.2 ./...`；Linux amd64/arm64 的普通及 `integration,scale` 标签 vet、darwin/arm64 vet 通过 |
+| 竞态与回归 | macOS 与 Linux arm64 `go test -race -count=1 ./...` 通过；Linux 含非 UTF-8 文件名分页，macOS 对该文件系统条件跳过 |
+| 集成 | macOS 使用 fixture FFmpeg，Linux 容器使用自带 FFmpeg；`go test -tags integration,scale -count=1 ./...` 通过；默认规模不是 51 万，实际规模另列 |
+| 跨平台产物 | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64/arm64 go build -trimpath ./cmd/vvideo` 两架构成功 |
+| 发布配置 | CI 固定的 GoReleaser 2.18.3：`check` 与 `release --snapshot` 成功，生成 Linux 两架构压缩包及校验和；只把输出目录改到本次忽略目录，无上传、签名或发布 |
+| 漏洞 | `govulncheck@v1.9.0 ./...`：无被调用符号或导入包漏洞；依赖模块报告 Windows 专用的 GO-2026-5024，本服务 Linux/darwin 目标未导入该包；未以此升级依赖基线 |
+| 51 万合成条目 | `VVIDEO_SCALE_ITEMS=510000 go test -count=1 -run TestExactGroupsKeysetsAndDeepRestore -v ./tests`，最终分页实现 207.151 秒通过，六种排序/方向与深处锚点保持无重无漏；这是单目录数据库合成记录，非 13 万视频与 38 万图片的实扫 |
+| 查询计划 | 反向末页边界的 12 种列/方向/筛选组合均使用 `entry_*` / `entry_kind_*` 覆盖范围索引，无 entries 全扫；同一只读事务、最多额外一次 EXISTS，无写事务 |
+
+Linux 首次运行发现 `TestNonUTF8NamesStayListable` 仍按旧 `next` 字段解码，重复第一页；修正为 `next_cursor`，随后在 Linux 通过。补充发现实际末页仍返回游标，已修复生产代码并新增正反向、反向锚点与 HTTP 末页字段回归；没有放宽分页无重无漏断言。
+
+### Android 构建与行为
+
+- 应用 JVM 单元测试 86 项、媒体模块 3 项，均通过；`ktlint 1.5.0` 通过；app/core `lintDebug` 为 0 错误、0 警告，两个 baseline 均为空。benchmark 为 `com.android.test` 插件，没有 `lintProfile` 任务；曾调用该不存在的任务失败，未伪称运行成功。
+- `:app:assembleDebug :app:assembleProfile :app:assembleRelease`、最终 `-PdeviceTestBuildType=device :app:assembleDevice :app:assembleDeviceAndroidTest`、`:core:media:assembleDebugAndroidTest :benchmark:assembleProfile` 成功。Gradle 的 SDK XML 版本提示保留，未为消除工具提示升级构建基线。
+- 前一候选 device 包完整行为集 22 项：18 通过、1 失败、3 条件跳过。失败为 `codecContainerMatrixSeekAndCacheClear` 的稀疏关键帧 `nile-falls.webm`，seek READY 907 ms > 800 ms；属于 2026-10-21 用户已接受类别，断言未改。跳过的两个长期用例需要显式时长；本次另做外部脚本 30 分钟真实 UI 长测。照片尾部用例补齐合成 fixture 后重跑通过，候选 UI 专项 5 项全部通过。独立 core 缓存淘汰/版本键设备测试 1 项通过。
+- 布局修复后真机专项 9 项中，照片、相册尾部保持、筛选书签、设置返回、分页取消、历史写入与分页、真实视频切换、双向深锚点恢复 8 项通过；最后一项末页状态等待不结束，保留停止该次运行的记录。查明客户端仍按旧末页游标语义判断结束，修复后新增两项 JVM 回归，并在真机重跑末页边界及真实视频切换，2/2 通过（63.847 秒）。
+- 布局性能修复前候选包 1.5 倍字体实机检查首页、相册和存储页；文字与操作区域未观察到重叠。测后恢复原字体倍率 1.0。
+
+### 首帧与拖动
+
+候选非调试 device 包，18 个代表性合成/公开样本，每场景 3 轮；每轮 18 个，p95 用 nearest-rank（本轮即最大值）。计时从已绑定 Surface 的目标媒体 select 开始，不等同于用户点击到首帧的全链路延迟。共 378 项记录；磁盘场景仅测首帧，没有磁盘 seek 数据。
+
+| ms（p50 / p95） | 第 1 轮 | 第 2 轮 | 第 3 轮 |
+| --- | --- | --- | --- |
+| 冷首帧 | 127.5 / 231 | 124.5 / 229 | 124 / 222 |
+| 磁盘命中首帧 | 78.5 / 95 | 75 / 90 | 81.5 / 91 |
+| 预取首帧 | 125.5 / 169 | 124.5 / 176 | 123 / 168 |
+| 不预取切换首帧 | 181.5 / 259 | 171 / 260 | 190 / 288 |
+| 冷 seek READY | 93.5 / 1027 | 128.5 / 1023 | 111 / 1041 |
+| 预取 seek READY | 85.5 / 1077 | 92 / 1022 | 93 / 1044 |
+| 切换 seek READY | 101.5 / 997 | 106.5 / 1046 | 101.5 / 1007 |
+
+首帧均低于冻结的 750/500/500 ms 门槛，预取首帧 p95 三轮低于冷首帧。稀疏关键帧样本的 seek 仍超过 800/1000 ms，不改成转码或近似定位来掩盖该条件。
+
+### Baseline Profile 与最终性能
+
+独立 `BaselineProfileGenerator` 在该设备的 benchmark 进程中崩溃，保留失败日志。随后用真实 device 包的已执行功能旅程请求 ART 保存 profile，经 `cmd package dump-profiles --dump-classes-and-methods` 导出、筛选 `dev.vvideo` 并去重，最初得到 1713 条真实规则；没有手写伪造热路径。AGP 的 profile/release ART profile 编译通过，APK 包含 6030 字节 `baseline.prof` 与 761 字节 `baseline.profm`。最终布局与末页修复后重新采集，保留 2610 条规则；最终 profile/release 的 `baseline.prof` 分别为 6140/6139 字节，`baseline.profm` 均为 765 字节。该轨迹不是所有功能都已覆盖的证明。
+
+较早候选 profile 包 `82aa322b…` 暖相册滚动三轮超时帧比例为 **3.56%** / 0.41% / 0.85%，有一轮超过 1%。全部 trace 保留。候选包 `fa2775e6a…` 在测量前执行包级 `speed-profile` 编译，并从 `dumpsys package dexopt` 核实该状态；与较早候选包不受控的新安装编译条件分开报告。它的三轮暖相册超时帧为 0.96% / **3.58%** / 0.48%，第二轮仍不达标；全屏视频三轮为 0.08% / 0% / 0%，UI 帧间隔最大 25.41 ms。
+
+布局性能修复前候选 profile 包（`fa2775e6a…`）30 分钟真实 UI 混合浏览（相册滚动与根目录视频翻页）完成，180 次采样且始终同一进程。PSS 峰值 **289.5 MiB**；5–10 分钟与 25–30 分钟各 30 次采样，中位数 **164.0 → 173.7 MiB**，增长 **9.7 MiB**，均在 512 / 25 MiB 门槛内；Java 3.8–26.0、native 9.3–69.1、graphics 75.3–155.7 MiB，电池 31.9–33.7 °C。未见持续爬升或进程重启。此项只判定所测负载的内存门槛，不代表帧表现或真实 NAS 验收。长测启动后 Go 另补了末页游标及临时文件错误处理；Android APK 未变，最终帧和行为测试改用最终 Go 二进制。
+
+最终布局在列表容器只取得一次可用宽度，移除逐相册的测量期子组合，保留首次组合的稳定高度。最新三轮 trace 中，`compose:lazy:prefetch:measure` 最大分别 3.58 / 3.63 / 4.46 ms；修复前失败轮最大 10.49 ms。该比较同时包含重新采集的 ART profile，不能把全部收益归因于单一改动。
+
+最终 profile 暖相册（每轮前后各 12 次滑动、预热路径相同）的结果如下；各轮分别判定，未按平均值掩盖超标。实际 UI 中位帧间隔约 8.35 ms，即 120 Hz，未实测 144 Hz。
+
+| 指标 | 第 1 轮 | 第 2 轮 | 第 3 轮 |
+| --- | --- | --- | --- |
+| 截止时间超限比例 | 0.46% | 0.69% | 0.68% |
+| 超限量 p95 / p99（ms） | −4.33 / −2.62 | −4.16 / −1.37 | −4.39 / −1.84 |
+| 最坏超限量（ms） | 4.53 | 5.69 | 8.20 |
+| UI CPU p95（ms） | 7.09 | 7.23 | 6.84 |
+| UI 间隔最大（ms） | 10.22 | 9.82 | 12.24 |
+
+负超限量表示仍在 deadline 内。这三轮均通过暖相册 ≤1% 门槛，未发现 >100 ms UI 停顿；不外推到其他设备、刷新率或网络。原始 trace 与未匹配/不完整帧统计保留在 `device/frames-album-layout/`。
+
+
+最终包 `b484e17f…` 在最终 Go 服务上重新执行 30 分钟相册/根目录视频混合浏览，180 次采样全部来自同一进程，5–10 与 25–30 分钟各 30 次：PSS 中位数 **159.7 → 153.8 MiB**，变化 **−5.8 MiB**；峰值 **279.2 MiB**。Java 5.3–27.1、native 17.1–64.7、graphics 76.5–158.0 MiB，电池 32.6–33.4 °C；未强制 GC，未清缓存或更换 APK。所测负载通过 ≤512 MiB 峰值及 ≤25 MiB 增长门槛，原始 10 秒间隔数据见 `device/memory-layout/`，持续 UI 操作见 `device/workload-layout.jsonl`。脚本为完成最后一整轮运行到 1874.95 秒，共 19 轮，未见前台丢失、播放错误或进程重启；内存判定只使用前 1800 秒。
+
+
+最终 profile 全屏根目录视频翻页三轮均为 **0%** 截止时间超限；UI 间隔中位数约 8.35 ms，最大分别 24.70 / 24.90 / 25.12 ms，未观察到 >100 ms 停顿。该场景与暖相册分开报告，完整统计见 `device/frames-video-layout/`。
+
+
+最终包的补充帧统计如下。清缓存相册每轮均先在存储页确认视频和图片缓存归零，再进入相册，不加 `--prewarm`；进入页面已加载第一屏，因此不是冷启动。三轮独立清理，设备与服务端 OS 页缓存仍在运行态。冷加载第二轮 **4.85%** 高于暖缓存结果，保留该波动，不将其混入暖相册 ≤1% 的判定。
+
+| 场景/轮次 | 超限比例 | 超限量 p95 / p99 / 最坏（ms） | UI CPU p95（ms） | UI 间隔最大（ms） |
+| --- | --- | --- | --- | --- |
+| 全屏翻页 1 | 0.00% | -8.14 / -7.46 / -6.75 | 4.35 | 24.70 |
+| 全屏翻页 2 | 0.00% | -8.16 / -7.48 / -5.76 | 4.39 | 24.90 |
+| 全屏翻页 3 | 0.00% | -8.17 / -7.57 / -5.70 | 4.37 | 25.12 |
+| 清缓存相册 1 | 0.53% | -4.12 / -1.95 / 3.99 | 7.32 | 13.22 |
+| 清缓存相册 2 | 4.85% | -1.54 / 3.91 / 10.32 | 9.72 | 13.90 |
+| 清缓存相册 3 | 0.38% | -4.46 / -3.07 / 5.37 | 7.08 | 10.43 |
+
+以上 trace 范围未见 >100 ms UI 停顿。所有结果只覆盖列明设备、构建、合成样本与 USB 回环网络；真实 NAS、Wi-Fi、完整用户库、实际 144 Hz 及长期热环境未验收。稀疏关键帧精确 seek 的已知超时仍保留，不降低原始断言。
+
+
+### 设备恢复与交付边界
+
+已恢复测试前的连接偏好、浏览数据库及原有辅助文件，共 7 个文件逐项 SHA-256 一致；不恢复与已清空媒体缓存不一致的旧 ExoPlayer 缓存数据库。原始媒体未改动，可回收的视频/图片缓存已清理；旧开发包明文令牌不做迁移，需重新输入。字体倍率恢复并核实为 1.0。最终 profile 包重新安装后抽取 APK 核对摘要与上文一致，应用保持停止状态。
+
+本次创建的合成尾部照片、临时服务与 `adb reverse` 的 19090 转发已清理，其他既有转发未改。用户原有源码与规范改动一并保留在本次规范对齐提交中；没有推送远端、正式签名发布或部署到 NAS。

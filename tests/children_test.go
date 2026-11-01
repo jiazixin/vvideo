@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
 	"vvideo/internal/app"
 	"vvideo/internal/jobs"
-	"vvideo/internal/streaming"
 )
 
 func TestChildrenBidirectionalWindow(t *testing.T) {
@@ -18,7 +19,7 @@ func TestChildrenBidirectionalWindow(t *testing.T) {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			index, scan, root := setup(t)
 			for n := range count {
-				if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("folder-%04d", n)), 0700); err != nil {
+				if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("folder-%04d", n)), 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -35,7 +36,7 @@ func TestChildrenBidirectionalWindow(t *testing.T) {
 				if order == "DESC" {
 					comparison = "<"
 				}
-				rows, err := index.Store.Reader.QueryContext(t.Context(), "EXPLAIN QUERY PLAN SELECT id,name FROM directories WHERE parent_id=? AND state='visible' AND (name,id)"+comparison+"(?,?) ORDER BY name "+order+",id "+order+" LIMIT 101", parent, "folder-0200", 0)
+				rows, err := index.Store.Query(t.Context(), "EXPLAIN QUERY PLAN SELECT id,name FROM directories WHERE parent_id=? AND state='visible' AND (name,id)"+comparison+"(?,?) ORDER BY name "+order+",id "+order+" LIMIT 101", parent, "folder-0200", 0)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -108,14 +109,14 @@ func TestDirectoryMetadataHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &app.App{Config: scan.Config, Index: index, Stream: streaming.New(index, jobs.NewPriority())}
+	server := &app.App{Config: scan.Config, Index: index, Stream: app.NewStreamHandler(index, jobs.NewPriority(time.Now))}
 	handler := server.Handler()
 	for _, tc := range []struct {
 		id     int64
 		token  string
 		status int
-	}{{libs[0].DirectoryID, "fixture", 200}, {libs[0].DirectoryID, "wrong", 401}, {-1, "fixture", 404}} {
-		r := httptest.NewRequest("GET", fmt.Sprintf("/v1/directories/%d/path", tc.id), nil)
+	}{{libs[0].DirectoryID, "fixture", 200}, {libs[0].DirectoryID, "wrong", 401}, {-1, "fixture", 400}} {
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/directories/%d/path", tc.id), nil)
 		r.Header.Set("Authorization", "Bearer "+tc.token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
@@ -123,11 +124,13 @@ func TestDirectoryMetadataHTTP(t *testing.T) {
 			t.Fatalf("status %d want %d", w.Code, tc.status)
 		}
 		if w.Code == 200 {
-			var path []map[string]any
-			if err := json.Unmarshal(w.Body.Bytes(), &path); err != nil {
+			var list struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
 				t.Fatal(err)
 			}
-			result := path[0]
+			result := list.Items[0]
 			for _, private := range []string{"relative", "identity", "root"} {
 				if _, ok := result[private]; ok {
 					t.Fatalf("exposed %s", private)
@@ -143,7 +146,7 @@ func TestHTTPErrorsAreJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &app.App{Config: scan.Config, Index: index, Stream: streaming.New(index, jobs.NewPriority())}
+	server := &app.App{Config: scan.Config, Index: index, Stream: app.NewStreamHandler(index, jobs.NewPriority(time.Now))}
 	handler := server.Handler()
 	root := libs[0].DirectoryID
 	for _, tc := range []struct {
@@ -151,29 +154,34 @@ func TestHTTPErrorsAreJSON(t *testing.T) {
 		status      int
 		code        string
 	}{
-		{"/v1/libraries", "wrong", 401, "unauthorized"},
-		{"/v1/directories/abc/path", "fixture", 400, "invalid_request"},
-		{fmt.Sprintf("/v1/directories/%d/media?sort=size", root), "fixture", 400, "invalid_request"},
-		{fmt.Sprintf("/v1/directories/%d/media?limit=many", root), "fixture", 400, "invalid_request"},
-		{fmt.Sprintf("/v1/directories/%d/media?limit=0", root), "fixture", 400, "invalid_request"},
-		{fmt.Sprintf("/v1/directories/%d/media?cursor=%%21", root), "fixture", 400, "invalid_request"},
-		{fmt.Sprintf("/v1/directories/%d/children?previous=true", root), "fixture", 400, "invalid_request"},
-		{"/v1/directories/999999/children", "fixture", 404, "unavailable"},
-		{"/v1/media/absent", "fixture", 404, "unavailable"},
-		{"/v1/media/absent/bytes?version=x", "fixture", 404, "unavailable"},
-		{"/v1/unknown", "fixture", 404, "unavailable"},
-		{"/v1/unknown", "wrong", 401, "unauthorized"},
+		{"/api/libraries", "wrong", 401, "unauthenticated"},
+		{"/api/directories/abc/path", "fixture", 400, "invalid_argument"},
+		{fmt.Sprintf("/api/directories/%d/media?sort=size", root), "fixture", 400, "invalid_argument"},
+		{fmt.Sprintf("/api/directories/%d/media?limit=many", root), "fixture", 400, "invalid_argument"},
+		{fmt.Sprintf("/api/directories/%d/media?limit=0", root), "fixture", 400, "invalid_argument"},
+		{fmt.Sprintf("/api/directories/%d/media?cursor=%%21", root), "fixture", 400, "invalid_argument"},
+		{fmt.Sprintf("/api/directories/%d/children?previous=true", root), "fixture", 400, "invalid_argument"},
+		{"/api/directories/999999/children", "fixture", 404, "not_found"},
+		{"/api/media/absent", "fixture", 404, "not_found"},
+		{"/api/media/absent/bytes?version=x", "fixture", 404, "not_found"},
+		{"/api/unknown", "fixture", 404, "not_found"},
+		{"/api/unknown", "wrong", 401, "unauthenticated"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
 			r.Header.Set("Authorization", "Bearer "+tc.token)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
-			var body map[string]string
+			var body struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatalf("non-JSON error body %q", w.Body.String())
 			}
-			if w.Code != tc.status || body["error"] != tc.code || w.Header().Get("Content-Type") != "application/json" {
+			if w.Code != tc.status || body.Error.Code != tc.code || body.Error.Message == "" || w.Header().Get("Content-Type") != "application/json" {
 				t.Fatalf("got %d %v %q, want %d %s", w.Code, body, w.Header().Get("Content-Type"), tc.status, tc.code)
 			}
 		})
@@ -183,7 +191,7 @@ func TestHTTPErrorsAreJSON(t *testing.T) {
 func TestDirtyDirectoriesTakeTurns(t *testing.T) {
 	index, scan, root := setup(t)
 	for _, name := range []string{"a", "b"} {
-		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}

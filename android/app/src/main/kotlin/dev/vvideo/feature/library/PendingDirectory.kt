@@ -8,7 +8,7 @@ import dev.vvideo.ui.component.pathLabel
  * from what the current state already knows. Null means the destination cannot
  * be named yet, so the current page stays until the load finishes.
  */
-fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
+internal fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
     val ancestor = state.path.indexOfFirst { it.id == id }
     val child = state.subfolders.items.firstOrNull { it.id == id }
     val path = when {
@@ -23,8 +23,8 @@ fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
                         libraryId = it.id,
                         parentId = 0,
                         name = it.name,
-                        revision = 0
-                    )
+                        revision = 0,
+                    ),
                 )
             }
     }
@@ -38,7 +38,7 @@ fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
                 libraryId = it.library,
                 parentId = 0,
                 name = it.name,
-                revision = 0
+                revision = 0,
             )
         }
         ?: return null
@@ -58,12 +58,11 @@ fun pendingDirectory(state: LibraryUiState, id: Long): LibraryUiState? {
  * that kept updating meanwhile and the restore counter come from [current];
  * paging requests of the kept page were cancelled when it was left.
  */
-fun restoredPage(kept: LibraryUiState, current: LibraryUiState): LibraryUiState =
-    kept.copy(
-        recent = current.recent,
-        libraries = current.libraries,
-        pageBusy = false,
-        subfolders = kept.subfolders.copy(busy = false),
-        restore = kept.restore.copy(serial = current.restore.serial),
-        anchorMissing = false
-    )
+internal fun restoredPage(kept: LibraryUiState, current: LibraryUiState): LibraryUiState = kept.copy(
+    recent = current.recent,
+    libraries = current.libraries,
+    pageBusy = false,
+    subfolders = kept.subfolders.copy(busy = false),
+    restore = kept.restore.copy(serial = current.restore.serial),
+    anchorMissing = false,
+)

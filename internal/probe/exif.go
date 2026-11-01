@@ -9,6 +9,8 @@ import (
 // Exif reads at most 256 KiB of JPEG header/TIFF metadata. Malformed tags simply
 // retain the raw unknown-time semantics and never trigger an unbounded read.
 func Exif(reader io.Reader) (raw, offset string, rotation int) {
+	// Optional metadata can be recovered from complete tags in the prefix even
+	// when a later read fails; truncated tags retain unknown-time semantics.
 	b, _ := io.ReadAll(io.LimitReader(reader, 256<<10))
 	if len(b) < 4 || b[0] != 0xff || b[1] != 0xd8 {
 		return

@@ -88,6 +88,7 @@ type Metrics struct {
 // removed while it is being served. budget serializes the byte ledger with
 // publication, eviction and reconciliation.
 type Engine struct {
+	Logger     *slog.Logger // nil discards
 	Config     config.Config
 	Queue      *jobs.Queue
 	Parameters string
@@ -148,7 +149,7 @@ func (e *Engine) Touch(ctx context.Context, item library.Entry) {
 // Bytes is the cover cache size recorded in the ledger.
 func (e *Engine) Bytes(ctx context.Context) (int64, error) {
 	var n int64
-	err := e.Queue.Store.Reader.QueryRowContext(ctx, "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&n)
+	err := e.Queue.Store.QueryRow(ctx, "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&n)
 	return n, err
 }
 
@@ -162,7 +163,7 @@ func (e *Engine) Evict(ctx context.Context, reserve int64) error {
 	}
 	e.budget.Lock()
 	defer e.budget.Unlock()
-	if err := os.MkdirAll(e.Config.Cache.Path, 0700); err != nil {
+	if err := os.MkdirAll(e.Config.Cache.Path, 0o700); err != nil {
 		return err
 	}
 	for {
@@ -178,7 +179,7 @@ func (e *Engine) Evict(ctx context.Context, reserve int64) error {
 		if n+reserve <= e.Config.Cache.MaxSize && free >= guard+reserve {
 			return nil
 		}
-		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE state='ready' ORDER BY accessed,key LIMIT ?", storage.BatchSize)
+		rows, err := e.Queue.Store.Query(ctx, "SELECT key,size FROM thumbnails WHERE state='ready' ORDER BY accessed,key LIMIT ?", storage.BatchSize)
 		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (candidate, error) {
 			var c candidate
 			return c, rows.Scan(&c.key, &c.size)
@@ -330,10 +331,10 @@ func (e *Engine) run(ctx context.Context, j jobs.Job, start time.Time) error {
 	if err != nil || stat.Size() <= 0 || stat.Size() > maxCoverSize {
 		return errors.New("thumbnail output invalid")
 	}
-	if err = os.Chmod(temp, 0600); err != nil {
+	if err = os.Chmod(temp, 0o600); err != nil {
 		return err
 	}
-	output, err := os.OpenFile(temp, os.O_RDWR, 0600)
+	output, err := os.OpenFile(temp, os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -382,7 +383,7 @@ func (e *Engine) run(ctx context.Context, j jobs.Job, start time.Time) error {
 	elapsed := time.Since(start)
 	e.Metrics.Generated.Add(1)
 	e.Metrics.GenerateNS.Add(elapsed.Nanoseconds())
-	slog.Debug("thumbnail_generated", "media_id", item.ID, "kind", item.Kind, "duration_ms", elapsed.Milliseconds())
+	e.logger().Debug("thumbnail_generated", "media_id", item.ID, "kind", item.Kind, "duration_ms", elapsed.Milliseconds())
 	return e.Evict(ctx, 0)
 }
 
@@ -403,4 +404,11 @@ func (e *Engine) forget(ctx context.Context, key string, size int64) error {
 		}
 		return err
 	})
+}
+
+func (e *Engine) logger() *slog.Logger {
+	if e.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return e.Logger
 }

@@ -12,7 +12,7 @@ import (
 // idle queue writes nothing and the job table is not counted.
 type Progress struct {
 	Engine *Engine
-	Logger *slog.Logger // nil: slog.Default()
+	Logger *slog.Logger // nil discards
 
 	last                   time.Time
 	generated, ns, failure int64
@@ -28,7 +28,7 @@ func (p *Progress) Run(ctx context.Context, interval time.Duration) {
 			return
 		case now := <-tick:
 			if err := p.Report(ctx, now); err != nil && ctx.Err() == nil {
-				p.logger().Warn("thumbnail_progress_failed", "error", err.Error())
+				p.logger().Warn("thumbnail_progress_failed", "error", err)
 			}
 		}
 	}
@@ -92,7 +92,7 @@ func (p *Progress) logger() *slog.Logger {
 	if p.Logger != nil {
 		return p.Logger
 	}
-	return slog.Default()
+	return slog.New(slog.DiscardHandler)
 }
 
 func roundTenth(v float64) float64 { return math.Round(v*10) / 10 }

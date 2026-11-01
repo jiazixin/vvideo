@@ -1,8 +1,13 @@
 package dev.vvideo.feature.library
 
-import dev.vvideo.data.library.local.BookmarkEntity
-import dev.vvideo.model.*
-import org.junit.Assert.*
+import dev.vvideo.model.Bookmark
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Library
+import dev.vvideo.model.MediaKind
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PendingDirectoryTest {
@@ -10,13 +15,13 @@ class PendingDirectoryTest {
     private val wide = Directory(2, "lib", 1, "wide", 3)
     private val leaf = Directory(3, "lib", 2, "folder-0001", 1)
     private val recent = RecentFolder(
-        BookmarkEntity("c", 9, "lib", name = "deep", pathLabel = "media › wide"),
-        "昨天"
+        Bookmark("c", 9, "lib", name = "deep", pathLabel = "media › wide"),
+        "昨天",
     )
     private val home = LibraryUiState(
         libraries = listOf(Library("lib", "media", 1, true)),
         recent = listOf(recent),
-        restore = ScrollRestore(serial = 4)
+        restore = ScrollRestore(serial = 4),
     )
     private val inWide = home.copy(
         directory = wide,
@@ -26,7 +31,7 @@ class PendingDirectoryTest {
         albums = listOf(Album(emptyList())),
         hasMedia = true,
         filter = MediaKind.Video,
-        error = true
+        error = true,
     )
 
     @Test
@@ -53,9 +58,10 @@ class PendingDirectoryTest {
                 inWide.copy(
                     directory = leaf,
                     path = listOf(root, wide, leaf),
-                    subfolders = Subfolders()
-                ), 2
-            )
+                    subfolders = Subfolders(),
+                ),
+                2,
+            ),
         )
         assertEquals(wide, pending.directory)
         assertEquals(listOf(root, wide), pending.path)
@@ -94,22 +100,23 @@ class PendingDirectoryTest {
                 pageBusy = true,
                 subfolders = inWide.subfolders.copy(busy = true),
                 restore = ScrollRestore(serial = 4),
-                anchorMissing = true
+                anchorMissing = true,
             )
         val newer = RecentFolder(
-            BookmarkEntity(
+            Bookmark(
                 "c",
                 3,
                 "lib",
                 name = "folder-0001",
-                pathLabel = "media › wide"
-            ), "今天"
+                pathLabel = "media › wide",
+            ),
+            "今天",
         )
         val failed = checkNotNull(pendingDirectory(left, 3)).copy(
             busy = false,
             error = true,
             recent = listOf(newer),
-            restore = ScrollRestore(serial = 6)
+            restore = ScrollRestore(serial = 6),
         )
         val back = restoredPage(left, failed)
         assertEquals(wide, back.directory)

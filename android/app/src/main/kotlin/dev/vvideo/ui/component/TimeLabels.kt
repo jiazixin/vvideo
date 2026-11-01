@@ -8,19 +8,20 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 /** Formatting inputs come from resources; clock and zone are injectable for boundary tests. */
-data class TimeLabels(
-    val today: String, val yesterday: String, val datePattern: String,
-    val yearPattern: String, val recentPattern: String, val oldPattern: String,
-    val weekdayPattern: String, val locale: Locale = Locale.getDefault(),
+internal data class TimeLabels(
+    val today: String,
+    val yesterday: String,
+    val datePattern: String,
+    val yearPattern: String,
+    val recentPattern: String,
+    val oldPattern: String,
+    val weekdayPattern: String,
+    val locale: Locale = Locale.getDefault(),
 ) {
     private fun format(value: ZonedDateTime, pattern: String) =
         value.format(DateTimeFormatter.ofPattern(pattern, locale))
 
-    fun recent(
-        millis: Long,
-        now: Instant = Instant.now(),
-        zone: ZoneId = ZoneId.systemDefault()
-    ): String {
+    fun recent(millis: Long, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
         val value = Instant.ofEpochMilli(millis).atZone(zone)
         val date = value.toLocalDate()
         val current = now.atZone(zone).toLocalDate()
@@ -34,11 +35,7 @@ data class TimeLabels(
         }
     }
 
-    fun date(
-        nanos: Long,
-        now: Instant = Instant.now(),
-        zone: ZoneId = ZoneId.systemDefault()
-    ): String {
+    fun date(nanos: Long, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
         val value = instant(nanos).atZone(zone)
         val current = now.atZone(zone).toLocalDate()
         return when (value.toLocalDate()) {
@@ -51,15 +48,14 @@ data class TimeLabels(
     companion object {
         fun instant(nanos: Long): Instant = Instant.ofEpochSecond(
             Math.floorDiv(nanos, 1_000_000_000L),
-            Math.floorMod(nanos, 1_000_000_000L)
+            Math.floorMod(nanos, 1_000_000_000L),
         )
 
         fun timestamp(
             nanos: Long,
             pattern: String,
             zone: ZoneId = ZoneId.systemDefault(),
-            locale: Locale = Locale.getDefault()
+            locale: Locale = Locale.getDefault(),
         ): String = instant(nanos).atZone(zone).format(DateTimeFormatter.ofPattern(pattern, locale))
     }
 }
-

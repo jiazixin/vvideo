@@ -27,7 +27,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,13 +34,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.util.UnstableApi
 import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.ThemeMode
@@ -55,65 +51,67 @@ import java.net.URI
 private const val TOKEN_MASK = "••••••"
 private const val TOKEN_VISIBLE_CHARS = 4
 
-@UnstableApi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsRoute(
-    vm: SettingsViewModel,
-    connection: Connection,
+internal fun SettingsScreen(
+    state: SettingsUiState,
     onDone: () -> Unit,
-    onStorage: () -> Unit = {},
-    onConnection: () -> Unit = {}
+    onStorage: () -> Unit,
+    onConnection: () -> Unit,
+    onVerify: () -> Unit,
+    onTheme: (ThemeMode) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val state by vm.state.collectAsStateWithLifecycle()
-    val theme by vm.theme.collectAsStateWithLifecycle(initialValue = ThemeMode.System)
-    LaunchedEffect(connection.id, connection.token) {
-        vm.verify(connection)
-        vm.usage()
-    }
+    val connection = state.connection
+    val theme = state.theme
     var themeOpen by remember { mutableStateOf(false) }
     val colors = LocalVVColors.current
     val host = remember(connection.address) {
         runCatching { URI(connection.address).rawAuthority }.getOrNull().orEmpty()
     }
-    val context = LocalContext.current
-    val version = remember {
-        context.packageManager.getPackageInfo(
-            context.packageName,
-            0
-        ).versionName.orEmpty()
-    }
-    if (themeOpen) ThemeSheet(theme, onDismiss = { themeOpen = false }) {
-        vm.setTheme(it)
-        themeOpen = false
+    if (themeOpen) {
+        ThemeSheet(theme, onDismiss = { themeOpen = false }) {
+            onTheme(it)
+            themeOpen = false
+        }
     }
     Scaffold(
+        modifier = modifier,
         containerColor = colors.bgPage,
         topBar = {
             TopAppBar(
                 expandedHeight = 56.dp,
                 title = { Text(stringResource(R.string.settings)) },
                 navigationIcon = { ActionIcon(R.drawable.ic_back, R.string.back, onDone) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface),
             )
-        }) { padding ->
+        },
+    ) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ConnectionHeader(host, state)
+            if (state.message == SettingsMessage.SaveFailed) {
+                Text(
+                    stringResource(R.string.settings_save_failed),
+                    Modifier.padding(horizontal = 20.dp),
+                    color = colors.warn,
+                )
+            }
             SettingsSection(R.string.connection_section) {
                 SettingsRow(R.drawable.ic_globe, R.string.server_address, host, onConnection)
                 SettingsRow(
                     R.drawable.ic_key,
                     R.string.access_token,
                     TOKEN_MASK + connection.token.takeLast(TOKEN_VISIBLE_CHARS),
-                    onConnection
+                    onConnection,
                 )
                 SettingsRow(
                     R.drawable.ic_refresh,
                     R.string.verify_connection,
-                    onClick = { vm.verify(connection) })
+                    onClick = onVerify,
+                )
             }
             SettingsSection(R.string.storage_section) {
                 SettingsRow(
@@ -122,21 +120,21 @@ fun SettingsRoute(
                     state.usage?.let {
                         formatBytes(it.total) + " / " + formatBytes(connection.budget)
                     } ?: stringResource(R.string.calculating),
-                    onStorage
+                    onStorage,
                 )
             }
             SettingsSection(R.string.display_section) {
                 SettingsRow(
                     R.drawable.ic_moon,
                     R.string.theme,
-                    stringResource(theme.label())
+                    stringResource(theme.label()),
                 ) { themeOpen = true }
             }
             Text(
-                stringResource(R.string.app_version, version),
+                stringResource(R.string.app_version, state.version),
                 Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.textTertiary
+                color = colors.textTertiary,
             )
         }
     }
@@ -149,41 +147,38 @@ internal fun SettingsSection(@StringRes title: Int, content: @Composable ColumnS
             stringResource(title),
             Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
             color = LocalVVColors.current.accentText,
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelLarge,
         )
         content()
     }
 }
 
 @Composable
-internal fun SettingsRow(
-    @DrawableRes icon: Int,
-    @StringRes label: Int,
-    value: String? = null,
-    onClick: () -> Unit
-) {
+internal fun SettingsRow(@DrawableRes icon: Int, @StringRes label: Int, value: String? = null, onClick: () -> Unit) {
     val colors = LocalVVColors.current
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 52.dp)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Icon(
             painterResource(icon),
             null,
             tint = colors.textSecondary,
-            modifier = Modifier.size(24.dp)
+            modifier = Modifier.size(24.dp),
         )
         Text(stringResource(label), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        if (value != null) Text(
-            value,
-            Modifier.widthIn(max = 180.dp),
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (value != null) {
+            Text(
+                value,
+                Modifier.widthIn(max = 180.dp),
+                color = colors.textSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -195,17 +190,17 @@ private fun ConnectionHeader(host: String, state: SettingsUiState) {
     Row(
         Modifier.fillMaxWidth().background(colors.bgSurface).padding(20.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Box(
             Modifier.size(64.dp).background(ServerGradient, CircleShape),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(R.drawable.ic_server),
                 null,
                 tint = Color.White,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(32.dp),
             )
         }
         Column {
@@ -213,7 +208,7 @@ private fun ConnectionHeader(host: String, state: SettingsUiState) {
                 host,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 if (connected) {
@@ -222,7 +217,7 @@ private fun ConnectionHeader(host: String, state: SettingsUiState) {
                     stringResource(state.connectionStatus.label())
                 },
                 color = if (connected) colors.online else colors.textSecondary,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
@@ -235,11 +230,30 @@ private fun ThemeSheet(current: ThemeMode, onDismiss: () -> Unit, onSelect: (The
             Row(
                 Modifier.fillMaxWidth().clickable { onSelect(mode) }.heightIn(min = 52.dp)
                     .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(current == mode, { onSelect(mode) })
                 Text(stringResource(mode.label()))
             }
         }
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, fontScale = 1.5f)
+@Composable
+private fun SettingsScreenPreview() {
+    dev.vvideo.ui.theme.VVideoTheme {
+        SettingsScreen(
+            state = SettingsUiState(
+                connection = dev.vvideo.data.settings.Connection("https://example.invalid", "preview"),
+                version = "preview",
+            ),
+            onDone = {
+            },
+            onStorage = {},
+            onConnection = {},
+            onVerify = {},
+            onTheme = {},
+        )
     }
 }

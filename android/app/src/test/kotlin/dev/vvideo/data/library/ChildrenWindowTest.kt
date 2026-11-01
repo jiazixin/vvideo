@@ -1,14 +1,15 @@
 package dev.vvideo.data.library
 
-import dev.vvideo.model.*
-import org.junit.Assert.*
+import dev.vvideo.model.ChildrenPage
+import dev.vvideo.model.Directory
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ChildrenWindowTest {
     private fun page(n: Int) = ChildrenPage(
         List(100) { Directory((n * 100 + it).toLong(), "lib", 1, "folder-$it", 1) },
         "next-$n",
-        if (n == 0) "" else "previous-$n"
+        if (n == 0) "" else "previous-$n",
     )
 
     @Test

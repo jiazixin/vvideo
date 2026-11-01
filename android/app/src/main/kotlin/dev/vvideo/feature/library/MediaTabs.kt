@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.vvideo.R
 import dev.vvideo.model.MediaKind
@@ -37,18 +38,22 @@ internal fun MediaTabs(selected: MediaKind?, onSelect: (MediaKind?) -> Unit) {
         listOf(
             null to R.string.tab_all,
             MediaKind.Video to R.string.tab_video,
-            MediaKind.Image to R.string.tab_photo
+            MediaKind.Image to R.string.tab_photo,
         )
     }
     val widths = remember { mutableStateListOf(0, 0, 0) }
     val density = LocalDensity.current
     val index = tabs.indexOfFirst { it.first == selected }.coerceAtLeast(0)
-    val left by animateDpAsState(with(density) { widths.take(index).sum().toDp() } + 12.dp,
+    val left by animateDpAsState(
+        with(density) { widths.take(index).sum().toDp() } + 12.dp,
         move(),
-        label = "tab-left")
-    val width by animateDpAsState((with(density) { widths[index].toDp() } - 24.dp).coerceAtLeast(0.dp),
+        label = "tab-left",
+    )
+    val width by animateDpAsState(
+        (with(density) { widths[index].toDp() } - 24.dp).coerceAtLeast(0.dp),
         move(),
-        label = "tab-width")
+        label = "tab-width",
+    )
     val colors = LocalVVColors.current
     Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
         Row {
@@ -56,18 +61,21 @@ internal fun MediaTabs(selected: MediaKind?, onSelect: (MediaKind?) -> Unit) {
                 val color by animateColorAsState(
                     if (selected == kind) colors.accentText else colors.textSecondary,
                     fade(),
-                    label = "tab-color"
+                    label = "tab-color",
                 )
-                Text(stringResource(label), Modifier.onSizeChanged { widths[i] = it.width }
-                    .clickable { if (selected != kind) onSelect(kind) }
-                    .heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 10.5.dp),
+                Text(
+                    stringResource(label),
+                    Modifier.onSizeChanged { widths[i] = it.width }
+                        .clickable { if (selected != kind) onSelect(kind) }
+                        .heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 10.5.dp),
                     style = MaterialTheme.typography.labelLarge,
-                    color = color)
+                    color = color,
+                )
             }
         }
         Box(
-            Modifier.align(Alignment.BottomStart).offset(x = left).width(width).height(3.dp)
-                .background(colors.accentText, RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+            Modifier.align(Alignment.BottomStart).offset { IntOffset(left.roundToPx(), 0) }.width(width).height(3.dp)
+                .background(colors.accentText, RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)),
         )
     }
 }

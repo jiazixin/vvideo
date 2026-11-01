@@ -40,16 +40,13 @@ type Metrics struct {
 // Store holds one writer connection and a pool of read-only connections to
 // the same WAL database.
 type Store struct {
-	Reader     *sql.DB
-	Writer     *sql.DB
-	Path       string
-	Metrics    Metrics
-	gate       chan struct{}
-	lock       *os.File
-	closeOnce  sync.Once
-	closeError error
-	// Fault is a deterministic test seam, configured before concurrent use.
-	Fault func(string) error
+	reader  *sql.DB
+	writer  *sql.DB
+	Metrics Metrics
+	gate    chan struct{}
+	close   func() error
+	// fault is a deterministic test seam, configured before concurrent use.
+	fault func(string) error
 }
 
 // ErrLocked reports that another process already serves the same database.
@@ -66,11 +63,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func openStore(ctx context.Context, path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	lockPath := path + ".lock"
-	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: lockPath, Err: err}
 	}
@@ -93,6 +90,7 @@ func openStore(ctx context.Context, path string) (*Store, error) {
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "synchronous(FULL)")
+	q.Set("_txlock", "immediate")
 	u.RawQuery = q.Encode()
 	w, err := sql.Open("sqlite", u.String())
 	if err != nil {
@@ -120,9 +118,10 @@ func openStore(ctx context.Context, path string) (*Store, error) {
 			return fail(fmt.Errorf("initialize schema: %w", err))
 		}
 	}
-	if err = os.Chmod(path, 0600); err != nil {
+	if err = os.Chmod(path, 0o600); err != nil {
 		return fail(err)
 	}
+	q.Del("_txlock")
 	q.Set("mode", "ro")
 	q.Add("_pragma", "query_only(1)")
 	u.RawQuery = q.Encode()
@@ -137,7 +136,10 @@ func openStore(ctx context.Context, path string) (*Store, error) {
 		return fail(err)
 	}
 	acquired = true
-	return &Store{Reader: r, Writer: w, Path: path, gate: make(chan struct{}, 1), lock: lock}, nil
+	return &Store{
+		reader: r, writer: w, gate: make(chan struct{}, 1),
+		close: sync.OnceValue(func() error { return errors.Join(r.Close(), w.Close(), lock.Close()) }),
+	}, nil
 }
 
 // initSchema creates the schema and records schemaVersion atomically.
@@ -158,8 +160,24 @@ func initSchema(ctx context.Context, w *sql.DB) error {
 
 // Close closes both connection pools and releases the ownership lock.
 func (s *Store) Close() error {
-	s.closeOnce.Do(func() { s.closeError = errors.Join(s.Reader.Close(), s.Writer.Close(), s.lock.Close()) })
-	return s.closeError
+	return s.close()
+}
+
+// Query reads a bounded domain query through the read-only pool. The caller
+// must close the rows; no connection or pool settings escape this package.
+func (s *Store) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.reader.QueryContext(ctx, query, args...)
+}
+
+// QueryRow reads one domain row through the read-only pool.
+func (s *Store) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.reader.QueryRowContext(ctx, query, args...)
+}
+
+// BeginRead opens a read-only snapshot for related domain queries. The caller
+// must finish it before performing file, network or external-process work.
+func (s *Store) BeginRead(ctx context.Context) (*sql.Tx, error) {
+	return s.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 }
 
 // Write runs fn in a transaction on the single writer connection and commits
@@ -181,7 +199,7 @@ func (s *Store) Write(ctx context.Context, rows int64, fn func(*sql.Tx) error) (
 			s.Metrics.Failed.Add(1)
 		}
 	}()
-	tx, err := s.Writer.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -190,8 +208,8 @@ func (s *Store) Write(ctx context.Context, rows int64, fn func(*sql.Tx) error) (
 		return err
 	}
 	s.Metrics.ExecutionNS.Add(time.Since(start).Nanoseconds())
-	if s.Fault != nil {
-		if err = s.Fault("commit"); err != nil {
+	if s.fault != nil {
+		if err = s.fault("commit"); err != nil {
 			return err
 		}
 	}

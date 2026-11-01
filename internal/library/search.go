@@ -3,7 +3,6 @@ package library
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -56,7 +55,7 @@ func (i *Index) Search(ctx context.Context, id int64, query string) (SearchResul
 		return r, err
 	}
 	pattern := "%" + escapeLike(query) + "%"
-	tx, err := i.Store.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := i.Store.BeginRead(ctx)
 	if err != nil {
 		return r, err
 	}

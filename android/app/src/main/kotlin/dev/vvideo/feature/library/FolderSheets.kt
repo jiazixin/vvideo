@@ -26,10 +26,10 @@ import dev.vvideo.ui.component.pathText
 import dev.vvideo.ui.theme.LocalVVColors
 
 @Composable
-fun sortLabel(sort: Sort): String = stringResource(
+internal fun sortLabel(sort: Sort): String = stringResource(
     R.string.sort_label,
     stringResource(sortFieldLabel(sort.field)),
-    stringResource(sortDirectionLabel(sort.field, sort.direction))
+    stringResource(sortDirectionLabel(sort.field, sort.direction)),
 )
 
 private fun sortFieldLabel(field: SortField) = when (field) {
@@ -47,28 +47,30 @@ private fun sortDirectionLabel(field: SortField, direction: SortDirection) = whe
 }
 
 @Composable
-fun SortSheet(state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Unit) {
+internal fun SortSheet(state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Unit) {
     VVBottomSheet(stringResource(R.string.sort_title), onDismiss) {
         Text(
             stringResource(R.string.sort_scope, state.directory?.name.orEmpty()),
             Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             style = MaterialTheme.typography.bodySmall,
-            color = LocalVVColors.current.textSecondary
+            color = LocalVVColors.current.textSecondary,
         )
         SortField.entries.forEach { field ->
             Row(
                 Modifier.fillMaxWidth().clickable { onSort(state.sort.copy(field = field)) }
                     .heightIn(min = 56.dp).padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(state.sort.field == field, { onSort(state.sort.copy(field = field)) })
                 Column {
                     Text(stringResource(sortFieldLabel(field)))
-                    if (field == SortField.Capture) Text(
-                        stringResource(R.string.sort_capture_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LocalVVColors.current.textSecondary
-                    )
+                    if (field == SortField.Capture) {
+                        Text(
+                            stringResource(R.string.sort_capture_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LocalVVColors.current.textSecondary,
+                        )
+                    }
                 }
             }
         }
@@ -76,22 +78,26 @@ fun SortSheet(state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Un
             stringResource(R.string.order),
             Modifier.padding(20.dp),
             color = LocalVVColors.current.accentText,
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelLarge,
         )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SortDirection.entries.forEach { direction ->
                 val label = stringResource(sortDirectionLabel(state.sort.field, direction))
                 VVButton(
-                    if (state.sort.direction == direction) stringResource(
-                        R.string.selected_option,
+                    if (state.sort.direction == direction) {
+                        stringResource(
+                            R.string.selected_option,
+                            label,
+                        )
+                    } else {
                         label
-                    ) else label,
+                    },
                     { onSort(state.sort.copy(direction = direction)) },
                     Modifier.weight(1f),
-                    kind = ButtonKind.Secondary
+                    kind = ButtonKind.Secondary,
                 )
             }
         }
@@ -99,7 +105,7 @@ fun SortSheet(state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Un
 }
 
 @Composable
-fun FolderInfoSheet(state: LibraryUiState, onDismiss: () -> Unit) {
+internal fun FolderInfoSheet(state: LibraryUiState, onDismiss: () -> Unit) {
     VVBottomSheet(stringResource(R.string.folder_info), onDismiss) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(pathText(state.path))

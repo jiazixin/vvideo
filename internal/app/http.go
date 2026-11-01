@@ -2,18 +2,19 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,44 +30,145 @@ const (
 	thumbnailPoll = 100 * time.Millisecond
 )
 
-// Handler returns the authenticated /v1 API.
+// Handler returns the health check and the API: /healthz and /api/info need
+// no token, every other /api/ route requires the bearer token.
 func (a *App) Handler() http.Handler {
+	api := http.NewServeMux()
+	api.HandleFunc("GET /api/libraries", a.libraries)
+	api.HandleFunc("GET /api/directories/{id}/path", a.directoryPath)
+	api.HandleFunc("GET /api/directories/{id}/children", a.directoryChildren)
+	api.HandleFunc("GET /api/directories/{id}/media", a.directoryMedia)
+	api.HandleFunc("GET /api/directories/{id}/search", a.directorySearch)
+	api.HandleFunc("GET /api/media/{id}", a.media)
+	api.Handle("GET /api/media/{id}/bytes", a.Stream)
+	api.HandleFunc("GET /api/media/{id}/index", a.indexHints)
+	api.HandleFunc("GET /api/media/{id}/thumbnail", a.thumbnail)
+	api.HandleFunc("POST /api/scans", a.scan)
+	api.HandleFunc("GET /api/status", a.status)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/libraries", a.libraries)
-	mux.HandleFunc("GET /v1/directories/{id}/path", a.directoryPath)
-	mux.HandleFunc("GET /v1/directories/{id}/children", a.directoryChildren)
-	mux.HandleFunc("GET /v1/directories/{id}/media", a.directoryMedia)
-	mux.HandleFunc("GET /v1/directories/{id}/search", a.directorySearch)
-	mux.HandleFunc("GET /v1/media/{id}", a.media)
-	mux.Handle("GET /v1/media/{id}/bytes", a.Stream)
-	mux.HandleFunc("GET /v1/media/{id}/index", a.indexHints)
-	mux.HandleFunc("GET /v1/media/{id}/thumbnail", a.thumbnail)
-	mux.HandleFunc("POST /v1/scan", a.scan)
-	mux.HandleFunc("GET /v1/status", a.status)
-	// Unknown paths and methods answer in the same JSON shape as other errors.
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusNotFound, errorBody("unavailable"))
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	return a.authenticate(mux)
+	mux.HandleFunc("GET /api/info", a.info)
+	mux.Handle("/", a.authenticate(api))
+	return a.middleware(mux)
+}
+
+// log returns the service logger; an App built without one discards.
+func (a *App) log() *slog.Logger {
+	if a.logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return a.logger
+}
+
+func (a *App) info(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"version": a.Version, "capabilities": []string{"index_hints", "search", "thumbnails"}})
 }
 
 func (a *App) authenticate(next http.Handler) http.Handler {
-	token := []byte(a.Config.Auth.Token)
+	token := a.Config.Auth.TokenDigest
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
 		provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(provided), token) != 1 {
+		digest := sha256.Sum256([]byte(provided))
+		if !ok || subtle.ConstantTimeCompare(digest[:], token[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeJSON(w, http.StatusUnauthorized, errorBody("unauthorized"))
+			writeError(w, r, unauthenticated)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+type loggerKey struct{}
+
+// requestLogger returns the logger carrying the request ID.
+func requestLogger(r *http.Request) *slog.Logger {
+	if logger, ok := r.Context().Value(loggerKey{}).(*slog.Logger); ok {
+		return logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
+// middleware is the outermost handler: request ID, panic recovery, security
+// headers and the JSON form of the router's own 404 / 405 responses.
+func (a *App) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := r.Header.Get("X-Request-ID")
+		if !requestIDPattern.MatchString(requestID) {
+			requestID = rand.Text()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		logger := a.log().With("request_id", requestID)
+		r = r.WithContext(context.WithValue(r.Context(), loggerKey{}, logger))
+		header := w.Header()
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("X-Frame-Options", "DENY")
+		header.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
+		header.Set("Cache-Control", "no-store")
+		tracked := &routerErrorWriter{ResponseWriter: w, request: r}
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			logger.Error("http_handler_panic", "method", r.Method, "path", r.URL.Path, "error", fmt.Sprint(recovered))
+			if !tracked.wroteHeader {
+				writeError(w, r, errors.New("HTTP handler panicked"))
+			}
+		}()
+		if err := validateQuery(r); err != nil {
+			writeError(tracked, r, err)
+			return
+		}
+		next.ServeHTTP(tracked, r)
+	})
+}
+
+// routerErrorWriter replaces the router's plain-text 404 and 405 responses
+// with the JSON error body; handlers write JSON errors themselves.
+type routerErrorWriter struct {
+	http.ResponseWriter
+	request     *http.Request
+	wroteHeader bool
+	replaced    bool
+}
+
+func (w *routerErrorWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *routerErrorWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	plainText := strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain")
+	if plainText && status >= http.StatusBadRequest {
+		w.replaced = true
+		w.Header().Del("Content-Length")
+		writeError(w.ResponseWriter, w.request, routerFailure(status))
+		return
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *routerErrorWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.replaced {
+		return len(body), nil
+	}
+	return w.ResponseWriter.Write(body)
+}
+
 func (a *App) libraries(w http.ResponseWriter, r *http.Request) {
 	v, err := a.Index.Libraries(r.Context())
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: listDTO[libraryDTO]{Items: mapAll(v, libraryWire)}, err: err})
 }
 
 func (a *App) directoryPath(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +178,7 @@ func (a *App) directoryPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := a.Index.Path(r.Context(), id)
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: listDTO[directoryDTO]{Items: mapAll(v, directoryWire)}, err: err})
 }
 
 func (a *App) directoryChildren(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +189,7 @@ func (a *App) directoryChildren(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	v, err := a.Index.Children(r.Context(), id, q.Get("cursor"), q.Get("previous") == "true")
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: childrenPageWire(v), err: err})
 }
 
 func (a *App) directoryMedia(w http.ResponseWriter, r *http.Request) {
@@ -108,12 +210,12 @@ func (a *App) directoryMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Has("limit") {
 		if o.Limit, err = strconv.Atoi(q.Get("limit")); err != nil || o.Limit < 1 {
-			writeError(w, r, fmt.Errorf("%w: limit must be a positive integer", library.ErrInvalid))
+			writeError(w, r, invalidParameter("limit", "out_of_range"))
 			return
 		}
 	}
 	v, err := a.Index.List(r.Context(), id, o)
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: mediaPageWire(v), err: err})
 }
 
 func (a *App) directorySearch(w http.ResponseWriter, r *http.Request) {
@@ -123,12 +225,12 @@ func (a *App) directorySearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := a.Index.Search(r.Context(), id, r.URL.Query().Get("q"))
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: searchWire(v), err: err})
 }
 
 func (a *App) media(w http.ResponseWriter, r *http.Request) {
 	v, err := a.Index.Media(r.Context(), r.PathValue("id"))
-	respond(w, r, v, err)
+	respond(w, r, responseResult{value: mediaWire(v), err: err})
 }
 
 func (a *App) scan(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +290,9 @@ func (a *App) requestedVersion(r *http.Request) (library.Entry, error) {
 	if err != nil {
 		return item, err
 	}
+	if r.URL.Query().Get("version") == "" {
+		return item, invalidParameter("version", "required")
+	}
 	if r.URL.Query().Get("version") != item.Version {
 		return item, library.ErrConflict
 	}
@@ -223,7 +328,7 @@ func (a *App) indexHints(w http.ResponseWriter, r *http.Request) {
 			hints.Ranges = ranges
 		}
 	}
-	writeJSON(w, http.StatusOK, hints)
+	writeJSON(w, http.StatusOK, hintsWire(hints))
 }
 
 func (a *App) thumbnail(w http.ResponseWriter, r *http.Request) {
@@ -235,10 +340,10 @@ func (a *App) thumbnail(w http.ResponseWriter, r *http.Request) {
 	switch item.Status {
 	case "discovered": // metadata is still being probed
 		w.Header().Set("Retry-After", "2")
-		writeJSON(w, http.StatusNotFound, errorBody("thumbnail_pending"))
+		writeError(w, r, thumbnailPending)
 		return
 	case "unsupported", "failed": // permanent for this version
-		writeJSON(w, http.StatusNotFound, errorBody("thumbnail_unavailable"))
+		writeError(w, r, thumbnailUnavailable)
 		return
 	}
 	f, release, err := a.Thumbnails.Open(item)
@@ -247,7 +352,7 @@ func (a *App) thumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		w.Header().Set("Retry-After", "2")
-		writeJSON(w, http.StatusServiceUnavailable, errorBody("thumbnail_pending"))
+		writeError(w, r, thumbnailPending)
 		return
 	}
 	if err != nil {
@@ -294,14 +399,20 @@ func (a *App) generateThumbnail(ctx context.Context, item library.Entry) (*os.Fi
 
 func directoryID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%w: directory id must be an integer", library.ErrInvalid)
+	if err != nil || id <= 0 {
+		return 0, invalidParameter("id", "out_of_range")
 	}
 	return id, nil
 }
 
 // respond writes v as JSON, or maps err to an error response.
-func respond(w http.ResponseWriter, r *http.Request, v any, err error) {
+type responseResult struct {
+	value any
+	err   error
+}
+
+func respond(w http.ResponseWriter, r *http.Request, result responseResult) {
+	v, err := result.value, result.err
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -309,34 +420,11 @@ func respond(w http.ResponseWriter, r *http.Request, v any, err error) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-func errorBody(code string) map[string]string { return map[string]string{"error": code} }
-
-// writeError maps domain errors to stable status codes and error codes.
-// Unexpected errors are logged and reported as 500 without internal detail.
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
-	if r.Context().Err() != nil {
-		return // the client is gone
-	}
-	status, code := http.StatusInternalServerError, "internal_error"
-	switch {
-	case errors.Is(err, library.ErrInvalid):
-		status, code = http.StatusBadRequest, "invalid_request"
-	case errors.Is(err, library.ErrConflict):
-		status, code = http.StatusConflict, "revision_changed"
-	case errors.Is(err, library.ErrUnavailable), errors.Is(err, sql.ErrNoRows), errors.Is(err, fs.ErrNotExist):
-		status, code = http.StatusNotFound, "unavailable"
-	default:
-		slog.Error("http_request_failed", "route", r.Pattern, "error", err.Error())
-	}
-	writeJSON(w, status, errorBody(code))
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	// The peer may disconnect after headers; the response cannot be replaced.
 	// File and directory names are raw bytes that need not be valid UTF-8;
 	// they are shown with U+FFFD rather than breaking the whole response.
-	if err := json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true)); err != nil {
-		slog.Warn("http_response_failed", "error", err.Error())
-	}
+	_ = json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true))
 }

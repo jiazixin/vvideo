@@ -4,13 +4,18 @@ Native Kotlin/Compose UI with Media3 playback. `:app` owns navigation, data acce
 
 Use JDK 21, SDK Platform 36 and Build-Tools 35.0.0. Set `ANDROID_HOME` or a private ignored `local.properties`. Dependencies and Wrapper checksum are pinned in `gradle/`.
 
+Networking goes through one OkHttp client built in `AppGraph`: the API derives a 15-second call deadline, Coil uses it through `OkHttpNetworkFetcherFactory`, and Media3 uses it through `OkHttpDataSource` (the preloader derives shorter timeouts with `newBuilder()`). The `Authorization` interceptor adds the bearer token only for requests to the connection's own origin, and redirects are not followed. The token is stored in DataStore encrypted with an AES/GCM key in the Android Keystore (`TokenCipher`); backups exclude everything, since the key does not travel with them. Cleartext HTTP is allowed for every host by `network_security_config.xml`: the server is normally a LAN NAS on an address the user types, which `domain-config` cannot list (the user's decision of 2026-10-20). Dispatchers come from `AppDispatchers` in `AppGraph`; composables read them through `LocalDispatchers`. `:core:media` keeps Media3 as an `implementation` dependency and exposes only `Player`.
+
+Code style is ktlint (`intellij_idea` style, settings in `.editorconfig`; CI pins the version). Android Lint runs with warnings as errors; the checked-in app and media lint baselines are empty. The Android test plugin used by `:benchmark` exposes no lint task; its Kotlin is checked by ktlint and compilation.
+
 ```sh
-./gradlew :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :app:assembleDebug
+ktlint "**/src/**/*.kt" "**/*.kts"
+./gradlew :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug :app:assembleDebug
 ./gradlew :app:assembleProfile :benchmark:assembleProfile
 ./gradlew -PdeviceTestBuildType=device :app:assembleDevice :app:assembleDeviceAndroidTest
 ```
 
-`debug` supports development; `release` is minified and requires distribution signing. `profile` is minified, non-debuggable, development-signed and profileable for external frame measurements. `device` is non-debuggable and profileable with shrinking disabled **only for in-process behavior tests**: AndroidJUnitRunner shares target dependencies whose unused facades R8 otherwise removes. Device-variant results do not establish minified release performance. The independent benchmark measures `profile` and attempts to keep its temporary runner alive with a foreground service; the tested OEM still freezes it. Host Perfetto measurements and this limitation are recorded in acceptance; this service is absent from the production app and stops after the test.
+`debug` supports development; `release` is minified and requires distribution signing. `profile` is minified, non-debuggable, development-signed and profileable for external frame measurements. `device` is non-debuggable and profileable with shrinking disabled **for in-process behavior tests and unminified Baseline Profile capture**: AndroidJUnitRunner shares target dependencies whose unused facades R8 otherwise removes. Device-variant results do not establish minified release performance. The independent benchmark measures `profile` and attempts to keep its temporary runner alive with a foreground service; the tested OEM still freezes it. Host Perfetto measurements and this limitation are recorded in acceptance; this service is absent from the production app and stops after the test.
 
 Device behavior tests require a private `files/validation.json` containing `address` and `token`, provisioned in a debug build's sandbox before installing the matching device build. Never commit this file. Tests cover real codec/container first frames, seeking, rapid switching and cache clearing. Controlled measurements return their complete bounded JSON as the instrumentation result `vvideo_measurements`; logcat remains diagnostic and cannot establish completeness. `PhotoDeviceTest` additionally verifies rendered original-image zoom, horizontal paging between photos (including a vertical swipe that must not page, a pinch along the paging axis and a drag on an enlarged photo), media details and return to the synthetic album. Device tests that connect save the `validation.json` address as the app's server address, so an installed app pointed elsewhere stops connecting afterwards; `DevicePlaybackTest` and `PhotoDeviceTest` accept `-e serverAddress <url>` to use the address the app already has. Long-run playback and real UI browsing (`sustainedUiBrowsing`) require explicit runner argument `soakMinutes=30`; without it the soak test is skipped. Build completion must precede APK installation.
 
@@ -70,7 +75,9 @@ reuses only its ADB/XML safety helpers. A short run checks the driver, not
 long-run acceptance; instrumentation separately verifies player ownership,
 version identity and teardown.
 
-The 2026-10-10 channel UI supersedes the previous green visual design. It adds library home rows (since 2026-10-20 the home page no longer lists recently visited folders; visits are still recorded for the cold-start placeholder), blue Day/Night themes (system/light/dark persisted in DataStore), all/video/photo tabs, date-separated albums, player tap/hold/speed/orientation controls and storage/connection routes. Room keeps no migrations before the first release: a schema version change drops and recreates the local bookmarks. Visits and viewport updates write separate columns. Shared time formatting lives in `ui/component/TimeLabels.kt`, with album date grouping in `feature/library/DatedAlbums.kt`. Both child and media windows remain bounded to three pages. The video pager owns covers while one PlayerView/Surface owns playback. A viewer page that is animating out draws from its own last-state snapshot (`ExitSnapshot`), pauses at once and sends no further session or ViewModel commands; `PlayerViewModel.leave()` still clears immediately and the session is released when the page leaves composition. Each selection gets its own `PlayerRoute`, so reopening during the exit never reuses the leaving Surface. No API, media engine, caching or dependency baseline changed.
+The 2026-10-10 channel UI supersedes the previous green visual design. It adds library home rows (since 2026-10-20 the home page no longer lists recently visited folders; visits are still recorded for the cold-start placeholder), blue Day/Night themes (system/light/dark persisted in DataStore), all/video/photo tabs, date-separated albums, player tap/hold/speed/orientation controls and storage/connection routes. Screen composables accept state and callbacks; routes bind ViewModels, images and media sessions. UiState exposes domain models, while Room entities and HTTP failures stay behind the data boundary. StateFlow is read-only outside its owner. Cache reconfiguration joins playback and preload work before releasing disk resources, including on cancellation.
+
+Room keeps no migrations before the first release: a schema version change drops and recreates the local bookmarks. Visits and viewport updates write separate columns. Shared time formatting lives in `ui/component/TimeLabels.kt`, with album date grouping in `feature/library/DatedAlbums.kt`. Both child and media windows remain bounded to three pages. The video pager owns covers while one PlayerView/Surface owns playback. A viewer page that is animating out draws from its own last-state snapshot (`ExitSnapshot`), pauses at once and sends no further session or ViewModel commands; The video and photo routes share `PlayerViewModel`; `PlayerViewModel.leave()` still clears immediately and the session is released when the page leaves composition. Each selection gets its own `PlayerRoute`, so reopening during the exit never reuses the leaving Surface. The UI redesign itself retained the engine and cache budgets; subsequent compliance changes are recorded in acceptance.
 
 The redesign adds `UiRedesignDeviceTest` for the explicit local test fixture service on loopback port 19090 (`wide` with 450 folders). `downloadedVideoColdSeekMeasurements` records three cold runs for two licensed WebM samples; it is a diagnostic, not a performance pass. The original codec matrix's 800 ms READY assertion is retained. One downloaded sample, `nile-falls.webm` (VP9 with a single keyframe at 0 s), misses it by about 0.1 s because an exact seek decodes from that keyframe; on 2026-10-21 the user accepted this and it is not pursued further (see the [design](../docs/DESIGN.md)). Tests use the private validation token and never put it in reports. See root acceptance for actual results, public sample attribution, and the distinction between local macOS test service and Linux/NAS verification.
 
@@ -101,6 +108,34 @@ python3 android/benchmark/tools/profile-ui-workload.py --screen album
 ```
 
 The clear helper requires the visible storage page, checks its confirmation text and then checks zero video/image usage. It does not access cache, source-media or bookmark files directly. Omit `--prewarm` for the following frame capture; entering the album has already loaded its first visible covers, so label this as cache-cleared scrolling rather than a cold application launch.
+
+
+## Baseline Profile
+
+`app/src/main/baseline-prof.txt` contains app-only ART rules captured on the iQOO from the unminified `device` build and synthetic media journeys. AGP merges and rewrites them for minified profile/release APKs. It is a real execution artifact, not evidence that a frame or startup threshold passed.
+
+The independent generator runs against an installed, configured unminified `device` APK:
+
+```sh
+adb shell am instrument -w -r -e class dev.vvideo.benchmark.BaselineProfileGenerator dev.vvideo.benchmark/androidx.test.runner.AndroidJUnitRunner
+```
+
+On 2026-11-01 this runner exited with `Process crashed` and produced no profile. The fallback used the target's actual ART profile after startup, album, photo and playback tests. On Android 15 the following commands were verified (run the synthetic UI journey first; never capture a minified build as source rules):
+
+```sh
+adb shell am broadcast -a androidx.profileinstaller.action.SAVE_PROFILE -n dev.vvideo/androidx.profileinstaller.ProfileInstallReceiver
+adb shell cmd package dump-profiles --dump-classes-and-methods dev.vvideo
+adb pull /data/misc/profman/dev.vvideo-primary.prof.txt test-results/art-profile.txt
+```
+
+Keep only rules matching `^[HSP]*Ldev/vvideo/`, remove duplicates, and write the sorted result to `app/src/main/baseline-prof.txt`. Retain the full dump privately as evidence. Rebuild both profile and release and verify `assets/dexopt/baseline.prof` and `baseline.profm` exist in the APKs. The separate runner failure remains a failed check; this fallback does not turn it into a Macrobenchmark pass.
+
+The isolated cache instrumentation lives in `:core:media`:
+
+```sh
+./gradlew :core:media:assembleDebugAndroidTest
+adb shell am instrument -w -r dev.vvideo.core.media.test/androidx.test.runner.AndroidJUnitRunner
+```
 
 ## Release signing
 

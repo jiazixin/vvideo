@@ -21,7 +21,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
 import dev.vvideo.core.media.playback.PlaybackSession
 import dev.vvideo.data.settings.Connection
 import kotlinx.coroutines.NonCancellable
@@ -45,16 +44,15 @@ private const val END_OVERSCROLL_PX = 80f
  * install a DisposableEffect keyed by it. Leaving during that gap must still release
  * the player that was already returned to this route.
  */
-@UnstableApi
 @Composable
 internal fun rememberPlaybackSession(
     connection: Connection,
-    create: suspend (String) -> PlaybackSession,
-    release: suspend (PlaybackSession) -> Unit
+    create: suspend () -> PlaybackSession,
+    release: suspend (PlaybackSession) -> Unit,
 ): State<PlaybackSession?> {
     val session = remember { mutableStateOf<PlaybackSession?>(null) }
     LaunchedEffect(connection.id, connection.token) {
-        val owned = create(connection.token)
+        val owned = create()
         try {
             session.value = owned
             awaitCancellation()
@@ -121,14 +119,9 @@ internal fun Activity.lockOrientation(landscape: Boolean) {
  * Reports the player's isPlaying through [onChange]. A leaving page stops tracking
  * the player and keeps the last value it showed.
  */
-@UnstableApi
 @Composable
 @NonRestartableComposable
-internal fun TrackIsPlaying(
-    session: PlaybackSession,
-    leaving: Boolean,
-    onChange: (Boolean) -> Unit
-) {
+internal fun TrackIsPlaying(session: PlaybackSession, leaving: Boolean, onChange: (Boolean) -> Unit) {
     DisposableEffect(session, leaving) {
         if (leaving) return@DisposableEffect onDispose {}
         onChange(session.player.isPlaying)
@@ -153,7 +146,7 @@ internal fun AutoHideControls(
     pinned: Boolean,
     page: Int,
     interactions: Int,
-    onVisibleChange: (Boolean) -> Unit
+    onVisibleChange: (Boolean) -> Unit,
 ) {
     val accessibility = LocalAccessibilityManager.current
     LaunchedEffect(pinned, page, interactions, visible) {
@@ -165,8 +158,8 @@ internal fun AutoHideControls(
                     CONTROLS_TIMEOUT_MS,
                     containsIcons = true,
                     containsText = true,
-                    containsControls = true
-                ) ?: CONTROLS_TIMEOUT_MS
+                    containsControls = true,
+                ) ?: CONTROLS_TIMEOUT_MS,
             )
             onVisibleChange(false)
         }
@@ -175,21 +168,13 @@ internal fun AutoHideControls(
 
 /** Pulling on past the last video, once the feed has no more, calls [onEnd]. */
 @Composable
-internal fun rememberEndOverscroll(
-    pager: PagerState,
-    endReached: Boolean,
-    onEnd: () -> Unit
-): NestedScrollConnection {
+internal fun rememberEndOverscroll(pager: PagerState, endReached: Boolean, onEnd: () -> Unit): NestedScrollConnection {
     val currentOnEnd by rememberUpdatedState(onEnd)
     return remember(pager, endReached) {
         object : NestedScrollConnection {
             private var overflow = 0f
 
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 if (endReached && !pager.canScrollForward && available.y < 0) {
                     overflow -= available.y
                     if (overflow > END_OVERSCROLL_PX) {

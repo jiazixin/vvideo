@@ -4,14 +4,14 @@ package dev.vvideo.feature.library
 private const val MAX_REMEMBERED_FOLDERS = 64
 
 /** Where a folder's list stood: the first visible item's key, its scroll offset and the list width. */
-data class FolderPosition(val key: String, val offset: Int, val width: Int)
+internal data class FolderPosition(val key: String, val offset: Int, val width: Int)
 
 /**
  * The position each folder was left at in this session, so going back to a parent
  * shows the subfolder that was opened from it. A subfolder list has no media anchor
  * and so no bookmark position; album folders keep their bookmark as the fallback.
  */
-class FolderPositions {
+internal class FolderPositions {
     private val positions = object : LinkedHashMap<Long, FolderPosition>(16, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, FolderPosition>?) =
             size > MAX_REMEMBERED_FOLDERS

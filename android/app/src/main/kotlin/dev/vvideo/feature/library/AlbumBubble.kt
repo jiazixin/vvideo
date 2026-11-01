@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -34,9 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
 import dev.vvideo.R
-import dev.vvideo.data.settings.Connection
 import dev.vvideo.feature.library.album.AlbumGeometryCalculator
 import dev.vvideo.feature.library.album.TelegramGroupedLayout
 import dev.vvideo.model.Media
@@ -46,12 +43,12 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AlbumBubble(
+internal fun AlbumBubble(
     album: Album,
-    loader: ImageLoader,
-    connection: Connection,
+    availableWidthPx: Int,
+    thumbnail: ThumbnailContent,
     onMedia: (Media) -> Unit,
-    onDetails: (Media) -> Unit = {}
+    onDetails: (Media) -> Unit = {},
 ) {
     // A filter may retain the first item key while shrinking a group; everything
     // below restarts with the new item list.
@@ -65,10 +62,13 @@ fun AlbumBubble(
                 if (it.durationMs > 0) mediaDuration(it.durationMs) else pending
             }
         }
-        BoxWithConstraints(
-            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 6.dp)
+        Box(
+            Modifier.fillMaxWidth().padding(start = ALBUM_SIDE_PADDING, end = ALBUM_SIDE_PADDING, bottom = 6.dp),
         ) {
-            val albumWidth = constraints.maxWidth.toFloat()
+            // The list resolves its width once. Avoid subcomposing all ten cells
+            // in a lazy item's measure pass, which cannot be paused by prefetch.
+            val albumWidth = (availableWidthPx - with(density) { ALBUM_SIDE_PADDING.roundToPx() } * 2)
+                .coerceAtLeast(1).toFloat()
             // Settled in the item's first composition from stable metadata and the
             // measured width, so the item never changes height after the list has
             // been positioned (a restored position near the end would move).
@@ -76,25 +76,37 @@ fun AlbumBubble(
                 // Telegram sizes cells from the screen; before the window reports its
                 // size, the album's own width stands in for a portrait screen.
                 val known = window.width > 0 && window.height > 0
-                val shortSide = (if (known) minOf(
-                    window.width,
-                    window.height
-                ).toFloat() else albumWidth).coerceAtLeast(1f)
-                val longSide = (if (known) maxOf(
-                    window.width,
-                    window.height
-                ).toFloat() else albumWidth * 2f).coerceAtLeast(1f)
+                val shortSide = (
+                    if (known) {
+                        minOf(
+                            window.width,
+                            window.height,
+                        ).toFloat()
+                    } else {
+                        albumWidth
+                    }
+                    ).coerceAtLeast(1f)
+                val longSide = (
+                    if (known) {
+                        maxOf(
+                            window.width,
+                            window.height,
+                        ).toFloat()
+                    } else {
+                        albumWidth * 2f
+                    }
+                    ).coerceAtLeast(1f)
                 val positions = TelegramGroupedLayout.calculate(
                     album.items.map(Media::displayRatio),
                     density.density,
-                    shortSide
+                    shortSide,
                 )
                 AlbumGeometryCalculator.geometry(
                     positions,
                     shortSide,
                     longSide,
                     albumWidth,
-                    with(density) { CELL_GAP.toPx() }
+                    with(density) { CELL_GAP.toPx() },
                 )
             }
             // One uniform clip for the album's outer corners and a uniform one per cell:
@@ -102,7 +114,7 @@ fun AlbumBubble(
             // cell with mixed corner radii would need a path clip.
             Box(
                 Modifier.fillMaxWidth().height(with(density) { geometry.height.toDp() })
-                    .clip(RoundedCornerShape(OUTER_RADIUS))
+                    .clip(RoundedCornerShape(OUTER_RADIUS)),
             ) {
                 for (cell in geometry.cells) {
                     val item = album.items[cell.index]
@@ -117,17 +129,20 @@ fun AlbumBubble(
                             .offset { IntOffset(cell.x.roundToInt(), cell.y.roundToInt()) }
                             .size(
                                 with(density) { cell.width.toDp() },
-                                with(density) { cell.height.toDp() }),
-                        loader,
-                        connection,
+                                with(density) { cell.height.toDp() },
+                            ),
+                        thumbnail,
                         onClick = { onMedia(item) },
-                        onLongClick = { onDetails(item) }
+                        onLongClick = { onDetails(item) },
                     )
                 }
             }
         }
     }
 }
+
+/** Horizontal inset shared by the measured width and the album container. */
+private val ALBUM_SIDE_PADDING = 8.dp
 
 /** Space between cells. */
 private val CELL_GAP = 2.dp
@@ -161,36 +176,30 @@ private fun AlbumCellContent(
     textStyle: TextStyle,
     shape: RoundedCornerShape,
     modifier: Modifier,
-    loader: ImageLoader,
-    connection: Connection,
+    thumbnail: ThumbnailContent,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
 ) {
     var coverLoaded by remember(item.id, item.version) { mutableStateOf(false) }
     Box(
         modifier.clip(shape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        Thumbnail(
-            item,
-            connection,
-            loader,
-            showLabel = shortSide >= COVER_LABEL_MIN_SIDE
-        ) { coverLoaded = it }
+        thumbnail(item, shortSide >= COVER_LABEL_MIN_SIDE) { coverLoaded = it }
         if (coverLoaded && duration != null && shortSide >= PLAY_BADGE_MIN_SIDE) {
             Box(
                 Modifier.size(40.dp).align(Alignment.Center).background(
                     Color.Black.copy(alpha = .45f),
-                    CircleShape
+                    CircleShape,
                 ),
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_play),
                     null,
                     tint = Color.White,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -203,7 +212,7 @@ private fun AlbumCellContent(
                 overflow = TextOverflow.Clip,
                 modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
                     .background(Color.Black.copy(alpha = .5f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
             )
         }
     }

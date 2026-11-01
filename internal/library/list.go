@@ -50,6 +50,8 @@ type cursorWire struct {
 
 // EncodeCursor serializes c as URL-safe base64 JSON.
 func EncodeCursor(c Cursor) string {
+	// Internal IDs/enums are valid UTF-8; raw file-name keys use []byte. This
+	// scalar-only shape has no custom marshaler or other fallible value.
 	b, _ := json.Marshal(cursorWire{c.DirectoryID, c.Revision, c.Sort, c.Direction, c.Kind, []byte(c.Key), c.ID})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
@@ -144,7 +146,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	if err := i.Visible(ctx, id); err != nil {
 		return p, err
 	}
-	tx, err := i.Store.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := i.Store.BeginRead(ctx)
 	if err != nil {
 		return p, err
 	}
@@ -176,6 +178,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 		filter += " AND e.kind=?"
 		args = append(args, o.Kind)
 	}
+	baseFilter, baseArgs := filter, slices.Clone(args)
 	var c Cursor
 	inclusive := false
 	if o.Cursor != "" {
@@ -190,7 +193,7 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	if o.Anchor != "" {
 		anchor, err := ScanEntry(tx.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id=? AND e.state='visible'`, id, p.Directory.Generation, o.Anchor))
 		if err == nil {
-			start, groupErr := groupStart(ctx, tx, p.Directory, o, anchor)
+			start, groupErr := groupStart(ctx, tx, groupQuery{directory: p.Directory, options: o}, anchor)
 			if groupErr != nil {
 				return p, groupErr
 			}
@@ -221,7 +224,8 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 	if p.Items, err = storage.Collect(rows, err, scanEntryRow); err != nil {
 		return p, err
 	}
-	if len(p.Items) > o.Limit {
+	more := len(p.Items) > o.Limit
+	if more {
 		p.Items = p.Items[:o.Limit]
 	}
 	if o.Previous {
@@ -232,7 +236,23 @@ func (i *Index) List(ctx context.Context, id int64, o ListOptions) (Page, error)
 			return EncodeCursor(Cursor{DirectoryID: id, Revision: p.Directory.Revision, Sort: o.Sort, Direction: o.Direction, Kind: o.Kind, Key: key(e, o.Sort), ID: e.ID})
 		}
 		p.Previous = cursor(p.Items[0])
-		p.Next = cursor(p.Items[len(p.Items)-1])
+		last := p.Items[len(p.Items)-1]
+		if o.Previous {
+			// The extra row describes the previous edge of a reverse query.
+			// Probe the forward edge in the same snapshot using the sort index.
+			op := ">"
+			if o.Direction == "desc" {
+				op = "<"
+			}
+			query := `SELECT EXISTS(SELECT 1 FROM entries e WHERE ` + baseFilter +
+				` AND (e.` + col + `,e.media_id)` + op + `(?,?))`
+			if err = tx.QueryRowContext(ctx, query, append(baseArgs, key(last, o.Sort), last.ID)...).Scan(&more); err != nil {
+				return p, err
+			}
+		}
+		if more {
+			p.Next = cursor(last)
+		}
 	}
 	return p, tx.Commit()
 }
@@ -269,7 +289,7 @@ func (i *Index) Children(ctx context.Context, parent int64, cursor string, previ
 	if previous {
 		comparison, order = "<", "DESC"
 	}
-	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.parent_id=? AND d.state='visible' AND (d.name,d.id)"+comparison+"(?,?) ORDER BY d.name "+order+",d.id "+order+" LIMIT ?", parent, name, id, childPageSize+1)
+	rows, err := i.Store.Query(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.parent_id=? AND d.state='visible' AND (d.name,d.id)"+comparison+"(?,?) ORDER BY d.name "+order+",d.id "+order+" LIMIT ?", parent, name, id, childPageSize+1)
 	if p.Items, err = storage.Collect(rows, err, scanDirectoryRow); err != nil {
 		return p, err
 	}

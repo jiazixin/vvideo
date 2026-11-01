@@ -2,14 +2,12 @@ package dev.vvideo.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.util.UnstableApi
-import dev.vvideo.data.cache.CacheCoordinator
-import dev.vvideo.data.cache.CacheUsage
-import dev.vvideo.data.library.LibraryRepository
-import dev.vvideo.data.library.remote.HTTP_UNAUTHORIZED
-import dev.vvideo.data.library.remote.serviceStatus
+import dev.vvideo.data.cache.CacheSettings
+import dev.vvideo.data.library.LibraryData
+import dev.vvideo.data.library.LibraryError
+import dev.vvideo.data.library.libraryError
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.data.settings.SettingsRepository
+import dev.vvideo.data.settings.SettingsData
 import dev.vvideo.model.ThemeMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -17,44 +15,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** The outcome of the last settings action, shown once next to the control that caused it. */
-enum class SettingsMessage {
-    InvalidAddress,
-    ConnectionFailed,
-    AuthenticationFailed,
-    CacheFailed,
-    CacheCleared
-}
-
-/** What the settings page says about the saved connection. */
-enum class ConnectionStatus {
-    Saved,
-    Checking,
-    Connected,
-    AuthenticationFailed,
-    Offline,
-    InvalidAddress,
-    ConnectionFailed
-}
-
-data class SettingsUiState(
-    val libraryCount: Int = 0,
-    val releasedBytes: Long = 0,
-    val busy: Boolean = false,
-    val message: SettingsMessage? = null,
-    val usage: CacheUsage? = null,
-    /** Counts successful connections, so the form can close on the next one. */
-    val connectedSerial: Long = 0,
-    val connectionStatus: ConnectionStatus = ConnectionStatus.Saved
-)
-
-@UnstableApi
-class SettingsViewModel(
-    private val settings: SettingsRepository,
-    private val cache: CacheCoordinator,
-    private val repository: LibraryRepository
+internal class SettingsViewModel(
+    private val settings: SettingsData,
+    private val cache: CacheSettings,
+    private val repository: LibraryData,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -65,67 +32,76 @@ class SettingsViewModel(
     private var invalidAddress = false
 
     fun setTheme(mode: ThemeMode) {
-        viewModelScope.launch { settings.setTheme(mode) }
+        operation(SettingsMessage.SaveFailed) { settings.setTheme(mode) }
     }
 
     fun dismissMessage() {
-        _state.value = _state.value.copy(message = null)
+        _state.update { current -> current.copy(message = null) }
         invalidAddress = false
     }
 
     fun usage() {
         viewModelScope.launch {
             try {
-                _state.value = _state.value.copy(usage = cache.usage())
+                val usage = cache.usage()
+                _state.update { current -> current.copy(usage = usage) }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _state.value = _state.value.copy(message = SettingsMessage.CacheFailed)
+                _state.update { current -> current.copy(message = SettingsMessage.CacheFailed) }
             }
         }
     }
 
     /** Checks that the saved [connection] still reaches the server. */
     fun verify(connection: Connection) {
-        if (!connection.configured) return
+        if (!connection.configured || _state.value.busy) return
         verifyJob?.cancel()
         verifyJob = viewModelScope.launch {
-            _state.value = _state.value.copy(connectionStatus = ConnectionStatus.Checking)
+            _state.update { current -> current.copy(connectionStatus = ConnectionStatus.Checking) }
             try {
                 val libraries = repository.libraries(connection)
-                _state.value = _state.value.copy(
-                    libraryCount = libraries.size,
-                    connectionStatus = ConnectionStatus.Connected
-                )
+                _state.update { current ->
+                    current.copy(
+                        libraryCount = libraries.size,
+                        connectionStatus = ConnectionStatus.Connected,
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val status = if (e.serviceStatus() == HTTP_UNAUTHORIZED) {
+                val status = if (e.libraryError() is LibraryError.Unauthenticated) {
                     ConnectionStatus.AuthenticationFailed
                 } else {
                     ConnectionStatus.Offline
                 }
-                _state.value = _state.value.copy(connectionStatus = status)
+                _state.update { current -> current.copy(connectionStatus = status) }
             }
         }
     }
 
     /** Saves the address and token once the server accepts them. */
-    fun connect(address: String, token: String) = operation(SettingsMessage.ConnectionFailed) {
-        _state.value = _state.value.copy(connectionStatus = ConnectionStatus.Checking)
-        invalidAddress = false
-        val candidate = try {
-            settings.candidate(address, token)
-        } catch (e: Exception) {
-            invalidAddress = true
-            throw e
+    fun connect(address: String, token: String) {
+        if (_state.value.busy) return
+        verifyJob?.cancel()
+        operation(SettingsMessage.ConnectionFailed) {
+            _state.update { current -> current.copy(connectionStatus = ConnectionStatus.Checking) }
+            invalidAddress = false
+            val candidate = try {
+                settings.candidate(address, token)
+            } catch (e: Exception) {
+                invalidAddress = true
+                throw e
+            }
+            repository.libraries(candidate)
+            settings.connect(candidate.address, candidate.token)
+            _state.update { current ->
+                current.copy(
+                    connectionStatus = ConnectionStatus.Connected,
+                    connectedSerial = current.connectedSerial + 1,
+                )
+            }
         }
-        repository.libraries(candidate)
-        settings.connect(candidate.address, candidate.token)
-        _state.value = _state.value.copy(
-            connectionStatus = ConnectionStatus.Connected,
-            connectedSerial = _state.value.connectedSerial + 1
-        )
     }
 
     fun setBudget(bytes: Long) = operation {
@@ -138,44 +114,46 @@ class SettingsViewModel(
         val before = cache.usage()
         cache.configure(budget, clear = true)
         val after = cache.usage()
-        _state.value = _state.value.copy(
-            message = SettingsMessage.CacheCleared,
-            releasedBytes = (before.total - after.total).coerceAtLeast(0)
-        )
+        _state.update { current ->
+            current.copy(
+                message = SettingsMessage.CacheCleared,
+                releasedBytes = (before.total - after.total).coerceAtLeast(0),
+            )
+        }
     }
 
     /**
      * Runs [block] unless another action is running. A failure is reported as
      * [failure]; a connect failure also becomes the connection status.
      */
-    private fun operation(
-        failure: SettingsMessage = SettingsMessage.CacheFailed,
-        block: suspend () -> Unit
-    ) {
+    private fun operation(failure: SettingsMessage = SettingsMessage.CacheFailed, block: suspend () -> Unit) {
         if (_state.value.busy) return
+        _state.update { current -> current.copy(busy = true, message = null) }
         viewModelScope.launch {
-            _state.value = _state.value.copy(busy = true, message = null)
             try {
                 block()
-                _state.value = _state.value.copy(usage = cache.usage())
+                val usage = cache.usage()
+                _state.update { current -> current.copy(usage = usage) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val message = when {
-                    e.serviceStatus() == HTTP_UNAUTHORIZED -> SettingsMessage.AuthenticationFailed
+                    e.libraryError() is LibraryError.Unauthenticated -> SettingsMessage.AuthenticationFailed
                     invalidAddress -> SettingsMessage.InvalidAddress
                     else -> failure
                 }
-                _state.value = _state.value.copy(
-                    message = message,
-                    connectionStatus = if (failure == SettingsMessage.ConnectionFailed) {
-                        message.connectionStatus()
-                    } else {
-                        _state.value.connectionStatus
-                    }
-                )
+                _state.update { current ->
+                    current.copy(
+                        message = message,
+                        connectionStatus = if (failure == SettingsMessage.ConnectionFailed) {
+                            message.connectionStatus()
+                        } else {
+                            current.connectionStatus
+                        },
+                    )
+                }
             } finally {
-                _state.value = _state.value.copy(busy = false)
+                _state.update { current -> current.copy(busy = false) }
             }
         }
     }

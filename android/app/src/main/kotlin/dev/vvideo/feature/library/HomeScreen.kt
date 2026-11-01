@@ -48,7 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.vvideo.R
-import dev.vvideo.data.library.remote.HTTP_UNAUTHORIZED
+import dev.vvideo.data.library.LibraryError
+import dev.vvideo.data.library.ServiceCategory
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.EmptyState
 import dev.vvideo.ui.component.LetterAvatar
@@ -63,12 +64,13 @@ private const val SPINNER_DELAY_MS = 300L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(
+internal fun HomeScreen(
     state: LibraryUiState,
     onSettings: () -> Unit,
     onOpen: (Long) -> Unit,
     onRetry: () -> Unit,
-    onConnection: () -> Unit = onSettings
+    modifier: Modifier = Modifier,
+    onConnection: () -> Unit = onSettings,
 ) {
     val colors = LocalVVColors.current
     val quick = fade<Float>()
@@ -76,8 +78,20 @@ fun HomeScreen(
     val resize = move<IntSize>()
     val status = when {
         state.busy && state.libraries.isEmpty() -> R.string.status_connecting
-        state.error && state.errorStatus == HTTP_UNAUTHORIZED -> R.string.status_bad_token
-        state.error && state.errorStatus == 0 -> R.string.status_waiting_network
+        state.error && state.failure is LibraryError.Unauthenticated -> R.string.status_bad_token
+        state.error -> when (val failure = state.failure) {
+            LibraryError.Unreachable -> R.string.status_waiting_network
+            LibraryError.Timeout -> R.string.status_timeout
+            is LibraryError.InvalidResponse -> R.string.status_invalid_response
+            is LibraryError.Service -> when (failure.category) {
+                ServiceCategory.Forbidden -> R.string.status_forbidden
+                ServiceCategory.Missing -> R.string.status_missing
+                ServiceCategory.Conflict -> R.string.status_conflict
+                ServiceCategory.Busy -> R.string.status_busy
+                else -> R.string.status_service_error
+            }
+            else -> R.string.status_service_error
+        }
         else -> R.string.home_title
     }
     // A refresh behind a shown list only gets a spinner once it is slow enough
@@ -87,46 +101,51 @@ fun HomeScreen(
         if (state.busy) {
             if (state.libraries.isNotEmpty()) delay(SPINNER_DELAY_MS)
             spinner = true
-        } else spinner = false
+        } else {
+            spinner = false
+        }
     }
     // The title only acts while it reports a problem: retry, or fix the credential.
-    val action =
-        if (!state.error || state.busy) null else if (state.errorStatus == HTTP_UNAUTHORIZED) onConnection else onRetry
-    Scaffold(containerColor = colors.bgSurface, topBar = {
+    val action = when {
+        !state.error || state.busy -> null
+        state.failure is LibraryError.Unauthenticated -> onConnection
+        else -> onRetry
+    }
+    Scaffold(modifier = modifier, containerColor = colors.bgSurface, topBar = {
         TopAppBar(
             expandedHeight = 56.dp,
             title = {
                 Row(
-                    if (action != null) Modifier.clickable(onClick = action) else Modifier,
-                    verticalAlignment = Alignment.CenterVertically
+                    if (action != null) Modifier.heightIn(min = 48.dp).clickable(onClick = action) else Modifier,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AnimatedVisibility(
                         spinner,
                         enter = fadeIn(fade()) + expandHorizontally(move()),
-                        exit = fadeOut(fade()) + shrinkHorizontally(move())
+                        exit = fadeOut(fade()) + shrinkHorizontally(move()),
                     ) {
                         CircularProgressIndicator(
                             Modifier.padding(end = 8.dp).size(16.dp),
-                            strokeWidth = 2.dp
+                            strokeWidth = 2.dp,
                         )
                     }
                     val color by animateColorAsState(
-                        if (state.errorStatus == HTTP_UNAUTHORIZED) colors.warn else colors.textPrimary,
+                        if (state.failure is LibraryError.Unauthenticated) colors.warn else colors.textPrimary,
                         fade(),
-                        label = "home-title-color"
+                        label = "home-title-color",
                     )
                     AnimatedContent(
                         status,
                         transitionSpec = {
                             fadeIn(quick) togetherWith fadeOut(quick) using
-                                    SizeTransform(clip = false) { _, _ -> resize }
+                                SizeTransform(clip = false) { _, _ -> resize }
                         },
-                        label = "home-title"
+                        label = "home-title",
                     ) { Text(stringResource(it), color = color) }
                 }
             },
             actions = { ActionIcon(R.drawable.ic_settings, R.string.settings, onSettings) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface),
         )
     }) { padding ->
         // The library list fades in once on arrival; its rows have no entrance animation of their own.
@@ -134,21 +153,28 @@ fun HomeScreen(
             state.libraries.isEmpty(),
             Modifier.padding(padding),
             transitionSpec = { fadeIn(slow) togetherWith fadeOut(slow) },
-            label = "home-content"
+            label = "home-content",
         ) { empty ->
             if (empty) {
-                if (!state.busy && !state.error) EmptyState(stringResource(R.string.empty_roots)) else Box(
-                    Modifier.fillMaxSize()
-                )
-            } else LazyColumn(Modifier.fillMaxSize()) {
-                items(state.libraries, key = { it.id }) { lib ->
-                    LibraryRow(
-                        lib.id,
-                        lib.name,
-                        stringResource(if (lib.healthy) R.string.library_online else R.string.library_offline),
-                        pinned = true,
-                        healthy = lib.healthy,
-                        onClick = { onOpen(lib.directoryId) })
+                if (!state.busy && !state.error) {
+                    EmptyState(stringResource(R.string.empty_roots))
+                } else {
+                    Box(
+                        Modifier.fillMaxSize(),
+                    )
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(state.libraries, key = { it.id }) { lib ->
+                        LibraryRow(
+                            lib.id,
+                            lib.name,
+                            stringResource(if (lib.healthy) R.string.library_online else R.string.library_offline),
+                            pinned = true,
+                            healthy = lib.healthy,
+                            onClick = { onOpen(lib.directoryId) },
+                        )
+                    }
                 }
             }
         }
@@ -157,7 +183,7 @@ fun HomeScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun LibraryRow(
+internal fun LibraryRow(
     id: String,
     name: String,
     subtitle: String? = null,
@@ -166,7 +192,7 @@ fun LibraryRow(
     healthy: Boolean = true,
     compact: Boolean = false,
     onLongClick: (() -> Unit)? = null,
-    onClick: () -> Unit
+    onClick: () -> Unit,
 ) {
     val colors = LocalVVColors.current
     Column(Modifier.background(if (pinned) colors.pinnedRow else colors.bgSurface)) {
@@ -175,7 +201,7 @@ fun LibraryRow(
                 .heightIn(min = if (compact) 64.dp else 72.dp)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             LetterAvatar(id, name, if (compact) 44.dp else 52.dp)
             Column(Modifier.weight(1f)) {
@@ -186,44 +212,65 @@ fun LibraryRow(
                         style = MaterialTheme.typography.titleSmall,
                         color = if (!healthy) colors.warn else colors.textPrimary,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    if (pinned) Icon(
-                        painterResource(R.drawable.ic_pin),
-                        null,
-                        Modifier.size(16.dp),
-                        tint = colors.textTertiary
-                    )
-                    else if (time != null) Text(
-                        time,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textSecondary
-                    )
-                    else Icon(
-                        painterResource(R.drawable.ic_chevron),
-                        null,
-                        tint = colors.textTertiary
-                    )
+                    if (pinned) {
+                        Icon(
+                            painterResource(R.drawable.ic_pin),
+                            null,
+                            Modifier.size(16.dp),
+                            tint = colors.textTertiary,
+                        )
+                    } else if (time != null) {
+                        Text(
+                            time,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textSecondary,
+                        )
+                    } else {
+                        Icon(
+                            painterResource(R.drawable.ic_chevron),
+                            null,
+                            tint = colors.textTertiary,
+                        )
+                    }
                 }
-                if (subtitle != null) Row(
-                    Modifier.padding(top = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (pinned) Box(
-                        Modifier.size(7.dp)
-                            .background(if (healthy) colors.online else colors.warn, CircleShape)
-                    )
-                    Text(
-                        subtitle,
-                        color = if (!healthy) colors.warn else colors.textSecondary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                if (subtitle != null) {
+                    Row(
+                        Modifier.padding(top = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (pinned) {
+                            Box(
+                                Modifier.size(7.dp)
+                                    .background(if (healthy) colors.online else colors.warn, CircleShape),
+                            )
+                        }
+                        Text(
+                            subtitle,
+                            color = if (!healthy) colors.warn else colors.textSecondary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
         HorizontalDivider(Modifier.padding(start = 76.dp), color = colors.divider)
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, fontScale = 1.5f)
+@Composable
+private fun HomeScreenPreview() {
+    dev.vvideo.ui.theme.VVideoTheme {
+        HomeScreen(
+            state = LibraryUiState(libraries = listOf(dev.vvideo.model.Library("preview", "家庭相册", 1, true))),
+            onSettings = {},
+            onOpen = {},
+            onRetry = {},
+        )
     }
 }

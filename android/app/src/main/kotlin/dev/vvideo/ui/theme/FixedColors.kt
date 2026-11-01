@@ -3,7 +3,7 @@ package dev.vvideo.ui.theme
 import androidx.compose.ui.graphics.Color
 
 /** The viewer is always dark, whatever the app theme. */
-object ViewerColors {
+internal object ViewerColors {
     /** Highlights the selected speed and a speed other than normal. */
     val Accent = Color(0xFF6AB3F8)
 
@@ -15,7 +15,7 @@ object ViewerColors {
 }
 
 /** The bulletin keeps one dark look in both themes so it stands out from either. */
-val BulletinBackground = Color(0xFF2A3542)
+internal val BulletinBackground = Color(0xFF2A3542)
 
 /** Storage page ring and legend: video, images and cache index, in that order. */
-val StorageUsageColors = listOf(Color(0xFF4FA3F7), Color(0xFFF2A541), Color(0xFF8E9AA6))
+internal val StorageUsageColors = listOf(Color(0xFF4FA3F7), Color(0xFFF2A541), Color(0xFF8E9AA6))

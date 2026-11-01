@@ -19,10 +19,10 @@ func newLogger(c config.Config, stdout, stderr io.Writer) (*slog.Logger, func() 
 	case "stderr":
 		w = stderr
 	case "file":
-		if err := os.MkdirAll(filepath.Dir(c.Log.File), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(c.Log.File), 0o750); err != nil {
 			return nil, nil, err
 		}
-		f, err := os.OpenFile(c.Log.File, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0640)
+		f, err := os.OpenFile(c.Log.File, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o640)
 		if err != nil {
 			return nil, nil, err
 		}

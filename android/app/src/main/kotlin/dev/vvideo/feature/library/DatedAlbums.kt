@@ -12,12 +12,12 @@ import java.time.ZoneId
  * [Album.dateLabel] only where the day differs from the album before. A name
  * sort, or no [labels], shows no dates.
  */
-fun datedAlbums(
+internal fun datedAlbums(
     albums: List<Album>,
     sort: Sort,
     labels: TimeLabels?,
     now: Instant = Instant.now(),
-    zone: ZoneId = ZoneId.systemDefault()
+    zone: ZoneId = ZoneId.systemDefault(),
 ): List<Album> {
     var previous: LocalDate? = null
     return albums.map { album ->

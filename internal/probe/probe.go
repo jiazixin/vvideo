@@ -66,6 +66,8 @@ type Diagnostics struct {
 
 const diagnosticsLimit = 2048
 
+// Write implements io.Writer. It keeps output up to the diagnostics limit and
+// discards the rest without failing the writer.
 func (d *Diagnostics) Write(p []byte) (int, error) {
 	if room := diagnosticsLimit - d.buf.Len(); room > 0 {
 		d.buf.Write(p[:min(len(p), room)])
@@ -203,14 +205,12 @@ func applyHEIF(r *Result, f *os.File, e library.Entry) bool {
 	return true
 }
 
-// Worker runs probe jobs. Tool and Rescan are optional: Tool replaces Run in
-// tests, and Rescan is called when the file on disk no longer matches the
+// Worker runs probe jobs. Rescan is called when the file on disk no longer matches the
 // index so a scan can pick up the change.
 type Worker struct {
 	Queue      *jobs.Queue
 	Parameters string
-	Now        func() time.Time
-	Tool       func(context.Context, *os.File, library.Entry) (Result, error)
+	tool       func(context.Context, *os.File, library.Entry) (Result, error)
 	Rescan     func()
 }
 
@@ -235,10 +235,10 @@ func (w *Worker) Run(ctx context.Context, j jobs.Job) error {
 		return err
 	}
 	fp := mediafs.Fingerprint(info)
-	if w.Now().UnixMilli()-j.FirstObserved < library.StabilityDelay.Milliseconds() || fp != j.Fingerprint {
+	if w.Queue.Now().UnixMilli()-j.FirstObserved < library.StabilityDelay.Milliseconds() || fp != j.Fingerprint {
 		return w.Queue.Delay(ctx, j, fp)
 	}
-	tool := w.Tool
+	tool := w.tool
 	if tool == nil {
 		tool = Run
 	}
@@ -283,7 +283,7 @@ func (w *Worker) save(ctx context.Context, j jobs.Job, e library.Entry, r Result
 			_, err := tx.ExecContext(ctx, "UPDATE versions SET status='unsupported',error='unknown_duration' WHERE media_id=? AND version=?", e.ID, e.Version)
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO jobs(media_id,version,kind,parameters,due) VALUES(?,?,'thumbnail',?,?) ON CONFLICT(media_id,version,kind,parameters) DO NOTHING`, e.ID, e.Version, w.Parameters, w.Now().UnixMilli())
+		_, err := tx.ExecContext(ctx, `INSERT INTO jobs(media_id,version,kind,parameters,due) VALUES(?,?,'thumbnail',?,?) ON CONFLICT(media_id,version,kind,parameters) DO NOTHING`, e.ID, e.Version, w.Parameters, w.Queue.Now().UnixMilli())
 		return err
 	})
 }

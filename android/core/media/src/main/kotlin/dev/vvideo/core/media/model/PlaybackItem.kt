@@ -7,9 +7,8 @@ data class PlaybackItem(
     val version: String,
     val url: String,
     val indexUrl: String,
-    val token: String,
     val size: Long,
-    val durationMs: Long
+    val durationMs: Long,
 ) {
     val cacheKey: String get() = "$server|$library|$id|$version"
 }
@@ -39,7 +38,7 @@ object PreloadBudget {
                 .coerceAtLeast(MIN_OPENING_BYTES)
         } else {
             UNKNOWN_DURATION_OPENING_BYTES
-        }
+        },
     )
 
     /** Whether [range] lies inside a file of [size] bytes and fits the budget on its own. */

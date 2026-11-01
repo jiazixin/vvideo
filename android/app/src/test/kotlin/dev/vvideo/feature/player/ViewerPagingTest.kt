@@ -5,8 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ViewerPagingTest {
-    private fun requested(index: Int, count: Int) =
-        buildList { requestNearbyPages(index, count) { add(it) } }
+    private fun requested(index: Int, count: Int) = buildList { requestNearbyPages(index, count) { add(it) } }
 
     @Test
     fun middleOfTheQueueAsksForNothing() {

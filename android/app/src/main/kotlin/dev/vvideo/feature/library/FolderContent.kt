@@ -13,12 +13,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,9 +59,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
 import dev.vvideo.R
-import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Directory
 import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
@@ -91,10 +91,9 @@ private enum class FolderSheet { Sort, Info }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FolderScreen(
+internal fun FolderContent(
     state: LibraryUiState,
-    loader: ImageLoader,
-    connection: Connection,
+    thumbnail: ThumbnailContent,
     list: LazyListState,
     onBack: () -> Unit,
     onOpen: (Long) -> Unit,
@@ -105,7 +104,7 @@ fun FolderScreen(
     onJump: () -> Unit,
     onDetails: (Media) -> Unit,
     onAnchorNotice: () -> Unit = {},
-    onSearch: (String) -> Unit = {}
+    onSearch: (String) -> Unit = {},
 ) {
     val colors = LocalVVColors.current
     val directory = checkNotNull(state.directory)
@@ -122,7 +121,9 @@ fun FolderScreen(
     val scope = rememberCoroutineScope()
     // Earlier pages that are not loaded are reached through the repository.
     val jump = {
-        if (state.hasPrevious) onJump() else {
+        if (state.hasPrevious) {
+            onJump()
+        } else {
             scope.launch { list.animateScrollToItem(0) }
             Unit
         }
@@ -144,12 +145,12 @@ fun FolderScreen(
             jump,
             onRetry,
             onFilter,
-            onSearch
+            onSearch,
         )
     }) { padding ->
         if (state.search.active) {
             Box(Modifier.fillMaxSize().padding(padding)) {
-                FolderSearchResults(state.search, loader, connection, onOpen, onMedia) {
+                FolderSearchResults(state.search, thumbnail, onOpen, onMedia) {
                     onSearch(state.search.query)
                 }
             }
@@ -160,17 +161,16 @@ fun FolderScreen(
                 list,
                 state,
                 { reveal.value },
-                loader,
-                connection,
+                thumbnail,
                 onOpen,
                 onMedia,
-                onDetails
+                onDetails,
             )
             LoadingOrEmpty(directory.id, state, onRetry)
             FloatingDate(
                 list,
                 state.albums,
-                Modifier.align(Alignment.TopCenter).padding(top = 12.dp)
+                Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
             )
             JumpToStartButton(
                 list,
@@ -178,7 +178,7 @@ fun FolderScreen(
                 state.hasPrevious,
                 state.sort,
                 jump,
-                Modifier.align(Alignment.BottomEnd)
+                Modifier.align(Alignment.BottomEnd),
             )
             BulletinHost(bulletin, { bulletin = null }, Modifier.align(Alignment.BottomCenter))
         }
@@ -186,12 +186,7 @@ fun FolderScreen(
 }
 
 @Composable
-private fun FolderSheetHost(
-    sheet: FolderSheet?,
-    state: LibraryUiState,
-    onDismiss: () -> Unit,
-    onSort: (Sort) -> Unit
-) {
+private fun FolderSheetHost(sheet: FolderSheet?, state: LibraryUiState, onDismiss: () -> Unit, onSort: (Sort) -> Unit) {
     when (sheet) {
         FolderSheet.Sort -> SortSheet(state, onDismiss) {
             onDismiss()
@@ -241,7 +236,7 @@ private fun FolderTopBar(
     onJump: () -> Unit,
     onRetry: () -> Unit,
     onFilter: (MediaKind?) -> Unit,
-    onSearch: (String) -> Unit
+    onSearch: (String) -> Unit,
 ) {
     val colors = LocalVVColors.current
     val searching = state.search.active
@@ -251,24 +246,29 @@ private fun FolderTopBar(
             title = { FolderTitle(directory, state.pathLabel) { onSheet(FolderSheet.Info) } },
             navigationIcon = { ActionIcon(R.drawable.ic_back, R.string.back, onBack) },
             actions = { FolderMenu(menuOpen, onMenuOpen, state.sort, onSheet, onJump, onRetry) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface),
         )
         FolderSearchField(state.search.query, onSearch)
         AnimatedVisibility(
             !state.healthy || state.error,
             enter = barEnter(),
-            exit = barExit()
+            exit = barExit(),
         ) {
             OfflineBanner(
-                if (state.error) stringResource(R.string.offline_banner) else stringResource(
-                    R.string.library_offline
-                ), onRetry
+                if (state.error) {
+                    stringResource(R.string.offline_banner)
+                } else {
+                    stringResource(
+                        R.string.library_offline,
+                    )
+                },
+                onRetry,
             )
         }
         AnimatedVisibility(state.hasMedia && !searching, enter = barEnter(), exit = barExit()) {
             MediaTabs(
                 state.filter,
-                onFilter
+                onFilter,
             )
         }
     }
@@ -278,9 +278,9 @@ private fun FolderTopBar(
 private fun FolderTitle(directory: Directory, pathLabel: String, onClick: () -> Unit) {
     val colors = LocalVVColors.current
     Row(
-        Modifier.clickable(onClick = onClick),
+        Modifier.heightIn(min = 48.dp).clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         LetterAvatar(directory.id.toString(), directory.name, 40.dp)
         Column {
@@ -288,14 +288,14 @@ private fun FolderTitle(directory: Directory, pathLabel: String, onClick: () -> 
                 directory.name,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 pathLabel.ifEmpty { stringResource(R.string.libraries) },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textSecondary,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -309,7 +309,7 @@ private fun FolderMenu(
     sort: Sort,
     onSheet: (FolderSheet) -> Unit,
     onJump: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
 ) {
     val colors = LocalVVColors.current
     Box {
@@ -319,7 +319,7 @@ private fun FolderMenu(
             { onExpandedChange(false) },
             Modifier.width(236.dp),
             shape = RoundedCornerShape(10.dp),
-            containerColor = colors.bgRaised
+            containerColor = colors.bgRaised,
         ) {
             DropdownMenuItem(
                 text = {
@@ -328,7 +328,7 @@ private fun FolderMenu(
                         Text(
                             sortLabel(sort),
                             style = MaterialTheme.typography.bodySmall,
-                            color = colors.textSecondary
+                            color = colors.textSecondary,
                         )
                     }
                 },
@@ -336,21 +336,24 @@ private fun FolderMenu(
                 onClick = {
                     onExpandedChange(false)
                     onSheet(FolderSheet.Sort)
-                })
+                },
+            )
             DropdownMenuItem(
                 text = { Text(stringResource(jumpLabel(sort))) },
                 leadingIcon = { Icon(painterResource(R.drawable.ic_arrow_up), null) },
                 onClick = {
                     onExpandedChange(false)
                     onJump()
-                })
+                },
+            )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.refresh)) },
                 leadingIcon = { Icon(painterResource(R.drawable.ic_refresh), null) },
                 onClick = {
                     onExpandedChange(false)
                     onRefresh()
-                })
+                },
+            )
             HorizontalDivider()
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.folder_info)) },
@@ -358,7 +361,8 @@ private fun FolderMenu(
                 onClick = {
                     onExpandedChange(false)
                     onSheet(FolderSheet.Info)
-                })
+                },
+            )
         }
     }
 }
@@ -369,50 +373,62 @@ private fun FolderContentList(
     list: LazyListState,
     state: LibraryUiState,
     contentAlpha: () -> Float,
-    loader: ImageLoader,
-    connection: Connection,
+    thumbnail: ThumbnailContent,
     onOpen: (Long) -> Unit,
     onMedia: (Media) -> Unit,
-    onDetails: (Media) -> Unit
+    onDetails: (Media) -> Unit,
 ) {
-    LazyColumn(
-        state = list,
-        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = contentAlpha() },
-        contentPadding = PaddingValues(bottom = 24.dp)
-    ) {
-        if (subfoldersShown(state)) items(
-            state.subfolders.items,
-            key = { folderKey(it.id) },
-            contentType = { "folder" }) { dir ->
-            LibraryRow(
-                dir.id.toString(),
-                dir.name,
-                onClick = { onOpen(dir.id) })
-        }
-        state.albums.forEach { album ->
-            if (album.dateLabel != null) item(
-                dateKey(album),
-                contentType = DATE_CONTENT_TYPE
-            ) {
-                Box(
-                    Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) { DatePill(album.dateLabel) }
+    // Resolve constraints once, before the lazy list composes or prefetches items.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val availableWidthPx = constraints.maxWidth
+        LazyColumn(
+            state = list,
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = contentAlpha() },
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            if (subfoldersShown(state)) {
+                items(
+                    state.subfolders.items,
+                    key = { folderKey(it.id) },
+                    contentType = { "folder" },
+                ) { dir ->
+                    LibraryRow(
+                        dir.id.toString(),
+                        dir.name,
+                        onClick = { onOpen(dir.id) },
+                    )
+                }
             }
-            item(albumKey(album), contentType = "album") {
-                AlbumBubble(
-                    album,
-                    loader,
-                    connection,
-                    onMedia,
-                    onDetails
-                )
+            state.albums.forEach { album ->
+                if (album.dateLabel != null) {
+                    item(
+                        dateKey(album),
+                        contentType = DATE_CONTENT_TYPE,
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { DatePill(album.dateLabel) }
+                    }
+                }
+                item(albumKey(album), contentType = "album") {
+                    AlbumBubble(
+                        album,
+                        availableWidthPx,
+                        thumbnail,
+                        onMedia,
+                        onDetails,
+                    )
+                }
             }
-        }
-        if (state.subfolders.busy || state.pageBusy) item("paging") {
-            Box(
-                Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
+            if (state.subfolders.busy || state.pageBusy) {
+                item("paging") {
+                    Box(
+                        Modifier.fillMaxWidth().padding(8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
+                }
+            }
         }
     }
 }
@@ -436,16 +452,16 @@ private fun LoadingOrEmpty(directoryId: Long, state: LibraryUiState, onRetry: ()
     AnimatedVisibility(
         state.busy && blank && !settled.empty,
         enter = fadeIn(fade()),
-        exit = fadeOut(fade(Motion.CHANGE))
+        exit = fadeOut(fade(Motion.CHANGE)),
     ) {
         Column(
             Modifier.fillMaxSize().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             repeat(2) {
                 Box(
                     Modifier.fillMaxWidth().height(260.dp)
-                        .background(colors.bgPlaceholder, RoundedCornerShape(16.dp))
+                        .background(colors.bgPlaceholder, RoundedCornerShape(16.dp)),
                 )
             }
         }
@@ -453,12 +469,12 @@ private fun LoadingOrEmpty(directoryId: Long, state: LibraryUiState, onRetry: ()
     AnimatedVisibility(
         blank && !state.error && (!state.busy || settled.empty),
         enter = fadeIn(fade(Motion.CHANGE)),
-        exit = fadeOut(fade())
+        exit = fadeOut(fade()),
     ) {
         EmptyState(
             stringResource(R.string.empty_media),
             action = stringResource(R.string.refresh),
-            onAction = onRetry
+            onAction = onRetry,
         )
     }
 }
@@ -489,7 +505,9 @@ private fun FloatingDate(list: LazyListState, albums: List<Album>, modifier: Mod
         }
     }
     LaunchedEffect(list.isScrollInProgress) {
-        if (list.isScrollInProgress) floating = true else {
+        if (list.isScrollInProgress) {
+            floating = true
+        } else {
             delay(FLOATING_DATE_HOLD_MS)
             floating = false
         }
@@ -498,7 +516,7 @@ private fun FloatingDate(list: LazyListState, albums: List<Album>, modifier: Mod
         floating && !dateRowAtTop && firstAlbum?.dayLabel != null,
         modifier,
         enter = fadeIn(fade()),
-        exit = if (dateRowAtTop) ExitTransition.None else fadeOut(fade(Motion.CHANGE))
+        exit = if (dateRowAtTop) ExitTransition.None else fadeOut(fade(Motion.CHANGE)),
     ) { firstAlbum?.dayLabel?.let { DatePill(it) } }
 }
 
@@ -510,23 +528,24 @@ private fun JumpToStartButton(
     hasPrevious: Boolean,
     sort: Sort,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalVVColors.current
     val visible by remember(list, albums, hasPrevious) {
         derivedStateOf {
-            hasPrevious || albums.indexOfFirst {
-                albumKey(it) == list.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-                    item.key.toString().startsWith(ALBUM_KEY_PREFIX)
-                }?.key
-            } >= JUMP_BUTTON_FIRST_ALBUM
+            hasPrevious ||
+                albums.indexOfFirst {
+                    albumKey(it) == list.layoutInfo.visibleItemsInfo.firstOrNull { item ->
+                        item.key.toString().startsWith(ALBUM_KEY_PREFIX)
+                    }?.key
+                } >= JUMP_BUTTON_FIRST_ALBUM
         }
     }
     AnimatedVisibility(
         visible,
         modifier,
         enter = fadeIn(fade()) + scaleIn(move(), initialScale = .6f),
-        exit = fadeOut(fade()) + scaleOut(move(), targetScale = .6f)
+        exit = fadeOut(fade()) + scaleOut(move(), targetScale = .6f),
     ) {
         SmallFloatingActionButton(
             onClick = onClick,
@@ -534,11 +553,11 @@ private fun JumpToStartButton(
                 .size(48.dp),
             shape = CircleShape,
             containerColor = colors.bgRaised,
-            contentColor = colors.icon
+            contentColor = colors.icon,
         ) {
             Icon(
                 painterResource(R.drawable.ic_arrow_up),
-                stringResource(jumpLabel(sort))
+                stringResource(jumpLabel(sort)),
             )
         }
     }
@@ -552,12 +571,12 @@ private fun jumpLabel(sort: Sort) = when {
 }
 
 @Composable
-fun DatePill(label: String) {
+internal fun DatePill(label: String) {
     Text(
         label,
         Modifier.background(LocalVVColors.current.datePill, RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 3.dp),
         color = LocalVVColors.current.datePillText,
-        style = MaterialTheme.typography.labelSmall
+        style = MaterialTheme.typography.labelSmall,
     )
 }

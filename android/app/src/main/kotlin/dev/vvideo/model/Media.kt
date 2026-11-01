@@ -4,17 +4,17 @@ package dev.vvideo.model
 private const val MIN_DISPLAY_RATIO = 0.3f
 private const val MAX_DISPLAY_RATIO = 3.3f
 
-data class Directory(
+internal data class Directory(
     val id: Long,
     val libraryId: String,
     val parentId: Long,
     val name: String,
-    val revision: Long
+    val revision: Long,
 )
 
-data class Library(val id: String, val name: String, val directoryId: Long, val healthy: Boolean)
+internal data class Library(val id: String, val name: String, val directoryId: Long, val healthy: Boolean)
 
-data class Media(
+internal data class Media(
     val id: String,
     val version: String,
     val libraryId: String,
@@ -30,7 +30,7 @@ data class Media(
     val mtime: Long,
     val status: MediaStatus,
     val capturedRaw: String,
-    val capturedSource: CaptureSource
+    val capturedSource: CaptureSource,
 ) {
     val displayRatio: Float
         get() {
@@ -43,21 +43,17 @@ data class Media(
         }
 }
 
-data class MediaPage(
+internal data class MediaPage(
     val directory: Directory,
     val items: List<Media>,
     val next: String,
     val previous: String,
     val anchor: String,
     val anchorFound: Boolean,
-    val healthy: Boolean
+    val healthy: Boolean,
 )
 
-data class ChildrenPage(val items: List<Directory>, val next: String, val previous: String = "")
+internal data class ChildrenPage(val items: List<Directory>, val next: String, val previous: String = "")
 
 /** Folders and media under a folder whose names match a search; [truncated] means more matched. */
-data class SearchResult(
-    val directories: List<Directory>,
-    val items: List<Media>,
-    val truncated: Boolean
-)
+internal data class SearchResult(val directories: List<Directory>, val items: List<Media>, val truncated: Boolean)

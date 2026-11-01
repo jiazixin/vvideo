@@ -65,7 +65,7 @@ internal fun SessionSurface(player: Player, modifier: Modifier = Modifier) {
         },
         update = { it.player = player },
         onRelease = { it.player = null },
-        modifier = modifier
+        modifier = modifier,
     )
 }
 
@@ -83,14 +83,14 @@ internal fun VideoPage(
     error: PlaybackException?,
     noDecoder: Boolean,
     onDetails: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
 ) {
     // A covered page is opaque: the shared Surface behind it may still hold the
     // previous video's last frame, which would show through letterboxing or a
     // cover that has not loaded yet.
     Box(
         Modifier.fillMaxSize()
-            .then(if (covered) Modifier.background(Color.Black) else Modifier)
+            .then(if (covered) Modifier.background(Color.Black) else Modifier),
     ) {
         if (covered) {
             val context = LocalContext.current
@@ -102,7 +102,7 @@ internal fun VideoPage(
                 item.name,
                 imageLoader = loader,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
             )
         }
         if (failed) {
@@ -121,50 +121,47 @@ private fun PlaybackErrorPanel(
     noDecoder: Boolean,
     onDetails: () -> Unit,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
-    val unsupported = noDecoder || error?.errorCode in listOf(
-        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
-    )
+    val unsupported = noDecoder ||
+        error?.errorCode in listOf(
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        )
     Column(
         modifier.background(Color.Black.copy(alpha = .8f)).padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(
             painterResource(R.drawable.ic_video_off),
             null,
             Modifier.size(48.dp),
-            tint = Color.White
+            tint = Color.White,
         )
         Text(
             stringResource(if (unsupported) R.string.cannot_decode else R.string.playback_error),
-            color = Color.White
+            color = Color.White,
         )
         Text(
             error?.errorCodeName.orEmpty(),
-            color = Color.White.copy(alpha = .6f)
+            color = Color.White.copy(alpha = .6f),
         )
         VVButton(
             stringResource(if (unsupported) R.string.media_details else R.string.retry),
             { if (unsupported) onDetails() else onRetry() },
-            kind = ButtonKind.Secondary
+            kind = ButtonKind.Secondary,
         )
     }
 }
 
 /** The quick fade the viewer uses for its controls. */
 @Composable
-internal fun ViewerFade(
-    visible: Boolean,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit
-) {
+internal fun ViewerFade(visible: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     AnimatedVisibility(
         visible,
         modifier,
         enter = fadeIn(tween(150)),
-        exit = fadeOut(tween(100))
+        exit = fadeOut(tween(100)),
     ) { content() }
 }
 
@@ -175,7 +172,7 @@ internal fun FadingChrome(
     item: Media?,
     onBack: () -> Unit,
     onDetails: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     ViewerFade(visible, modifier) { PlayerChrome(item, onBack, onDetails) }
 }
@@ -185,8 +182,8 @@ internal fun FadingChrome(
 internal fun ControlsScrim(shaded: Boolean, content: @Composable () -> Unit) {
     Box(
         Modifier.then(
-            if (shaded) Modifier.background(BottomViewerGradient).padding(top = 40.dp) else Modifier
-        ).navigationBarsPadding()
+            if (shaded) Modifier.background(BottomViewerGradient).padding(top = 40.dp) else Modifier,
+        ).navigationBarsPadding(),
     ) { content() }
 }
 
@@ -197,7 +194,7 @@ internal fun PlayButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         R.string.play,
         onClick,
         modifier.size(64.dp).background(BadgeBackground, CircleShape),
-        Color.White
+        Color.White,
     )
 }
 
@@ -208,7 +205,7 @@ internal fun SpeedHoldLabel(modifier: Modifier = Modifier) {
         stringResource(R.string.speed_hold),
         modifier.statusBarsPadding().padding(top = 72.dp)
             .background(Color.Black.copy(alpha = .5f), CircleShape).padding(12.dp),
-        color = Color.White
+        color = Color.White,
     )
 }
 
@@ -221,7 +218,7 @@ internal fun EdgeLevelLabel(control: EdgeControl, level: Float, modifier: Modifi
         stringResource(label, levelPercent(level)),
         modifier.statusBarsPadding().padding(top = 72.dp)
             .background(Color.Black.copy(alpha = .5f), CircleShape).padding(12.dp),
-        color = Color.White
+        color = Color.White,
     )
 }
 
@@ -231,11 +228,11 @@ internal fun SeekFeedback(seconds: Int, forward: Boolean, modifier: Modifier = M
     Box(
         modifier.fillMaxHeight(.5f).fillMaxWidth(.4f)
             .background(Color.White.copy(alpha = .13f), CircleShape),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             stringResource(if (forward) R.string.seek_forward else R.string.seek_back, seconds),
-            color = Color.White
+            color = Color.White,
         )
     }
 }
@@ -244,6 +241,6 @@ internal fun SeekFeedback(seconds: Int, forward: Boolean, modifier: Modifier = M
 internal fun BufferingIndicator(modifier: Modifier = Modifier) {
     Box(
         modifier.size(64.dp).background(BadgeBackground, CircleShape),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) { CircularProgressIndicator(Modifier.size(48.dp), color = Color.White) }
 }

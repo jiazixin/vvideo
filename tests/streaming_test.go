@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+
 	"vvideo/internal/app"
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
@@ -37,7 +38,7 @@ func (w *stalledResponse) Write(p []byte) (int, error) {
 
 func TestStreamAdmissionAndCancellationRelease(t *testing.T) {
 	i, scan, root := setup(t)
-	if err := os.WriteFile(filepath.Join(root, "sample.mp4"), bytes.Repeat([]byte("original"), 10000), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "sample.mp4"), bytes.Repeat([]byte("original"), 10000), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := scan.Run(t.Context(), false); err != nil {
@@ -45,7 +46,7 @@ func TestStreamAdmissionAndCancellationRelease(t *testing.T) {
 	}
 	e := first(t, i)
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	url := "/media/" + e.ID + "?version=" + e.Version
 	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
@@ -91,7 +92,7 @@ func TestInFlightReplacementAbortsWithoutNewBytes(t *testing.T) {
 	i, scan, root := setup(t)
 	path := filepath.Join(root, "sample.mp4")
 	original := bytes.Repeat([]byte("A"), 128<<10)
-	if err := os.WriteFile(path, original, 0600); err != nil {
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := scan.Run(t.Context(), false); err != nil {
@@ -99,9 +100,9 @@ func TestInFlightReplacementAbortsWithoutNewBytes(t *testing.T) {
 	}
 	e := first(t, i)
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	w := &replacementResponse{ResponseRecorder: httptest.NewRecorder(), replace: func() {
-		if err := os.WriteFile(path, bytes.Repeat([]byte("B"), 256<<10), 0600); err != nil {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("B"), 256<<10), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}}
@@ -127,7 +128,7 @@ func TestPreservedMtimeOverwriteCreatesNewVersion(t *testing.T) {
 	i, scan, root := setup(t)
 	path := filepath.Join(root, "sample.mp4")
 	original := bytes.Repeat([]byte("A"), 128<<10)
-	if err := os.WriteFile(path, original, 0600); err != nil {
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := scan.Run(t.Context(), false); err != nil {
@@ -139,7 +140,7 @@ func TestPreservedMtimeOverwriteCreatesNewVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	replacement := bytes.Repeat([]byte("B"), len(original))
-	if err := os.WriteFile(path, replacement, 0600); err != nil {
+	if err := os.WriteFile(path, replacement, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
@@ -150,7 +151,7 @@ func TestPreservedMtimeOverwriteCreatesNewVersion(t *testing.T) {
 		t.Fatal("fixture did not preserve inode/size/mtime", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	request := func(version string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequestWithContext(t.Context(), "GET", "/media/"+entry.ID+"?version="+version, nil)
@@ -187,7 +188,7 @@ func TestInFlightPreservedMtimeOverwriteAborts(t *testing.T) {
 	i, scan, root := setup(t)
 	path := filepath.Join(root, "sample.mp4")
 	original := bytes.Repeat([]byte("A"), 128<<10)
-	if err := os.WriteFile(path, original, 0600); err != nil {
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := scan.Run(t.Context(), false); err != nil {
@@ -199,9 +200,9 @@ func TestInFlightPreservedMtimeOverwriteAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	response := &replacementResponse{ResponseRecorder: httptest.NewRecorder(), replace: func() {
-		if err := os.WriteFile(path, bytes.Repeat([]byte("B"), len(original)), 0600); err != nil {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("B"), len(original)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
@@ -231,7 +232,7 @@ func TestInFlightPreservedMtimeOverwriteAborts(t *testing.T) {
 func TestStreamOutlivesServerWriteTimeout(t *testing.T) {
 	i, scan, root := setup(t)
 	data := bytes.Repeat([]byte("0123456789abcdef"), 1<<19) // 8 MiB
-	if err := os.WriteFile(filepath.Join(root, "long.mp4"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "long.mp4"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := scan.Run(t.Context(), false); err != nil {
@@ -239,7 +240,7 @@ func TestStreamOutlivesServerWriteTimeout(t *testing.T) {
 	}
 	e := first(t, i)
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	server := httptest.NewUnstartedServer(mux)
 	server.Config.WriteTimeout = 200 * time.Millisecond
 	server.Start()
@@ -312,7 +313,7 @@ func TestIndexHintsPerContainer(t *testing.T) {
 		"unknown.avi": {mkv, []streaming.Range{}},
 	}
 	for name, f := range files {
-		if err := os.WriteFile(filepath.Join(root, name), f.data, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), f.data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -327,7 +328,7 @@ func TestIndexHintsPerContainer(t *testing.T) {
 	if err != nil || len(page.Items) != len(files) {
 		t.Fatalf("listed %d of %d: %v", len(page.Items), len(files), err)
 	}
-	handler := (&app.App{Config: scan.Config, Index: i, Stream: streaming.New(i, jobs.NewPriority())}).Handler()
+	handler := (&app.App{Config: scan.Config, Index: i, Stream: app.NewStreamHandler(i, jobs.NewPriority(time.Now))}).Handler()
 	get := func(url, byteRange string) *httptest.ResponseRecorder {
 		r := httptest.NewRequestWithContext(t.Context(), "GET", url, nil)
 		r.Header.Set("Authorization", "Bearer fixture")
@@ -341,24 +342,35 @@ func TestIndexHintsPerContainer(t *testing.T) {
 	for _, item := range page.Items {
 		t.Run(item.Name, func(t *testing.T) {
 			f := files[item.Name]
-			w := get("/v1/media/"+item.ID+"/index?version="+item.Version, "")
+			w := get("/api/media/"+item.ID+"/index?version="+item.Version, "")
 			if w.Code != 200 {
 				t.Fatalf("status %d", w.Code)
 			}
-			var hints streaming.Hints
-			if err := json.Unmarshal(w.Body.Bytes(), &hints); err != nil {
+			var wire struct {
+				Version   string `json:"version"`
+				SizeBytes int64  `json:"size_bytes"`
+				Ranges    []struct {
+					OffsetBytes int64 `json:"offset_bytes"`
+					LengthBytes int64 `json:"length_bytes"`
+				} `json:"ranges"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
 				t.Fatal(err)
+			}
+			hints := streaming.Hints{Version: wire.Version, Size: wire.SizeBytes, Ranges: []streaming.Range{}}
+			for _, r := range wire.Ranges {
+				hints.Ranges = append(hints.Ranges, streaming.Range{Offset: r.OffsetBytes, Length: r.LengthBytes})
 			}
 			if hints.Version != item.Version || hints.Size != int64(len(f.data)) || !slices.Equal(hints.Ranges, f.want) || hints.Ranges == nil {
 				t.Fatalf("hints %+v want %+v", hints, f.want)
 			}
 			for _, r := range hints.Ranges {
-				w := get("/v1/media/"+item.ID+"/bytes?version="+item.Version, fmt.Sprintf("bytes=%d-%d", r.Offset, r.Offset+r.Length-1))
+				w := get("/api/media/"+item.ID+"/bytes?version="+item.Version, fmt.Sprintf("bytes=%d-%d", r.Offset, r.Offset+r.Length-1))
 				if w.Code != 206 || !bytes.Equal(w.Body.Bytes(), f.data[r.Offset:r.Offset+r.Length]) {
 					t.Fatalf("range %+v served %d bytes, status %d", r, w.Body.Len(), w.Code)
 				}
 			}
-			if w := get("/v1/media/"+item.ID+"/index?version=stale", ""); w.Code != 409 {
+			if w := get("/api/media/"+item.ID+"/index?version=stale", ""); w.Code != 409 {
 				t.Fatalf("stale version status %d", w.Code)
 			}
 		})

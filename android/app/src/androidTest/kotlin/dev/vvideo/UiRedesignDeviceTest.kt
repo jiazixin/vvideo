@@ -6,16 +6,23 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
-import androidx.test.uiautomator.*
-import dev.vvideo.app.*
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import dev.vvideo.app.MainActivity
+import dev.vvideo.app.VVideoApplication
 import dev.vvideo.data.library.ChildrenWindow
 import dev.vvideo.data.library.PageEdge
 import dev.vvideo.feature.library.LibraryViewModel
-import dev.vvideo.model.Sort
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -24,7 +31,7 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class UiRedesignDeviceTest {
     @Test
-    fun foldersReverseSettingsAndSystemBack() = runBlocking<Unit> {
+    fun foldersReverseSettingsAndSystemBack() = deviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = instrumentation.targetContext.applicationContext as VVideoApplication
         withTimeout(15000) { app.ready.first { it } }
@@ -32,8 +39,8 @@ class UiRedesignDeviceTest {
             JSONObject(
                 File(
                     app.filesDir,
-                    "validation.json"
-                ).readText()
+                    "validation.json",
+                ).readText(),
             )
         }
         app.graph.settings.connect("http://127.0.0.1:19090", secret.getString("token"))

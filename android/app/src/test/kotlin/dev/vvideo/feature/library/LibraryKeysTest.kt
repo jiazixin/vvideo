@@ -1,7 +1,15 @@
 package dev.vvideo.feature.library
 
-import dev.vvideo.model.*
-import org.junit.Assert.*
+import dev.vvideo.model.CaptureSource
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaPage
+import dev.vvideo.model.MediaStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LibraryKeysTest {
@@ -9,11 +17,10 @@ class LibraryKeysTest {
     private val item =
         Media(
             "m1", "v", "lib", 5, "a.mp4", MediaKind.Video, 1920, 1080, 0, 1000, 10, 0, 0,
-            MediaStatus.Ready, "", CaptureSource.Unknown
+            MediaStatus.Ready, "", CaptureSource.Unknown,
         )
 
-    private fun page(found: Boolean, items: List<Media>) =
-        MediaPage(dir, items, "", "", "", found, true)
+    private fun page(found: Boolean, items: List<Media>) = MediaPage(dir, items, "", "", "", found, true)
 
     @Test
     fun missingAnchorWithNearbyMediaIsReported() {
@@ -49,7 +56,7 @@ class LibraryKeysTest {
         val albums = listOf(Album(listOf(item)))
         val state = LibraryUiState(
             albums = albums,
-            subfolders = Subfolders(listOf(dir.copy(id = 7), dir.copy(id = 8)))
+            subfolders = Subfolders(listOf(dir.copy(id = 7), dir.copy(id = 8))),
         )
         val keys = libraryKeys(state)
         assertEquals(listOf("folder:7", "folder:8", "album:m1"), keys)
@@ -66,7 +73,7 @@ class LibraryKeysTest {
         val state = LibraryUiState(
             albums = albums,
             hasPrevious = true,
-            subfolders = Subfolders(listOf(dir.copy(id = 7)))
+            subfolders = Subfolders(listOf(dir.copy(id = 7))),
         )
         assertEquals(listOf("album:m1"), libraryKeys(state))
         assertEquals(0, restoreIndex(libraryKeys(state), albums, "folder:7", "m1"))

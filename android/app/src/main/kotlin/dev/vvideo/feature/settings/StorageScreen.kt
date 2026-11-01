@@ -34,11 +34,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.util.UnstableApi
 import dev.vvideo.R
 import dev.vvideo.data.settings.CACHE_BUDGETS
-import dev.vvideo.data.settings.Connection
 import dev.vvideo.ui.component.ActionIcon
 import dev.vvideo.ui.component.BulletinHost
 import dev.vvideo.ui.component.OfflineBanner
@@ -57,33 +54,42 @@ private const val PART_GAP = 2f
 /** The ring starts at the top. */
 private const val RING_START = -90f
 
-@UnstableApi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StorageScreen(vm: SettingsViewModel, connection: Connection, onBack: () -> Unit) {
-    val state by vm.state.collectAsStateWithLifecycle()
+internal fun StorageScreen(
+    state: SettingsUiState,
+    onBack: () -> Unit,
+    onUsage: () -> Unit,
+    onBudget: (Long) -> Unit,
+    onClear: () -> Unit,
+    onMessageShown: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val connection = state.connection
     val colors = LocalVVColors.current
     val usage = state.usage
     var confirm by remember { mutableStateOf(false) }
     var bulletin by remember { mutableStateOf<String?>(null) }
     val total = usage?.total
     val released = stringResource(R.string.cache_released, formatBytes(state.releasedBytes))
-    LaunchedEffect(Unit) {
-        vm.dismissMessage()
-        vm.usage()
-    }
     LaunchedEffect(state.message) {
         when (state.message) {
-            SettingsMessage.CacheCleared -> bulletin = released
+            SettingsMessage.CacheCleared -> {
+                bulletin = released
+                onMessageShown()
+            }
             SettingsMessage.CacheFailed -> bulletin = null
             else -> Unit
         }
     }
-    if (confirm) ClearCacheSheet(total ?: 0, onDismiss = { confirm = false }) {
-        confirm = false
-        vm.clearCache(connection.budget)
+    if (confirm) {
+        ClearCacheSheet(total ?: 0, onDismiss = { confirm = false }) {
+            confirm = false
+            onClear()
+        }
     }
     Scaffold(
+        modifier = modifier,
         containerColor = colors.bgPage,
         topBar = {
             TopAppBar(
@@ -94,23 +100,24 @@ fun StorageScreen(vm: SettingsViewModel, connection: Connection, onBack: () -> U
                         R.drawable.ic_back,
                         R.string.back,
                         onBack,
-                        enabled = !state.busy
+                        enabled = !state.busy,
                     )
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgSurface),
             )
-        }) { padding ->
+        },
+    ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Column(
                     Modifier.fillMaxWidth().background(colors.bgSurface).padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    if (usage?.lowSpace == true) OfflineBanner(stringResource(R.string.low_space)) { vm.usage() }
+                    if (usage?.lowSpace == true) OfflineBanner(stringResource(R.string.low_space)) { onUsage() }
                     val amounts =
                         listOf(usage?.video ?: 0, usage?.images ?: 0, usage?.overhead ?: 0)
                     UsageRing(amounts, total, connection.budget)
@@ -121,20 +128,22 @@ fun StorageScreen(vm: SettingsViewModel, connection: Connection, onBack: () -> U
                         } else {
                             stringResource(
                                 R.string.clear_cache_amount,
-                                total?.let(::formatBytes) ?: stringResource(R.string.dash)
+                                total?.let(::formatBytes) ?: stringResource(R.string.dash),
                             )
                         },
                         { confirm = true },
                         Modifier.fillMaxWidth(),
                         enabled = total != null,
-                        busy = state.busy
+                        busy = state.busy,
                     )
-                    if (state.message == SettingsMessage.CacheFailed) Text(
-                        stringResource(R.string.cache_failed),
-                        color = colors.error
-                    )
+                    if (state.message == SettingsMessage.CacheFailed) {
+                        Text(
+                            stringResource(R.string.cache_failed),
+                            color = colors.error,
+                        )
+                    }
                 }
-                CacheLimitSection(connection.budget, total, state.busy, vm::setBudget)
+                CacheLimitSection(connection.budget, total, state.busy, onBudget)
             }
             BulletinHost(bulletin, { bulletin = null }, Modifier.align(Alignment.BottomCenter))
         }
@@ -148,12 +157,12 @@ private fun ClearCacheSheet(total: Long, onDismiss: () -> Unit, onConfirm: () ->
         Text(
             stringResource(R.string.clear_pause),
             Modifier.padding(horizontal = 20.dp),
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
         )
         VVButton(
             stringResource(R.string.confirm_clear),
             onConfirm,
-            Modifier.fillMaxWidth().padding(20.dp)
+            Modifier.fillMaxWidth().padding(20.dp),
         )
     }
 }
@@ -180,7 +189,7 @@ private fun UsageRing(amounts: List<Long>, total: Long?, budget: Long) {
                             start + PART_GAP / 2,
                             (sweep - PART_GAP).coerceAtLeast(1f),
                             false,
-                            style = stroke
+                            style = stroke,
                         )
                         start += sweep
                     }
@@ -191,12 +200,12 @@ private fun UsageRing(amounts: List<Long>, total: Long?, budget: Long) {
             Text(
                 total?.let(::formatBytes) ?: stringResource(R.string.calculating),
                 fontSize = if (total == null) 16.sp else 26.sp,
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleMedium,
             )
             Text(
                 stringResource(R.string.cache_max, wholeGigabytes(budget)),
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.textSecondary
+                color = colors.textSecondary,
             )
         }
     }
@@ -209,18 +218,18 @@ private fun UsageLegend(amounts: List<Long>, total: Long?) {
     listOf(
         R.string.cache_video_segments,
         R.string.cache_images,
-        R.string.cache_index
+        R.string.cache_index,
     ).forEachIndexed { i, label ->
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Box(Modifier.size(12.dp).background(StorageUsageColors[i], CircleShape))
             Text(
                 stringResource(label),
                 Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
             )
             Text(
                 when {
@@ -229,12 +238,12 @@ private fun UsageLegend(amounts: List<Long>, total: Long?) {
                     else -> "0%"
                 },
                 color = colors.textSecondary,
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
             )
             Text(
                 if (total == null) stringResource(R.string.dash) else formatBytes(amounts[i]),
                 Modifier.widthIn(min = 72.dp),
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
@@ -256,27 +265,52 @@ private fun CacheLimitSection(budget: Long, total: Long?, busy: Boolean, onBudge
             enabled = !busy,
             valueRange = 0f..options.lastIndex.toFloat(),
             steps = options.size - 2,
-            onValueChangeFinished = { onBudget(options[selected.roundToInt()]) })
+            onValueChangeFinished = { onBudget(options[selected.roundToInt()]) },
+        )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             options.forEach {
                 Text(
                     stringResource(R.string.cache_gb, wholeGigabytes(it)),
-                    color = if (it == budget) colors.accentText else colors.textSecondary
+                    color = if (it == budget) colors.accentText else colors.textSecondary,
                 )
             }
         }
         Text(
             stringResource(
-                if ((total
-                        ?: 0) > options[selected.roundToInt()]
-                ) R.string.cache_reclaim else R.string.cache_limit_note
+                if ((
+                        total
+                            ?: 0
+                        ) > options[selected.roundToInt()]
+                ) {
+                    R.string.cache_reclaim
+                } else {
+                    R.string.cache_limit_note
+                },
             ),
             Modifier.padding(20.dp),
             style = MaterialTheme.typography.bodySmall,
-            color = colors.textSecondary
+            color = colors.textSecondary,
+        )
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, fontScale = 1.5f)
+@Composable
+private fun StorageScreenPreview() {
+    dev.vvideo.ui.theme.VVideoTheme {
+        StorageScreen(
+            state = SettingsUiState(
+                usage = dev.vvideo.data.cache.CacheUsage(video = 120_000_000, images = 12_000_000),
+            ),
+            onBack = {
+            },
+            onUsage = {},
+            onBudget = {},
+            onClear = {},
+            onMessageShown = {},
         )
     }
 }

@@ -27,15 +27,27 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go mod verify
+      - run: go mod tidy -diff
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l cmd internal tests)
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
           [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }
-      - run: go vet ./...
+      - name: goimports
+        run: |
+          unformatted=$(go run golang.org/x/tools/cmd/goimports@v0.50.0 -local vvideo -l $(git ls-files '*.go'))
+          [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }
+      - name: go vet for each server target
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch go vet ./...
+            GOOS=linux GOARCH=$arch go vet -tags integration,scale ./...
+          done
       # macOS is cross-checked only; the server targets Linux/NAS.
       - run: GOOS=darwin GOARCH=arm64 go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       # Tests use synthetic media and a fake ffprobe; FFmpeg is not needed.
       - run: go test -race -count=1 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: 交叉编译 Linux amd64 / arm64
         run: |
           for arch in amd64 arm64; do
@@ -70,12 +82,21 @@ jobs:
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
             "platforms;android-36" "build-tools;35.0.0"
+      - name: ktlint
+        env:
+          KTLINT_VERSION: 1.5.0
+        run: |
+          curl -sSLf -o "$RUNNER_TEMP/ktlint" \
+            "https://github.com/pinterest/ktlint/releases/download/$KTLINT_VERSION/ktlint"
+          chmod +x "$RUNNER_TEMP/ktlint"
+          "$RUNNER_TEMP/ktlint" "**/src/**/*.kt" "**/*.kts"
       # Device tests and frame measurements need a phone and are not run here.
       - run: >-
           ./gradlew --no-daemon
           :app:testDebugUnitTest :core:media:testDebugUnitTest
           :app:lintDebug :core:media:lintDebug
-          :app:assembleDebug :app:assembleProfile
+          :app:assembleDebug :app:assembleProfile :app:assembleRelease
+          :app:assembleDebugAndroidTest :core:media:assembleDebugAndroidTest :benchmark:assembleProfile
 
   release-snapshot:
     name: GoReleaser 快照构建

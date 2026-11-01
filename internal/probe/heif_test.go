@@ -59,7 +59,7 @@ func TestRunUsesHEIFItemProperties(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
-			if err := os.WriteFile(filepath.Join(directory, "ffprobe"), []byte(script), 0700); err != nil {
+			if err := os.WriteFile(filepath.Join(directory, "ffprobe"), []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))

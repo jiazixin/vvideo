@@ -6,11 +6,12 @@ import android.os.Trace
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.util.UnstableApi
 import dev.vvideo.app.navigation.VVideoRoot
 import dev.vvideo.model.ThemeMode
+import dev.vvideo.ui.theme.LocalDispatchers
 import dev.vvideo.ui.theme.VVideoTheme
 
 /**
@@ -25,7 +26,6 @@ private const val REFRESH_HOLD_MS = 1500L
 private const val SCROLL_TRACE_SECTION = "VVideoScroll"
 private const val SCROLL_TRACE_COOKIE = 1
 
-@UnstableApi
 class MainActivity : ComponentActivity() {
     private var interacting = false
     private var highRefresh = false
@@ -37,7 +37,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val app = application as VVideoApplication
             val theme by app.graph.settings.theme.collectAsStateWithLifecycle(initialValue = ThemeMode.System)
-            VVideoTheme(theme) { VVideoRoot(app, ::interaction) }
+            CompositionLocalProvider(LocalDispatchers provides app.graph.dispatchers) {
+                VVideoTheme(theme) { VVideoRoot(app, ::interaction) }
+            }
         }
     }
 

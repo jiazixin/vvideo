@@ -10,13 +10,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 
 @Composable
-fun ActionIcon(
+internal fun ActionIcon(
     icon: Int,
     label: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     tint: Color = LocalContentColor.current,
-    enabled: Boolean = true
+    enabled: Boolean = true,
 ) {
     IconButton(onClick = onClick, modifier = modifier, enabled = enabled) {
         Icon(painterResource(icon), stringResource(label), tint = tint)

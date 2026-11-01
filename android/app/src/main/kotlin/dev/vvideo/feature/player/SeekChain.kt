@@ -1,6 +1,5 @@
 package dev.vvideo.feature.player
 
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -17,7 +16,6 @@ internal const val SEEK_CHAIN_MS = 600L
  * Double-tap seeking: consecutive taps in one direction add up into one figure on
  * screen, which disappears [SEEK_CHAIN_MS] after the last tap.
  */
-@Stable
 internal class SeekChain {
     /** Seconds shown for the current chain; 0 hides the feedback. */
     var seconds by mutableIntStateOf(0)

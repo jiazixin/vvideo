@@ -3,6 +3,8 @@ package config
 
 import (
 	"bytes"
+	"cmp"
+	"crypto/sha256"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -23,17 +25,14 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// DefaultFile is the configuration file used, relative to the working
-// directory, when neither --config nor CONFIG_FILE selects one.
-const DefaultFile = "configs/config.local.yaml"
-
 // DatabaseFile is the SQLite file name inside the storage directory.
 const DatabaseFile = "data.sqlite"
 
 const (
-	maxFileSize = 1 << 20
-	maxWorkers  = 1024
-	maxDepth    = 8
+	maxTokenLength = 4096
+	maxFileSize    = 1 << 20
+	maxWorkers     = 1024
+	maxDepth       = 8
 )
 
 // Path is one entry of the media or ignore list.
@@ -48,7 +47,7 @@ type Config struct {
 		Listen string // host or IP address, without a port
 		Port   int
 	}
-	Auth struct{ Token string }
+	Auth struct{ TokenDigest [sha256.Size]byte }
 	// Storage is the directory holding DatabaseFile and the scan staging area.
 	Storage       string
 	Media, Ignore []Path
@@ -72,14 +71,17 @@ type Config struct {
 	}
 }
 
-// Source describes where configuration is read from. Tests pass an explicit
+// Source describes where configuration comes from. Tests pass their own
 // working directory and environment so they never touch process-wide state.
 type Source struct {
-	WorkDir string
-	Env     []string
-	// File is the --config value. When non-empty it takes precedence over
-	// CONFIG_FILE and DefaultFile.
-	File string
+	Path      string                      // selected file; empty when only defaults and variables apply
+	Explicit  bool                        // chosen by --config or CONFIG_FILE
+	WorkDir   string                      // base for a relative Path and for paths from defaults or variables
+	LookupEnv func(string) (string, bool) // os.LookupEnv in production; nil means no variables
+	// Environ lists the environment as KEY=value entries (os.Environ() in
+	// production). Only the names are used, to reject VVIDEO_* variables that
+	// match no field; values always come from LookupEnv. Nil skips the check.
+	Environ []string
 }
 
 type fieldKind int
@@ -136,6 +138,21 @@ var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.Lev
 
 var errRequired = errors.New("required setting missing")
 
+// fieldError reports an invalid setting by its dotted field path, such as
+// "server.port: must be an integer between 1 and 65535".
+type fieldError struct {
+	field string
+	err   error
+}
+
+func (e *fieldError) Error() string { return e.field + ": " + e.err.Error() }
+
+func (e *fieldError) Unwrap() error { return e.err }
+
+func invalid(field, message string) error {
+	return &fieldError{field: field, err: errors.New(message)}
+}
+
 // settings holds raw values by dotted field name. bases records the directory
 // that relative paths in each value resolve against; absent means the working
 // directory.
@@ -144,63 +161,47 @@ type settings struct {
 	bases  map[string]string
 }
 
-// Load applies defaults, then the selected YAML file, then VVIDEO_* variables.
-// Errors name the file, field or variable involved but never echo values that
-// may be secret.
+// Load applies defaults, then the selected YAML file, then VVIDEO_* variables,
+// and validates the result. An explicit file must exist; a missing implicit
+// file leaves the defaults and variables, which must then supply every required
+// setting. Errors name the file, field or variable involved but never echo
+// values that may be secret.
 func Load(src Source) (Config, error) {
 	cwd, err := filepath.Abs(src.WorkDir)
 	if err != nil {
-		return Config{}, err
-	}
-	env := environment(src.Env)
-	file, explicit, err := selectFile(cwd, src.File, env)
-	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("resolve working directory: %w", err)
 	}
 	s := settings{values: maps.Clone(defaults), bases: map[string]string{}}
-	loaded, err := s.readFile(file, explicit)
+	file, loaded := src.Path, false
+	if file != "" || src.Explicit {
+		if strings.TrimSpace(file) == "" {
+			return Config{}, errors.New("configuration path is empty")
+		}
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(cwd, file)
+		}
+		if loaded, err = s.readFile(file, src.Explicit); err != nil {
+			return Config{}, err
+		}
+	}
+	if err = s.applyEnvironment(src, cwd); err != nil {
+		return Config{}, err
+	}
+	c, err := s.decode(cwd)
+	if err == nil {
+		err = c.Validate()
+	}
 	if err != nil {
+		if !loaded && errors.Is(err, errRequired) {
+			missing := "no configuration file"
+			if file != "" {
+				missing += " at " + file
+			}
+			return Config{}, fmt.Errorf("%w (%s; pass --config <file> or set VVIDEO_* variables)", err, missing)
+		}
 		return Config{}, err
 	}
-	if err = s.applyEnvironment(env, cwd); err != nil {
-		return Config{}, err
-	}
-	c, err := s.build(cwd)
-	if err != nil && !loaded && errors.Is(err, errRequired) {
-		return Config{}, fmt.Errorf("%w (no configuration file at %s; pass --config <file> or set VVIDEO_* variables)", err, file)
-	}
-	return c, err
-}
-
-func environment(env []string) map[string]string {
-	out := make(map[string]string, len(env))
-	for _, item := range env {
-		if k, v, ok := strings.Cut(item, "="); ok {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-// selectFile returns the absolute configuration path and whether it was chosen
-// explicitly. Only the implicit default may be absent.
-func selectFile(cwd, flagFile string, env map[string]string) (string, bool, error) {
-	path, explicit := flagFile, flagFile != ""
-	if !explicit {
-		var set bool
-		path, set = env["CONFIG_FILE"]
-		if set && strings.TrimSpace(path) == "" {
-			return "", false, errors.New("CONFIG_FILE is set but empty")
-		}
-		explicit = set
-	}
-	if !explicit {
-		path = DefaultFile
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(cwd, path)
-	}
-	return path, explicit, nil
+	return c, nil
 }
 
 func (s *settings) readFile(path string, explicit bool) (bool, error) {
@@ -241,12 +242,19 @@ func (s *settings) readYAML(data []byte, base string) error {
 	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
 		return errors.New("top level must be a mapping")
 	}
-	return s.readMap(doc.Content[0], "", base, 0)
+	return s.readMap(doc.Content[0], mappingLocation{base: base})
 }
 
-func (s *settings) readMap(n *yaml.Node, prefix, base string, depth int) error {
+type mappingLocation struct {
+	prefix, base string
+	depth        int
+}
+
+func (s *settings) readMap(n *yaml.Node, location mappingLocation) error {
+	prefix, base, depth := location.prefix, location.base, location.depth
 	if depth > maxDepth || n.Kind != yaml.MappingNode || n.Tag != "!!map" {
-		return fmt.Errorf("line %d: %s must be a mapping", n.Line, prefix)
+		name := cmp.Or(prefix, "top level")
+		return fmt.Errorf("line %d: %s: must be a mapping", n.Line, name)
 	}
 	seen := map[string]bool{}
 	for i := 0; i < len(n.Content); i += 2 {
@@ -268,7 +276,7 @@ func (s *settings) readMap(n *yaml.Node, prefix, base string, depth int) error {
 		kind, ok := fields[name]
 		if !ok {
 			if prefix == "" && slices.Contains(sections, name) {
-				if err := s.readMap(v, name, base, depth+1); err != nil {
+				if err := s.readMap(v, mappingLocation{prefix: name, base: base, depth: depth + 1}); err != nil {
 					return err
 				}
 				continue
@@ -291,14 +299,14 @@ func scalar(name string, kind fieldKind, v *yaml.Node) (string, error) {
 	switch kind {
 	case pathListField:
 		if v.Kind != yaml.SequenceNode || v.Tag != "!!seq" {
-			return "", fmt.Errorf("line %d: %s must be a list of {path: ...} objects", v.Line, name)
+			return "", fmt.Errorf("line %d: %s: must be a list of {path: ...} objects", v.Line, name)
 		}
 		paths := []Path{}
 		for _, o := range v.Content {
 			if o.Kind != yaml.MappingNode || o.Tag != "!!map" || o.Anchor != "" || len(o.Content) != 2 ||
 				o.Content[0].Value != "path" || o.Content[0].Tag != "!!str" ||
 				o.Content[1].Kind != yaml.ScalarNode || o.Content[1].Tag != "!!str" {
-				return "", fmt.Errorf("line %d: %s entries must be {path: <string>}", o.Line, name)
+				return "", fmt.Errorf("line %d: %s: entries must be {path: <string>}", o.Line, name)
 			}
 			paths = append(paths, Path{Path: o.Content[1].Value})
 		}
@@ -306,32 +314,45 @@ func scalar(name string, kind fieldKind, v *yaml.Node) (string, error) {
 		return string(b), err
 	case intField:
 		if v.Kind != yaml.ScalarNode || v.Tag != "!!int" {
-			return "", fmt.Errorf("line %d: %s must be an integer", v.Line, name)
+			return "", fmt.Errorf("line %d: %s: must be an integer", v.Line, name)
 		}
 	case numberField:
 		if v.Kind != yaml.ScalarNode || (v.Tag != "!!int" && v.Tag != "!!float") {
-			return "", fmt.Errorf("line %d: %s must be a number", v.Line, name)
+			return "", fmt.Errorf("line %d: %s: must be a number", v.Line, name)
 		}
 	default:
 		if v.Kind != yaml.ScalarNode || v.Tag != "!!str" {
-			return "", fmt.Errorf("line %d: %s must be a string", v.Line, name)
+			return "", fmt.Errorf("line %d: %s: must be a string", v.Line, name)
 		}
 	}
 	return v.Value, nil
 }
 
-func (s *settings) applyEnvironment(env map[string]string, cwd string) error {
-	for k, v := range env {
+// envName is the variable that overrides field, e.g. VVIDEO_SCAN__PROBE_PARALLEL.
+func envName(field string) string {
+	return "VVIDEO_" + strings.ToUpper(strings.ReplaceAll(field, ".", "__"))
+}
+
+func (s *settings) applyEnvironment(src Source, cwd string) error {
+	for _, entry := range src.Environ {
+		k, _, _ := strings.Cut(entry, "=")
 		rest, ok := strings.CutPrefix(k, "VVIDEO_")
 		if !ok {
 			continue
 		}
 		name := strings.ToLower(strings.ReplaceAll(rest, "__", "."))
-		if _, ok := fields[name]; !ok {
+		if _, known := fields[name]; !known || k != envName(name) {
 			return fmt.Errorf("unknown environment variable %s", k)
 		}
-		s.values[name] = v
-		s.bases[name] = cwd
+	}
+	if src.LookupEnv == nil {
+		return nil
+	}
+	for name := range fields {
+		if v, ok := src.LookupEnv(envName(name)); ok {
+			s.values[name] = v
+			s.bases[name] = cwd
+		}
 	}
 	return nil
 }
@@ -346,142 +367,192 @@ func (s *settings) base(name, cwd string) string {
 func (s *settings) path(name, cwd string) (string, error) {
 	v := s.values[name]
 	if strings.TrimSpace(v) == "" {
-		return "", fmt.Errorf("%s must not be empty", name)
+		return "", invalid(name, "must not be empty")
 	}
 	if !filepath.IsAbs(v) {
 		v = filepath.Join(s.base(name, cwd), v)
 	}
 	p, err := Canonical(v)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", name, err)
+		return "", &fieldError{field: name, err: err}
 	}
 	return p, nil
 }
 
+// pathList decodes a path list; an unset list without a default is empty.
 func (s *settings) pathList(name, cwd string) ([]Path, error) {
-	raw := s.values[name]
+	raw, ok := s.values[name]
+	if !ok {
+		return nil, nil
+	}
 	var list []Path
 	if !strings.HasPrefix(strings.TrimSpace(raw), "[") || json.Unmarshal([]byte(raw), &list, json.RejectUnknownMembers(true)) != nil {
-		return nil, fmt.Errorf("%s must be a JSON array of {\"path\": ...} objects", name)
+		return nil, invalid(name, `must be a JSON array of {"path": ...} objects`)
 	}
 	for i := range list {
+		field := fmt.Sprintf("%s[%d].path", name, i)
 		p := list[i].Path
 		if strings.TrimSpace(p) == "" {
-			return nil, fmt.Errorf("%s[%d].path must not be empty", name, i)
+			return nil, invalid(field, "must not be empty")
 		}
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(s.base(name, cwd), p)
 		}
 		resolved, err := Canonical(p)
 		if err != nil {
-			return nil, fmt.Errorf("%s[%d].path: %w", name, i, err)
+			return nil, &fieldError{field: field, err: err}
 		}
 		list[i].Path = resolved
 	}
 	return list, nil
 }
 
+var workerRange = fmt.Sprintf("must be an integer between 1 and %d", maxWorkers)
+
+type workerField struct {
+	name string
+	n    *int
+}
+
+// workers lists the worker-count settings of c.
+func workers(c *Config) []workerField {
+	return []workerField{
+		{"scan.parallel", &c.Scan.Parallel},
+		{"scan.probe_parallel", &c.Scan.ProbeParallel},
+		{"cache.parallel", &c.Cache.Parallel},
+		{"cache.threads", &c.Cache.Threads},
+	}
+}
+
 func (s *settings) worker(name string) (int, error) {
 	n, err := strconv.Atoi(s.values[name])
-	if err != nil || n <= 0 || n > maxWorkers {
-		return 0, fmt.Errorf("%s must be an integer from 1 to %d", name, maxWorkers)
+	if err != nil {
+		return 0, invalid(name, workerRange)
 	}
 	return n, nil
 }
 
-func (s *settings) build(cwd string) (Config, error) {
+// decode converts the raw settings into a Config: numbers are parsed and paths
+// made absolute and symlink-resolved. Range and consistency checks are left to
+// Validate.
+func (s *settings) decode(cwd string) (Config, error) {
 	var c Config
 	var err error
 	c.Server.Listen = s.values["server.listen"]
-	if err = validateListen(c.Server.Listen); err != nil {
-		return c, err
+	if c.Server.Port, err = strconv.Atoi(s.values["server.port"]); err != nil {
+		return Config{}, invalid("server.port", "must be an integer between 1 and 65535")
 	}
-	c.Server.Port, err = strconv.Atoi(s.values["server.port"])
-	if err != nil || c.Server.Port < 1 || c.Server.Port > 65535 {
-		return c, errors.New("server.port must be an integer from 1 to 65535")
-	}
-	c.Auth.Token = s.values["auth.token"]
-	if strings.TrimSpace(c.Auth.Token) == "" {
-		return c, fmt.Errorf("auth.token: %w", errRequired)
+	if token := s.values["auth.token"]; strings.TrimSpace(token) != "" {
+		if len(token) > maxTokenLength || strings.ContainsFunc(token, func(r rune) bool { return r < '!' || r > '~' }) {
+			return Config{}, invalid("auth.token", "must contain 1 to 4096 visible ASCII characters without whitespace")
+		}
+		c.Auth.TokenDigest = sha256.Sum256([]byte(token))
 	}
 	if c.Storage, err = s.path("storage", cwd); err != nil {
-		return c, err
-	}
-	if info, err := os.Stat(c.Storage); err == nil && !info.IsDir() {
-		return c, fmt.Errorf("storage %s must be a directory; the database is %s inside it", c.Storage, DatabaseFile)
+		return Config{}, err
 	}
 	if c.Cache.Path, err = s.path("cache.path", cwd); err != nil {
-		return c, err
+		return Config{}, err
 	}
-	if c.Scan.Parallel, err = s.worker("scan.parallel"); err != nil {
-		return c, err
-	}
-	if c.Scan.ProbeParallel, err = s.worker("scan.probe_parallel"); err != nil {
-		return c, err
-	}
-	if c.Cache.Parallel, err = s.worker("cache.parallel"); err != nil {
-		return c, err
-	}
-	if c.Cache.Threads, err = s.worker("cache.threads"); err != nil {
-		return c, err
-	}
-	c.Cache.Percent, err = strconv.ParseFloat(s.values["cache.percent"], 64)
-	if err != nil || math.IsNaN(c.Cache.Percent) || math.IsInf(c.Cache.Percent, 0) || c.Cache.Percent < 0 || c.Cache.Percent >= 100 {
-		return c, errors.New("cache.percent must be a number in [0, 100)")
-	}
-	if c.Cache.MaxSize, err = ParseSize(s.values["cache.max_size"]); err != nil {
-		return c, err
-	}
-	c.Scan.Cron = s.values["scan.cron"]
-	if c.Scan.Cron != "" {
-		if _, err = ParseCron(c.Scan.Cron); err != nil {
-			return c, fmt.Errorf("scan.cron must be a five-field cron expression with an optional CRON_TZ= prefix: %w", err)
+	for _, w := range workers(&c) {
+		if *w.n, err = s.worker(w.name); err != nil {
+			return Config{}, err
 		}
 	}
-	if c.Media, err = s.pathList("media", cwd); err != nil {
-		return c, err
+	if c.Cache.Percent, err = strconv.ParseFloat(s.values["cache.percent"], 64); err != nil {
+		return Config{}, invalid("cache.percent", "must be a number in [0, 100)")
 	}
-	if len(c.Media) == 0 {
-		return c, fmt.Errorf("media: %w (at least one root)", errRequired)
+	if c.Cache.MaxSize, err = ParseSize(s.values["cache.max_size"]); err != nil {
+		return Config{}, err
+	}
+	c.Scan.Cron = s.values["scan.cron"]
+	if c.Media, err = s.pathList("media", cwd); err != nil {
+		return Config{}, err
 	}
 	if c.Ignore, err = s.pathList("ignore", cwd); err != nil {
-		return c, err
+		return Config{}, err
 	}
-	if err = s.buildLog(&c, cwd); err != nil {
-		return c, err
-	}
-	return c, c.validatePaths()
-}
-
-func (s *settings) buildLog(c *Config, cwd string) error {
 	level, ok := logLevels[s.values["log.level"]]
 	if !ok {
-		return errors.New("log.level must be debug, info, warn or error")
+		return Config{}, invalid("log.level", "must be debug, info, warn or error")
 	}
 	c.Log.Level = level
 	c.Log.Format = s.values["log.format"]
-	if c.Log.Format != "json" && c.Log.Format != "text" {
-		return errors.New("log.format must be json or text")
-	}
 	c.Log.Output = s.values["log.output"]
+	// The file is resolved only when it is used; otherwise Validate rejects it.
+	c.Log.File = s.values["log.file"]
+	if c.Log.Output == "file" && strings.TrimSpace(c.Log.File) != "" {
+		if c.Log.File, err = s.path("log.file", cwd); err != nil {
+			return Config{}, err
+		}
+	}
+	return c, nil
+}
+
+// Validate reports the first setting that is out of range, missing or in
+// conflict with another. It does not modify c.
+func (c Config) Validate() error {
+	if err := validateListen(c.Server.Listen); err != nil {
+		return err
+	}
+	if c.Server.Port < 1 || c.Server.Port > 65535 {
+		return invalid("server.port", "must be an integer between 1 and 65535")
+	}
+	if c.Auth.TokenDigest == [sha256.Size]byte{} {
+		return &fieldError{field: "auth.token", err: errRequired}
+	}
+	if !filepath.IsAbs(c.Storage) {
+		return invalid("storage", "must be an absolute path")
+	}
+	if !filepath.IsAbs(c.Cache.Path) {
+		return invalid("cache.path", "must be an absolute path")
+	}
+	if info, err := os.Stat(c.Storage); err == nil && !info.IsDir() {
+		return &fieldError{field: "storage", err: fmt.Errorf("%s must be a directory; the database is %s inside it", c.Storage, DatabaseFile)}
+	}
+	for _, w := range workers(&c) {
+		if *w.n <= 0 || *w.n > maxWorkers {
+			return invalid(w.name, workerRange)
+		}
+	}
+	if p := c.Cache.Percent; math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p >= 100 {
+		return invalid("cache.percent", "must be a number in [0, 100)")
+	}
+	if c.Cache.MaxSize < 1 {
+		return invalid("cache.max_size", "must be positive")
+	}
+	if c.Scan.Cron != "" {
+		if _, err := ParseCron(c.Scan.Cron); err != nil {
+			return &fieldError{field: "scan.cron", err: fmt.Errorf("must be a five-field cron expression with an optional CRON_TZ= prefix: %w", err)}
+		}
+	}
+	if len(c.Media) == 0 {
+		return &fieldError{field: "media", err: fmt.Errorf("%w (at least one root)", errRequired)}
+	}
+	if err := c.validateLog(); err != nil {
+		return err
+	}
+	return c.validatePaths()
+}
+
+func (c Config) validateLog() error {
+	if c.Log.Format != "json" && c.Log.Format != "text" {
+		return invalid("log.format", "must be json or text")
+	}
 	switch c.Log.Output {
 	case "stdout", "stderr":
-		if s.values["log.file"] != "" {
-			return fmt.Errorf("log.file is only used when log.output is file, not %s", c.Log.Output)
+		if c.Log.File != "" {
+			return invalid("log.file", "only used when log.output is file, not "+c.Log.Output)
 		}
 	case "file":
-		if strings.TrimSpace(s.values["log.file"]) == "" {
-			return errors.New("log.file must be set when log.output is file")
-		}
-		var err error
-		if c.Log.File, err = s.path("log.file", cwd); err != nil {
-			return err
+		if strings.TrimSpace(c.Log.File) == "" {
+			return invalid("log.file", "must be set when log.output is file")
 		}
 		if info, err := os.Stat(c.Log.File); err == nil && info.IsDir() {
-			return fmt.Errorf("log.file %s is a directory", c.Log.File)
+			return &fieldError{field: "log.file", err: fmt.Errorf("%s is a directory", c.Log.File)}
 		}
 	default:
-		return errors.New("log.output must be stdout, stderr or file")
+		return invalid("log.output", "must be stdout, stderr or file")
 	}
 	return nil
 }
@@ -489,14 +560,14 @@ func (s *settings) buildLog(c *Config, cwd string) error {
 // validateListen accepts a host name or IP address; the port is server.port.
 func validateListen(listen string) error {
 	if strings.TrimSpace(listen) != listen || listen == "" {
-		return errors.New("server.listen must be a nonempty host or IP address")
+		return invalid("server.listen", "must be a nonempty host or IP address")
 	}
 	// A colon can only belong to an IPv6 address; anything else carries a port.
 	if !strings.Contains(listen, ":") {
 		return nil
 	}
 	if _, err := netip.ParseAddr(listen); err != nil {
-		return fmt.Errorf("server.listen %q must be a host or IP address without a port; set the port in server.port", listen)
+		return &fieldError{field: "server.listen", err: fmt.Errorf("%q must be a host or IP address without a port; set the port in server.port", listen)}
 	}
 	return nil
 }
@@ -514,30 +585,31 @@ func (c Config) Database() string {
 // validatePaths keeps writable state out of the read-only media trees.
 func (c Config) validatePaths() error {
 	if Contains(c.Cache.Path, c.Storage) || Contains(c.Storage, c.Cache.Path) {
-		return fmt.Errorf("storage %s and cache.path %s must not contain each other", c.Storage, c.Cache.Path)
+		return &fieldError{field: "cache.path", err: fmt.Errorf("%s and storage %s must not contain each other", c.Cache.Path, c.Storage)}
 	}
 	writable := map[string]string{"storage": c.Storage, "cache.path": c.Cache.Path}
 	if c.Log.File != "" {
 		writable["log.file"] = c.Log.File
 	}
 	for i, root := range c.Media {
+		field := fmt.Sprintf("media[%d].path", i)
 		for _, other := range c.Media[:i] {
 			if Contains(root.Path, other.Path) || Contains(other.Path, root.Path) {
-				return fmt.Errorf("media roots %s and %s overlap", other.Path, root.Path)
+				return &fieldError{field: field, err: fmt.Errorf("%s overlaps media root %s", root.Path, other.Path)}
 			}
 		}
 		for name, path := range writable {
 			if Contains(root.Path, path) || Contains(path, root.Path) {
-				return fmt.Errorf("%s %s overlaps media root %s; writable data must stay outside media", name, path, root.Path)
+				return &fieldError{field: name, err: fmt.Errorf("%s overlaps media root %s; writable data must stay outside media", path, root.Path)}
 			}
 		}
 	}
-	for _, ignored := range c.Ignore {
+	for i, ignored := range c.Ignore {
 		inside := slices.ContainsFunc(c.Media, func(root Path) bool {
 			return ignored.Path != root.Path && Contains(root.Path, ignored.Path)
 		})
 		if !inside {
-			return fmt.Errorf("ignore path %s must be strictly inside a media root", ignored.Path)
+			return &fieldError{field: fmt.Sprintf("ignore[%d].path", i), err: fmt.Errorf("%s must be strictly inside a media root", ignored.Path)}
 		}
 	}
 	return nil
@@ -563,12 +635,12 @@ var units = map[string]float64{"MB": 1e6, "GB": 1e9, "MiB": 1 << 20, "GiB": 1 <<
 func ParseSize(s string) (int64, error) {
 	m := capacity.FindStringSubmatch(s)
 	if m == nil {
-		return 0, fmt.Errorf("cache.max_size %q must be a number followed by MB, GB, MiB or GiB", s)
+		return 0, &fieldError{field: "cache.max_size", err: fmt.Errorf("%q must be a number followed by MB, GB, MiB or GiB", s)}
 	}
 	n, err := strconv.ParseFloat(m[1], 64)
 	v := n * units[m[2]]
 	if err != nil || math.IsInf(v, 0) || v < 1 || v >= math.MaxInt64 {
-		return 0, fmt.Errorf("cache.max_size %q is outside the supported positive range", s)
+		return 0, &fieldError{field: "cache.max_size", err: fmt.Errorf("%q is outside the supported positive range", s)}
 	}
 	return int64(v), nil
 }

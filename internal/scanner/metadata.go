@@ -14,7 +14,7 @@ type Attributes struct {
 	Directory               bool
 }
 
-// Metrics are cumulative since process start; /v1/status exposes them.
+// Metrics are cumulative since process start; /api/status exposes them.
 type Metrics struct {
 	// Pages and Files count listing pages and entries read, across both passes.
 	Pages, Files atomic.Int64
@@ -51,10 +51,17 @@ func (m *Metrics) enter() {
 	}
 }
 
-// Collect stats entries with at most parallel workers and returns their
+type collectOptions struct {
+	parallel int
+	stat     func(string) (Attributes, error)
+	metrics  *Metrics
+}
+
+// collectAttributes stats entries with at most parallel workers and returns their
 // attributes in input order. The first error cancels the remaining work.
-// Collect joins every dispatched worker before returning, including on failure.
-func Collect(ctx context.Context, entries []fs.DirEntry, parallel int, stat func(string) (Attributes, error), metrics *Metrics) ([]Attributes, error) {
+// collectAttributes joins every dispatched worker before returning, including on failure.
+func collectAttributes(ctx context.Context, entries []fs.DirEntry, options collectOptions) ([]Attributes, error) {
+	parallel, stat, metrics := options.parallel, options.stat, options.metrics
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	out := make([]Attributes, len(entries))

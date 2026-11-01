@@ -1,4 +1,4 @@
-// Command vvideo is the VVideo media server.
+// Command vvideo serves an existing media library to the VVideo Android app.
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,7 +37,7 @@ func main() {
 }
 
 // run reports usage and startup errors as plain text on stderr; once the
-// configuration loads, the service logs through its configured logger.
+// logger is ready, failures are logged.
 func run(args []string, stdout, stderr io.Writer) int {
 	o, err := parseArgs(args)
 	if err != nil {
@@ -52,97 +53,113 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "vvideo", build)
 		return exitOK
 	}
-	c, err := loadConfig(o.configFile)
+	path, explicit, err := o.configPath(os.LookupEnv)
 	if err != nil {
-		fmt.Fprintf(stderr, "vvideo: %v\n", err)
+		fmt.Fprintf(stderr, "vvideo: config: %v\n", err)
 		return exitFailure
 	}
-	logger, closeLog, err := newLogger(c, stdout, stderr)
+	workDir, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "vvideo: log.file: %v\n", err)
+		fmt.Fprintf(stderr, "vvideo: config: %v\n", err)
 		return exitFailure
 	}
-	defer closeLog()
-	slog.SetDefault(logger)
-	if err := serve(c, build); err != nil {
-		slog.Error("service_failed", "error", err.Error())
+	cfg, err := config.Load(config.Source{
+		Path:      path,
+		Explicit:  explicit,
+		WorkDir:   workDir,
+		LookupEnv: os.LookupEnv,
+		Environ:   os.Environ(),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "vvideo: config: %v\n", err)
 		return exitFailure
 	}
-	slog.Info("service_stopped")
+	logger, closeLog, err := newLogger(cfg, stdout, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "vvideo: log: %v\n", err)
+		return exitFailure
+	}
+	defer func() {
+		if err := closeLog(); err != nil {
+			fmt.Fprintf(stderr, "vvideo: log: %v\n", err)
+		}
+	}()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	context.AfterFunc(ctx, stop) // a second signal terminates the process
+	logger.Info("service_starting", "version", build.String())
+	if err := serve(ctx, cfg, logger, build.String()); err != nil {
+		logger.Error("service_failed", "error", err)
+		return exitFailure
+	}
+	logger.Info("service_stopped")
 	return exitOK
 }
 
-func loadConfig(configFile string) (config.Config, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return config.Config{}, err
-	}
-	c, err := config.Load(config.Source{WorkDir: cwd, Env: os.Environ(), File: configFile})
-	if err != nil {
-		return c, fmt.Errorf("config: %w", err)
-	}
-	return c, nil
-}
-
-func serve(c config.Config, build buildInfo) error {
-	slog.Info("service_starting", "version", build.String())
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	a, err := app.New(ctx, c)
+// serve runs the service until ctx ends or the HTTP server fails, then shuts
+// it down.
+func serve(ctx context.Context, c config.Config, logger *slog.Logger, version string) error {
+	// Cancelling stops the background work, also when the HTTP server fails.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a, err := app.New(ctx, c, logger)
 	if err != nil {
 		return err
 	}
+	a.Version = version
 	// Bind before starting background work so a busy port fails fast.
 	listener, err := net.Listen("tcp", c.Address())
 	if err != nil {
-		a.Close()
-		return err
+		return errors.Join(err, a.Shutdown(ctx))
 	}
 	if err = a.Start(ctx); err != nil {
-		listener.Close()
-		stop()
-		a.Close()
-		return err
+		listener.Close() // the start error is the one to report
+		cancel()
+		stopCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer stop()
+		return errors.Join(err, a.Shutdown(stopCtx))
 	}
 	server := &http.Server{
 		Handler:           a.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		// Media streams extend their own write deadline after every write, so
 		// this bounds stalled API responses without limiting long playback.
+		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   60 * time.Second,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 16 << 10,
+		ErrorLog:       slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
-	slog.Info("service_listening", "listen", listener.Addr().String())
+	var workers sync.WaitGroup
+	workers.Go(func() { served <- server.Serve(listener) })
+	logger.Info("service_listening", "listen", listener.Addr().String())
 	select {
 	case err = <-served:
 	case <-ctx.Done():
-		slog.Info("service_stopping")
+		logger.Info("service_stopping")
 	}
-	stop()
-	return errors.Join(err, shutdown(server, a))
+	cancel()
+	stopErr := shutdown(ctx, server, a, logger)
+	workers.Wait()
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	return errors.Join(err, stopErr)
 }
 
 // shutdown drains HTTP requests within httpDrain and background work within
 // shutdownTimeout.
-func shutdown(server *http.Server, a *app.App) error {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+func shutdown(ctx context.Context, server *http.Server, a *app.App, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	drain, stopDrain := context.WithTimeout(ctx, httpDrain)
 	defer stopDrain()
 	if server.Shutdown(drain) != nil {
-		slog.Warn("http_drain_incomplete", "outcome", "remaining connections closed")
-		server.Close()
+		logger.Warn("http_drain_incomplete", "outcome", "remaining connections closed")
+		if err := server.Close(); err != nil {
+			logger.Warn("http_close_failed", "error", err)
+		}
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- a.Close() }()
-	select {
-	case err := <-closed:
-		return err
-	case <-ctx.Done():
-		server.Close()
-		return fmt.Errorf("graceful shutdown exceeded %s", shutdownTimeout)
-	}
+	return a.Shutdown(ctx)
 }

@@ -33,13 +33,14 @@ const maxWalkDepth = 1024
 type Scanner struct {
 	Config  config.Config
 	Index   *library.Index
+	Logger  *slog.Logger // nil discards
 	Metrics Metrics
 	running atomic.Bool
-	// Now, Fault and Stat are test seams; nil selects the real clock, no
+	// now, onStep and stat are test seams; nil selects the real clock, no
 	// faults and mediafs.StatAt.
-	Now   func() time.Time
-	Fault func(string) error
-	Stat  func(*os.File, string) (fs.FileInfo, error)
+	now    func() time.Time
+	onStep func(string) error
+	stat   func(*os.File, string) (fs.FileInfo, error)
 }
 
 // Run scans every active library once. force treats every file as changed,
@@ -50,17 +51,21 @@ func (s *Scanner) Run(ctx context.Context, force bool) error {
 		return nil
 	}
 	defer s.running.Store(false)
-	if s.Now == nil {
-		s.Now = time.Now
+	if s.now == nil {
+		s.now = time.Now
 	}
-	if s.Stat == nil {
-		s.Stat = mediafs.StatAt
+	if s.stat == nil {
+		s.stat = mediafs.StatAt
 	}
 	stage, err := newStage(ctx, s.Config.Storage)
 	if err != nil {
 		return err
 	}
-	defer stage.Close()
+	defer func() {
+		if err := stage.Close(); err != nil {
+			s.logger().Warn("scan_stage_cleanup_failed", "error", err)
+		}
+	}()
 	libs, err := s.Index.Libraries(ctx)
 	if err != nil {
 		return err
@@ -77,7 +82,7 @@ func (s *Scanner) Run(ctx context.Context, force bool) error {
 		}
 	}
 	run := s.Metrics.snapshot().since(before)
-	slog.Info("scan_complete", "libraries", len(libs), "failed_libraries", len(failures),
+	s.logger().Info("scan_complete", "libraries", len(libs), "failed_libraries", len(failures),
 		"directories", run.directories, "unchanged_directories", run.unchanged,
 		"observed_entries", run.observed, "changed_entries", run.changed,
 		"duration_ms", time.Since(started).Milliseconds())
@@ -93,7 +98,7 @@ func (s *Scanner) scanRoot(ctx context.Context, st *stage, l library.Library, fo
 	// finalization. Resume its idempotent updates before starting another round.
 	var prior, applied int64
 	var healthyBefore bool
-	if err := s.Index.Store.Reader.QueryRowContext(ctx, "SELECT round,applied_round,healthy FROM libraries WHERE id=?", l.ID).Scan(&prior, &applied, &healthyBefore); err != nil {
+	if err := s.Index.Store.QueryRow(ctx, "SELECT round,applied_round,healthy FROM libraries WHERE id=?", l.ID).Scan(&prior, &applied, &healthyBefore); err != nil {
 		return err
 	}
 	if healthyBefore && prior > applied {
@@ -157,7 +162,7 @@ func (s *Scanner) scanRoot(ctx context.Context, st *stage, l library.Library, fo
 		f := &stack[len(stack)-1]
 		if !f.visited {
 			f.visited = true
-			if err = s.scanDirectory(ctx, st, root, f.dir, round, force); err != nil {
+			if err = s.scanDirectory(ctx, directoryScan{stage: st, root: root, directory: f.dir, round: round, force: force}); err != nil {
 				healthy = false
 				stack = stack[:len(stack)-1]
 				continue
@@ -177,7 +182,7 @@ func (s *Scanner) scanRoot(ctx context.Context, st *stage, l library.Library, fo
 			healthy = false
 			continue
 		}
-		child, err := s.Index.Child(ctx, f.dir, rel, name, id, round)
+		child, err := s.Index.Child(ctx, library.ChildObservation{Parent: f.dir, Relative: rel, Name: name, Identity: id, Round: round})
 		if err != nil {
 			healthy = false
 			continue
@@ -218,11 +223,29 @@ func Kind(name string) string {
 	return ""
 }
 
+type directoryScan struct {
+	stage     *stage
+	root      *mediafs.Root
+	directory library.Directory
+	round     int64
+	force     bool
+}
+
+type observationPass struct {
+	stage     *stage
+	root      *mediafs.Root
+	directory library.Directory
+	file      *os.File
+	pass      int
+	original  fs.FileInfo
+}
+
 // scanDirectory observes directory d twice, publishes a new generation when
 // its contents changed, and queues its subdirectories for the walk. It returns
 // an error, keeping the previous index, when the directory cannot be observed
 // consistently.
-func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Root, d library.Directory, round int64, force bool) error {
+func (s *Scanner) scanDirectory(ctx context.Context, scan directoryScan) error {
+	st, root, d, round, force := scan.stage, scan.root, scan.directory, scan.round, scan.force
 	cleanupStarted := time.Now()
 	if err := s.Index.Cleanup(ctx, d.ID); err != nil {
 		return err
@@ -250,13 +273,13 @@ func (s *Scanner) scanDirectory(ctx context.Context, st *stage, root *mediafs.Ro
 		comparedAt := time.Now()
 		ignored := func(name string) bool { return s.Config.IsIgnored(filepath.Join(root.Path, d.Relative, name)) }
 		resolve := func(name string) (string, error) { return s.Index.ResolveID(ctx, d.ID, name) }
-		changed, err := st.merge(ctx, d, ignored, force, resolve)
+		changed, err := st.merge(ctx, d, mergeOptions{ignored: ignored, force: force, resolve: resolve})
 		if err != nil {
 			return err
 		}
 		s.Metrics.CompareNS.Add(time.Since(comparedAt).Nanoseconds())
 		if changed > 0 || d.Generation == 0 {
-			if err = s.publish(ctx, st, root, d, original, round); err != nil {
+			if err = s.publish(ctx, scan, original); err != nil {
 				return err
 			}
 			s.Metrics.Changed.Add(changed)
@@ -311,7 +334,7 @@ func (s *Scanner) observeTwice(ctx context.Context, st *stage, root *mediafs.Roo
 			file.Close()
 			return nil, false, errors.New("directory replaced")
 		}
-		err = s.observe(ctx, st, root, d, file, pass, original)
+		err = s.observe(ctx, observationPass{stage: st, root: root, directory: d, file: file, pass: pass, original: original})
 		file.Close()
 		if err != nil {
 			return nil, false, err
@@ -327,7 +350,8 @@ func (s *Scanner) observeTwice(ctx context.Context, st *stage, root *mediafs.Roo
 
 // publish writes the merged entries as a new generation of d and makes it
 // visible, unless the directory changed on disk or another publication won.
-func (s *Scanner) publish(ctx context.Context, st *stage, root *mediafs.Root, d library.Directory, original fs.FileInfo, round int64) error {
+func (s *Scanner) publish(ctx context.Context, scan directoryScan, original fs.FileInfo) error {
+	st, root, d, round := scan.stage, scan.root, scan.directory, scan.round
 	start := time.Now()
 	gen, err := s.Index.BeginBuild(ctx, d)
 	if err != nil {
@@ -345,7 +369,7 @@ func (s *Scanner) publish(ctx context.Context, st *stage, root *mediafs.Root, d 
 		if err = s.fault("build"); err != nil {
 			return err
 		}
-		if err = s.Index.AddBatch(ctx, d, gen, batch, s.Now()); err != nil {
+		if err = s.Index.AddBatch(ctx, library.GenerationBatch{Directory: d, Generation: gen, Entries: batch, ObservedAt: s.now()}); err != nil {
 			return err
 		}
 		after = batch[len(batch)-1].ID
@@ -356,7 +380,7 @@ func (s *Scanner) publish(ctx context.Context, st *stage, root *mediafs.Root, d 
 	}
 	start = time.Now()
 	validate := func() error { return root.ValidateDirectory(d.Relative, original) }
-	if err = s.Index.Publish(ctx, d, gen, mediafs.Fingerprint(original), round, validate); err != nil {
+	if err = s.Index.Publish(ctx, library.Publication{Directory: d, Generation: gen, Identity: mediafs.Fingerprint(original), Round: round, Validate: validate}); err != nil {
 		return err
 	}
 	s.Metrics.PublishNS.Add(time.Since(start).Nanoseconds())
@@ -379,15 +403,16 @@ func (s *Scanner) markUnchanged(ctx context.Context, d library.Directory, round 
 
 // fault runs the test fault hook for step, if one is set.
 func (s *Scanner) fault(step string) error {
-	if s.Fault == nil {
+	if s.onStep == nil {
 		return nil
 	}
-	return s.Fault(step)
+	return s.onStep(step)
 }
 
 // observe reads one pass of directory file in pages of storage.BatchSize
 // entries, stats the indexable ones with bounded parallelism and stages them.
-func (s *Scanner) observe(ctx context.Context, st *stage, root *mediafs.Root, d library.Directory, file *os.File, pass int, original fs.FileInfo) error {
+func (s *Scanner) observe(ctx context.Context, observation observationPass) error {
+	st, root, d, file, pass, original := observation.stage, observation.root, observation.directory, observation.file, observation.pass, observation.original
 	for {
 		if err := root.ValidateDirectory(d.Relative, original); err != nil {
 			return err
@@ -406,8 +431,8 @@ func (s *Scanner) observe(ctx context.Context, st *stage, root *mediafs.Root, d 
 			selected = append(selected, e)
 		}
 		start = time.Now()
-		attrs, err := Collect(ctx, selected, s.Config.Scan.Parallel, func(name string) (Attributes, error) {
-			info, err := s.Stat(file, name)
+		attrs, err := collectAttributes(ctx, selected, collectOptions{parallel: s.Config.Scan.Parallel, stat: func(name string) (Attributes, error) {
+			info, err := s.stat(file, name)
 			if err != nil {
 				return Attributes{}, err
 			}
@@ -415,7 +440,7 @@ func (s *Scanner) observe(ctx context.Context, st *stage, root *mediafs.Root, d 
 				return Attributes{}, errors.New("unsupported special entry")
 			}
 			return Attributes{Name: name, Kind: Kind(name), Fingerprint: mediafs.Fingerprint(info), Size: info.Size(), Mtime: info.ModTime().UnixNano(), Directory: info.IsDir()}, nil
-		}, &s.Metrics)
+		}, metrics: &s.Metrics})
 		s.Metrics.StatNS.Add(time.Since(start).Nanoseconds())
 		if err != nil {
 			return err
@@ -449,7 +474,7 @@ type missingCandidate struct {
 // round as applied. It is idempotent, so an interrupted run resumes safely.
 func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round int64) error {
 	var epoch int64
-	if err := s.Index.Store.Reader.QueryRowContext(ctx, "SELECT epoch FROM libraries WHERE id=?", l.ID).Scan(&epoch); err != nil {
+	if err := s.Index.Store.QueryRow(ctx, "SELECT epoch FROM libraries WHERE id=?", l.ID).Scan(&epoch); err != nil {
 		return err
 	}
 	var after int64
@@ -463,7 +488,7 @@ func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round 
 		}
 		for _, x := range batch {
 			after = x.id
-			if err = s.markDirectoryMissing(ctx, l, x, round, epoch); err != nil {
+			if err = s.markDirectoryMissing(ctx, l, x, missingRound{round: round, epoch: epoch}); err != nil {
 				return err
 			}
 			if err = s.markEntriesMissing(ctx, x.id, round, epoch); err != nil {
@@ -479,7 +504,7 @@ func (s *Scanner) finalizeMissing(ctx context.Context, l library.Library, round 
 
 // missingCandidates pages the directories of a library by ID.
 func (s *Scanner) missingCandidates(ctx context.Context, libraryID string, after int64) ([]missingCandidate, error) {
-	rows, err := s.Index.Store.Reader.QueryContext(ctx, "SELECT id,relative,observed_round,state,missing_streak FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT ?", libraryID, after, storage.BatchSize)
+	rows, err := s.Index.Store.Query(ctx, "SELECT id,relative,observed_round,state,missing_streak FROM directories WHERE library_id=? AND id>? ORDER BY id LIMIT ?", libraryID, after, storage.BatchSize)
 	return storage.Collect(rows, err, func(rows *sql.Rows) (missingCandidate, error) {
 		var x missingCandidate
 		return x, rows.Scan(&x.id, &x.rel, &x.seen, &x.state, &x.streak)
@@ -488,7 +513,12 @@ func (s *Scanner) missingCandidates(ctx context.Context, libraryID string, after
 
 // markDirectoryMissing marks directory x ignored when configuration now
 // excludes it, or advances its missing streak when round did not observe it.
-func (s *Scanner) markDirectoryMissing(ctx context.Context, l library.Library, x missingCandidate, round, epoch int64) error {
+type missingRound struct {
+	round, epoch int64
+}
+
+func (s *Scanner) markDirectoryMissing(ctx context.Context, l library.Library, x missingCandidate, scan missingRound) error {
+	round, epoch := scan.round, scan.epoch
 	ignore := s.Config.IsIgnored(filepath.Join(l.Root, x.rel))
 	// Only this scan writes these columns, so the reader's view decides
 	// whether a commit is needed; observed directories cost none.
@@ -565,7 +595,7 @@ func (s *Scanner) markEntriesMissing(ctx context.Context, directory, round, epoc
 // absentEntries pages the IDs of the directory's visible published entries
 // that the latest observation did not find.
 func (s *Scanner) absentEntries(ctx context.Context, directory int64, after string) ([]string, error) {
-	rows, err := s.Index.Store.Reader.QueryContext(ctx, `SELECT e.media_id FROM entries e
+	rows, err := s.Index.Store.Query(ctx, `SELECT e.media_id FROM entries e
 		JOIN directories d ON d.id=e.directory_id
 		WHERE e.directory_id=? AND e.generation=d.generation AND e.present=0 AND e.state='visible' AND e.media_id>?
 		ORDER BY e.media_id LIMIT ?`, directory, after, storage.BatchSize)
@@ -577,3 +607,10 @@ func (s *Scanner) absentEntries(ctx context.Context, directory int64, after stri
 
 // Running reports whether a scan is in progress.
 func (s *Scanner) Running() bool { return s.running.Load() }
+
+func (s *Scanner) logger() *slog.Logger {
+	if s.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return s.Logger
+}

@@ -1,4 +1,6 @@
 // Package app wires storage, scanning, background jobs and the HTTP API.
+// Construct with New, bind the HTTP listener, then call Start. Drain HTTP before
+// Shutdown, which cancels and joins background work before closing storage.
 package app
 
 import (
@@ -23,7 +25,6 @@ import (
 	"vvideo/internal/probe"
 	"vvideo/internal/scanner"
 	"vvideo/internal/storage"
-	"vvideo/internal/streaming"
 	"vvideo/internal/thumbnail"
 )
 
@@ -41,8 +42,11 @@ const (
 )
 
 // App is the running service: the index, its background workers and the HTTP
-// API that serves it.
+// API that serves it. lifecycle guards startup and shutdown; the counters are
+// atomic and background workers are joined through wg before storage closes.
 type App struct {
+	logger     *slog.Logger
+	Version    string
 	Config     config.Config
 	Store      *storage.Store
 	Index      *library.Index
@@ -50,21 +54,31 @@ type App struct {
 	Queue      *jobs.Queue
 	Thumbnails *thumbnail.Engine
 	Priority   *jobs.Priority
-	Stream     *streaming.Handler
+	Stream     *StreamHandler
 
-	scanRequests         chan bool // value is the force flag
+	scanRequests         chan struct{}
+	forceScan            atomic.Bool
 	wg                   sync.WaitGroup
 	cron                 *cron.Cron
 	probeNS, thumbnailNS atomic.Int64
+	lifecycle            sync.Mutex
+	started, stopping    bool
+	cancel               context.CancelFunc
+	cleanup              sync.WaitGroup
+	stopped              chan struct{}
+	closeErr             error // published by closing stopped
 }
 
 // New checks external tools, opens the database and recovers interrupted work.
 // It does not start background goroutines; see Start.
-func New(ctx context.Context, c config.Config) (*App, error) {
+func New(ctx context.Context, c config.Config, logger *slog.Logger) (*App, error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	if err := checkMediaTools(ctx); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(c.Cache.Path, 0700); err != nil {
+	if err := os.MkdirAll(c.Cache.Path, 0o700); err != nil {
 		return nil, fmt.Errorf("thumbnail cache: %w", err)
 	}
 	s, err := storage.Open(ctx, c.Database())
@@ -80,18 +94,22 @@ func New(ctx context.Context, c config.Config) (*App, error) {
 		s.Close()
 		return nil, fmt.Errorf("recover interrupted index work: %w", err)
 	}
-	priority := jobs.NewPriority()
-	queue := &jobs.Queue{Store: s, Index: index, Now: time.Now}
+	priority := jobs.NewPriority(time.Now)
+	queue := jobs.NewQueue(index, logger, time.Now)
+	thumbnails := thumbnail.New(c, queue)
+	thumbnails.Logger = logger
 	return &App{
+		logger:       logger,
 		Config:       c,
 		Store:        s,
 		Index:        index,
 		Priority:     priority,
 		Queue:        queue,
-		Thumbnails:   thumbnail.New(c, queue),
-		Scanner:      &scanner.Scanner{Config: c, Index: index},
-		Stream:       streaming.New(index, priority),
-		scanRequests: make(chan bool, 1),
+		Thumbnails:   thumbnails,
+		Scanner:      &scanner.Scanner{Config: c, Index: index, Logger: logger},
+		Stream:       NewStreamHandler(index, priority),
+		scanRequests: make(chan struct{}, 1),
+		stopped:      make(chan struct{}),
 	}, nil
 }
 
@@ -112,15 +130,23 @@ func checkMediaTools(ctx context.Context) error {
 
 // Trigger requests a scan. Requests made while one is already pending merge.
 func (a *App) Trigger(force bool) {
+	if force {
+		a.forceScan.Store(true)
+	}
 	select {
-	case a.scanRequests <- force:
+	case a.scanRequests <- struct{}{}:
 	default:
 	}
 }
 
 // Start launches background work and schedules an initial scan. Everything
-// stops when ctx is cancelled; Close waits for it.
+// stops when ctx is cancelled; Shutdown cancels and waits for it.
 func (a *App) Start(ctx context.Context) error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	if a.started || a.stopping {
+		return errors.New("application already started or stopping")
+	}
 	if a.Config.Scan.Cron != "" {
 		schedule, err := config.ParseCron(a.Config.Scan.Cron)
 		if err != nil {
@@ -135,25 +161,27 @@ func (a *App) Start(ctx context.Context) error {
 		}))
 		zone, _ := time.Now().Zone()
 		// Without CRON_TZ= the expression uses the process's local time zone.
-		slog.Info("scan_scheduled", "cron", a.Config.Scan.Cron, "local_zone", zone, "next", schedule.Next(time.Now()).Format(time.RFC3339))
+		a.logger.Info("scan_scheduled", "cron", a.Config.Scan.Cron, "local_zone", zone, "next", schedule.Next(time.Now()).Format(time.RFC3339))
 	}
+	ctx, a.cancel = context.WithCancel(ctx)
+	a.started = true
 	a.wg.Go(func() { a.scanLoop(ctx) })
 	a.Trigger(false)
 	a.wg.Go(func() {
 		if err := a.Thumbnails.Reconcile(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("thumbnail_reconcile_failed", "error", err.Error())
+			a.logger.Warn("thumbnail_reconcile_failed", "error", err)
 		}
 	})
 	a.wg.Go(func() { a.groupLoop(ctx) })
 	a.wg.Go(func() { a.sortLoop(ctx) })
-	prober := &probe.Worker{Queue: a.Queue, Parameters: a.Thumbnails.Parameters, Now: time.Now, Rescan: func() { a.Trigger(false) }}
+	prober := &probe.Worker{Queue: a.Queue, Parameters: a.Thumbnails.Parameters, Rescan: func() { a.Trigger(false) }}
 	for range a.Config.Scan.ProbeParallel {
 		a.wg.Go(func() { a.Queue.Worker(ctx, "probe", timed(&a.probeNS, prober.Run)) })
 	}
 	for range a.Config.Cache.Parallel {
 		a.wg.Go(func() { a.Queue.Worker(ctx, "thumbnail", timed(&a.thumbnailNS, a.Thumbnails.Run)) })
 	}
-	progress := &thumbnail.Progress{Engine: a.Thumbnails}
+	progress := &thumbnail.Progress{Engine: a.Thumbnails, Logger: a.logger}
 	a.wg.Go(func() { progress.Run(ctx, thumbnailProgressInterval) })
 	if a.cron != nil {
 		a.cron.Start()
@@ -161,14 +189,33 @@ func (a *App) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close waits for background work to stop and closes the database. Cancel the
-// context passed to Start first.
-func (a *App) Close() error {
-	if a.cron != nil {
-		<-a.cron.Stop().Done()
+// Shutdown cancels background work and closes storage once workers have exited.
+// A deadline bounds the caller's wait; cleanup continues without closing storage
+// underneath an active worker. Repeated calls wait for the same cleanup result.
+func (a *App) Shutdown(ctx context.Context) error {
+	a.lifecycle.Lock()
+	if !a.stopping {
+		a.stopping = true
+		if a.cancel != nil {
+			a.cancel()
+		}
+		a.cleanup.Go(func() {
+			if a.cron != nil {
+				<-a.cron.Stop().Done()
+			}
+			a.wg.Wait()
+			a.closeErr = a.Store.Close()
+			close(a.stopped)
+		})
 	}
-	a.wg.Wait()
-	return a.Store.Close()
+	a.lifecycle.Unlock()
+	select {
+	case <-a.stopped:
+		a.cleanup.Wait()
+		return a.closeErr
+	case <-ctx.Done():
+		return fmt.Errorf("wait for application shutdown: %w", ctx.Err())
+	}
 }
 
 func (a *App) scanLoop(ctx context.Context) {
@@ -176,9 +223,9 @@ func (a *App) scanLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case force := <-a.scanRequests:
-			if err := a.Scanner.Run(ctx, force); err != nil && ctx.Err() == nil {
-				slog.Warn("scan_failed", "error", err.Error(), "outcome", "previous index retained")
+		case <-a.scanRequests:
+			if err := a.Scanner.Run(ctx, a.forceScan.Swap(false)); err != nil && ctx.Err() == nil {
+				a.logger.Warn("scan_failed", "error", err, "outcome", "previous index retained")
 			}
 		}
 	}
@@ -198,7 +245,7 @@ func (a *App) sortLoop(ctx context.Context) {
 			continue
 		}
 		if _, err := a.Index.PublishProbedTimes(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("sort_publish_failed", "error", err.Error())
+			a.logger.Warn("sort_publish_failed", "error", err)
 		}
 	}
 }
@@ -225,7 +272,7 @@ func (a *App) groupLoop(ctx context.Context) {
 		if err != nil {
 			if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil && time.Since(lastQueryWarning) >= groupRetry {
 				lastQueryWarning = time.Now()
-				slog.Warn("album_groups_failed", "error", err.Error())
+				a.logger.Warn("album_groups_failed", "error", err)
 			}
 			continue
 		}
@@ -238,7 +285,7 @@ func (a *App) groupLoop(ctx context.Context) {
 		err = a.rebuildGroups(ctx, id)
 		if err != nil && ctx.Err() == nil && !errors.Is(err, library.ErrConflict) {
 			retryAt[id] = now.Add(groupRetry)
-			slog.Warn("album_groups_failed", "directory_id", id, "error", err.Error())
+			a.logger.Warn("album_groups_failed", "directory_id", id, "error", err)
 		}
 	}
 }

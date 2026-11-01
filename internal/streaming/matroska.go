@@ -43,7 +43,7 @@ func MatroskaRanges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, er
 		return nil, err
 	}
 	if id != segmentID {
-		return nil, errors.New("Matroska segment not found")
+		return nil, errors.New("segment element not found in Matroska file")
 	}
 	start, end := offset+head, size
 	if length >= 0 {
@@ -86,10 +86,10 @@ func MatroskaRanges(ctx context.Context, r io.ReaderAt, size int64) ([]Range, er
 		offset += head + length
 	}
 	if cues < 0 {
-		return nil, errors.New("Matroska Cues not found")
+		return nil, errors.New("cues element not found in Matroska file")
 	}
 	if cues >= size {
-		return nil, errors.New("Cues position outside the file")
+		return nil, errors.New("cues position outside the Matroska file")
 	}
 	id, head, length, err = ebmlElement(r, cues, size)
 	if err != nil {

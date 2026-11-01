@@ -15,16 +15,21 @@ import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import dev.vvideo.app.MainActivity
 import dev.vvideo.app.VVideoApplication
-import dev.vvideo.data.library.PageEdge
 import dev.vvideo.feature.library.LibraryViewModel
 import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
 import dev.vvideo.model.SortDirection
 import dev.vvideo.model.SortField
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -40,13 +45,14 @@ class PhotoDeviceTest {
             JSONObject(
                 File(
                     app.filesDir,
-                    "validation.json"
-                ).readText()
+                    "validation.json",
+                ).readText(),
             )
         }
         app.graph.settings.connect(
             InstrumentationRegistry.getArguments().getString("serverAddress")
-                ?: config.getString("address"), config.getString("token")
+                ?: config.getString("address"),
+            config.getString("token"),
         )
         return app.graph.settings.connection.first()
     }
@@ -76,17 +82,17 @@ class PhotoDeviceTest {
     // with a provisional height, so a position restored at the end of the list
     // was cut short once the viewer closed.
     @Test
-    fun albumEndPositionSurvivesViewer() = runBlocking<Unit> {
+    fun albumEndPositionSurvivesViewer() = deviceTest {
         val connection = connect()
         val root = app.graph.api.libraries(connection).first().directoryId
         val media = app.graph.api.page(
             connection,
             root,
-            Sort(SortField.Name, SortDirection.Ascending)
+            Sort(SortField.Name, SortDirection.Ascending),
         ).items
         org.junit.Assume.assumeTrue(
             "needs a root that fits one page and ends with an image",
-            media.size in 11..99 && media.last().kind == MediaKind.Image
+            media.size in 11..99 && media.last().kind == MediaKind.Image,
         )
         val last = media.last()
         val cell = By.desc(last.name + "，image")
@@ -99,7 +105,9 @@ class PhotoDeviceTest {
                 library = ViewModelProvider(activity)[LibraryViewModel::class.java]
                 library.open(root, Sort(SortField.Name, SortDirection.Ascending))
             }
-            withTimeout(10000) { library.state.first { !it.busy && it.directory?.id == root && it.albums.isNotEmpty() } }
+            withTimeout(10000) {
+                library.state.first { !it.busy && it.directory?.id == root && it.albums.isNotEmpty() }
+            }
             val cx = device.displayWidth / 2
             val h = device.displayHeight
             repeat(12) {
@@ -120,14 +128,14 @@ class PhotoDeviceTest {
             device.pressBack()
             assertNotNull(
                 "album moved: its last cell left the screen after returning from the viewer",
-                device.wait(Until.findObject(cell), 5000)
+                device.wait(Until.findObject(cell), 5000),
             )
             delay(1200)
             val after = checkNotNull(device.findObject(cell)).visibleBounds
             assertEquals("album moved after returning from the viewer", before, after)
             Log.i(
                 "VVideoValidation",
-                "album_end_position_kept=true fixture=${last.name} bounds=$after"
+                "album_end_position_kept=true fixture=${last.name} bounds=$after",
             )
         } finally {
             withContext(Dispatchers.Main) { activity.finish() }
@@ -135,7 +143,7 @@ class PhotoDeviceTest {
     }
 
     @Test
-    fun originalPhotoPinchAndReturn() = runBlocking<Unit> {
+    fun originalPhotoPinchAndReturn() = deviceTest {
         val connection = connect()
         val root = app.graph.api.libraries(connection).first().directoryId
         val directory =
@@ -144,7 +152,7 @@ class PhotoDeviceTest {
             connection,
             directory,
             Sort(SortField.Name, SortDirection.Ascending),
-            kind = MediaKind.Image
+            kind = MediaKind.Image,
         ).items.first { it.displayRatio in 1.4f..2f }
         val activity = launch()
         val device = UiDevice.getInstance(instrumentation)
@@ -155,12 +163,14 @@ class PhotoDeviceTest {
                 library = ViewModelProvider(activity)[LibraryViewModel::class.java]
                 library.open(directory, Sort(SortField.Name, SortDirection.Ascending))
             }
-            withTimeout(10000) { library.state.first { !it.busy && it.directory?.id == directory && it.albums.isNotEmpty() } }
+            withTimeout(10000) {
+                library.state.first { !it.busy && it.directory?.id == directory && it.albums.isNotEmpty() }
+            }
             checkNotNull(
                 device.wait(
                     Until.findObject(By.desc(image.name + "，image")),
-                    10000
-                )
+                    10000,
+                ),
             ).click()
             val photo = checkNotNull(device.wait(Until.findObject(By.desc(image.name)), 10000))
 
@@ -173,11 +183,13 @@ class PhotoDeviceTest {
                 val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
                 try {
                     var pixels = 0
-                    for (y in bitmap.height / 6 until bitmap.height * 5 / 6 step 4) for (x in 0 until bitmap.width step 4) {
-                        val color = bitmap.getPixel(x, y)
-                        val channels =
-                            listOf(Color.red(color), Color.green(color), Color.blue(color))
-                        if (channels.max() - channels.min() > 50) pixels++
+                    for (y in bitmap.height / 6 until bitmap.height * 5 / 6 step 4) {
+                        for (x in 0 until bitmap.width step 4) {
+                            val color = bitmap.getPixel(x, y)
+                            val channels =
+                                listOf(Color.red(color), Color.green(color), Color.blue(color))
+                            if (channels.max() - channels.min() > 50) pixels++
+                        }
                     }
                     return pixels
                 } finally {
@@ -206,18 +218,18 @@ class PhotoDeviceTest {
                     Point(cx + near, cy),
                     Point(cx - far, cy),
                     Point(cx + far, cy),
-                    100
-                )
+                    100,
+                ),
             )
             delay(500)
             val enlarged = coloredPixels()
             assertTrue(
                 "pinch did not enlarge rendered image: $normal -> $enlarged",
-                enlarged > normal * 1.5
+                enlarged > normal * 1.5,
             )
             Log.i(
                 "VVideoValidation",
-                "photo_zoom_open fixture=${image.name} normal=$normal enlarged=$enlarged bounds=${photo.visibleBounds}"
+                "photo_zoom_open fixture=${image.name} normal=$normal enlarged=$enlarged bounds=${photo.visibleBounds}",
             )
             assertTrue(
                 gesture.performTwoPointerGesture(
@@ -225,15 +237,15 @@ class PhotoDeviceTest {
                     Point(cx + far, cy),
                     Point(cx - near, cy),
                     Point(cx + near, cy),
-                    100
-                )
+                    100,
+                ),
             )
             delay(500)
             val reduced = coloredPixels()
             Log.i("VVideoValidation", "photo_zoom_close enlarged=$enlarged reduced=$reduced")
             assertTrue(
                 "pinch did not reduce rendered image: $enlarged -> $reduced",
-                reduced < enlarged * .85
+                reduced < enlarged * .85,
             )
             // Paging follows the folder's image order, left and right. A horizontal pinch
             // travels along the paging axis and must still zoom; an enlarged photo pans
@@ -243,18 +255,18 @@ class PhotoDeviceTest {
                 directory,
                 Sort(SortField.Name, SortDirection.Ascending),
                 anchor = image.id,
-                kind = MediaKind.Image
+                kind = MediaKind.Image,
             ).items
             val following = queue[queue.indexOfFirst { it.id == image.id } + 1]
             device.swipe(cx + far, cy, cx - far, cy, 12)
             assertNotNull(
                 "swipe left did not show the next photo",
-                device.wait(Until.findObject(By.desc(following.name)), 5000)
+                device.wait(Until.findObject(By.desc(following.name)), 5000),
             )
             device.swipe(cx - far, cy, cx + far, cy, 12)
             assertNotNull(
                 "swipe right did not return to the photo",
-                device.wait(Until.findObject(By.desc(image.name)), 5000)
+                device.wait(Until.findObject(By.desc(image.name)), 5000),
             )
             delay(500)
             device.swipe(cx, cy + far, cx, cy - far, 12)
@@ -266,24 +278,24 @@ class PhotoDeviceTest {
                     Point(cx + near, cy),
                     Point(cx - far, cy),
                     Point(cx + far, cy),
-                    100
-                )
+                    100,
+                ),
             )
             delay(500)
             assertTrue(
                 "horizontal pinch paged instead of zooming",
-                device.hasObject(By.desc(image.name))
+                device.hasObject(By.desc(image.name)),
             )
             val wide = coloredPixels()
             assertTrue(
                 "horizontal pinch did not enlarge rendered image: $reduced -> $wide",
-                wide > reduced * 1.5
+                wide > reduced * 1.5,
             )
             device.swipe(cx + near, cy, cx - near, cy, 12)
             delay(500)
             assertTrue(
                 "an enlarged photo paged under a one-finger drag",
-                device.hasObject(By.desc(image.name))
+                device.hasObject(By.desc(image.name)),
             )
             assertTrue(
                 gesture.performTwoPointerGesture(
@@ -291,18 +303,18 @@ class PhotoDeviceTest {
                     Point(cx + far, cy),
                     Point(cx - near, cy),
                     Point(cx + near, cy),
-                    100
-                )
+                    100,
+                ),
             )
             delay(500)
             val restored = coloredPixels()
             assertTrue(
                 "horizontal pinch did not reduce rendered image: $wide -> $restored",
-                restored < wide * .85
+                restored < wide * .85,
             )
             Log.i(
                 "VVideoValidation",
-                "photo_paging next=${following.name} paging_axis_pinch_pixels=$wide restored_pixels=$restored"
+                "photo_paging next=${following.name} paging_axis_pinch_pixels=$wide restored_pixels=$restored",
             )
             checkNotNull(device.wait(Until.findObject(By.desc("媒体详情")), 3000)).click()
             assertTrue(device.wait(Until.hasObject(By.text(image.name)), 3000))
@@ -314,7 +326,9 @@ class PhotoDeviceTest {
             assertTrue(device.hasObject(By.text("large")))
             Log.i(
                 "VVideoValidation",
-                "photo_original_pinch_return=true fixture=${image.name} dimensions=${image.width}x${image.height} normal_pixels=$normal enlarged_pixels=$enlarged reduced_pixels=$reduced"
+                "photo_original_pinch_return=true fixture=${image.name} " +
+                    "dimensions=${image.width}x${image.height} normal_pixels=$normal " +
+                    "enlarged_pixels=$enlarged reduced_pixels=$reduced",
             )
         } finally {
             withContext(Dispatchers.Main) { activity.finish() }

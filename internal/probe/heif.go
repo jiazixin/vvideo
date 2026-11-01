@@ -97,7 +97,7 @@ func ReadHEIF(r io.ReaderAt, size int64) (HEIF, error) {
 		return h, errors.New("heif: primary item has no size")
 	}
 	for id := range exif {
-		data := readItem(r, size, iloc, id)
+		data := (itemReader{reader: r, size: size}).readItem(iloc, id)
 		// Exif item data starts with the offset of the TIFF header.
 		if len(data) < 4 {
 			continue
@@ -240,7 +240,12 @@ func parseIpma(b []byte, associations map[uint32][]int) {
 
 // readItem returns the data of item id when iloc places it in one extent of
 // the file itself, bounded by maxExifSize; otherwise nil.
-func readItem(r io.ReaderAt, size int64, iloc []byte, id uint32) []byte {
+type itemReader struct {
+	reader io.ReaderAt
+	size   int64
+}
+
+func (r itemReader) readItem(iloc []byte, id uint32) []byte {
 	if len(iloc) < 4 {
 		return nil
 	}
@@ -279,7 +284,10 @@ func readItem(r io.ReaderAt, size int64, iloc []byte, id uint32) []byte {
 			if method != 0 || extents != 1 {
 				return nil // in idat or split: not worth following for Exif
 			}
-			return readExtent(r, size, base+offset, length)
+			if base > ^uint64(0)-offset {
+				return nil
+			}
+			return r.readExtent(base+offset, length)
 		}
 	}
 	return nil
@@ -287,12 +295,13 @@ func readItem(r io.ReaderAt, size int64, iloc []byte, id uint32) []byte {
 
 // readExtent reads length bytes at start, which must lie inside the file and
 // not exceed maxExifSize.
-func readExtent(r io.ReaderAt, size int64, start, length uint64) []byte {
+func (r itemReader) readExtent(start, length uint64) []byte {
+	size := r.size
 	if length == 0 || length > maxExifSize || start >= uint64(size) || length > uint64(size)-start {
 		return nil
 	}
 	data := make([]byte, length)
-	if _, err := r.ReadAt(data, int64(start)); err != nil {
+	if _, err := r.reader.ReadAt(data, int64(start)); err != nil {
 		return nil
 	}
 	return data

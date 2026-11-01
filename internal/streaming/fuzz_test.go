@@ -2,7 +2,6 @@ package streaming
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"slices"
 	"testing"
@@ -27,7 +26,7 @@ func FuzzMP4Ranges(f *testing.F) {
 	f.Add([]byte{0, 0, 0, 0, 'm', 'd', 'a', 't'})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		size := int64(len(data))
-		ranges, err := MP4Ranges(context.Background(), bytes.NewReader(data), size)
+		ranges, err := MP4Ranges(t.Context(), bytes.NewReader(data), size)
 		if err != nil {
 			return
 		}
@@ -60,7 +59,7 @@ func FuzzMatroskaRanges(f *testing.F) {
 	f.Add([]byte{0x1A, 0x45, 0xDF, 0xA3, 0x80, 0x18, 0x53, 0x80, 0x67, 0xFF})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		size := int64(len(data))
-		ranges, err := MatroskaRanges(context.Background(), bytes.NewReader(data), size)
+		ranges, err := MatroskaRanges(t.Context(), bytes.NewReader(data), size)
 		if err != nil {
 			return
 		}

@@ -1,11 +1,16 @@
 package dev.vvideo.benchmark
 
 import android.content.Intent
-import androidx.benchmark.macro.*
+import androidx.benchmark.macro.CompilationMode
+import androidx.benchmark.macro.ExperimentalMacrobenchmarkApi
+import androidx.benchmark.macro.FrameTimingMetric
+import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.*
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.Until
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -16,6 +21,7 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalMacrobenchmarkApi::class)
 class LibraryScrollBenchmark {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+
     @Before
     fun keepRunnerAlive() {
         context.startForegroundService(Intent(context, BenchmarkKeepAliveService::class.java))
@@ -28,6 +34,7 @@ class LibraryScrollBenchmark {
 
     @get:Rule
     val rule = MacrobenchmarkRule()
+
     @Test
     fun warmAlbumScroll() = rule.measureRepeated(
         packageName = "dev.vvideo",
@@ -42,16 +49,22 @@ class LibraryScrollBenchmark {
             Configurator.getInstance().waitForIdleTimeout = 250
             // Navigate through observed channel controls. A failed lookup must fail the
             // benchmark rather than silently measure the home screen.
-            if (!(device.hasObject(By.text("large")) && device.hasObject(By.desc("返回")) && device.hasObject(
-                    By.text("全部")
-                ))
+            if (!(
+                    device.hasObject(By.text("large")) &&
+                        device.hasObject(By.desc("返回")) &&
+                        device.hasObject(
+                            By.text("全部"),
+                        )
+                    )
             ) {
                 repeat(6) {
                     if (!(device.hasObject(By.desc("设置")) && !device.hasObject(By.desc("返回")))) {
-                        if (!device.hasObject(By.desc("返回"))) device.click(
-                            device.displayWidth / 2,
-                            device.displayHeight * 2 / 5
-                        )
+                        if (!device.hasObject(By.desc("返回"))) {
+                            device.click(
+                                device.displayWidth / 2,
+                                device.displayHeight * 2 / 5,
+                            )
+                        }
                         checkNotNull(device.wait(Until.findObject(By.desc("返回")), 5000)).click()
                         device.waitForIdle()
                     }
@@ -64,8 +77,8 @@ class LibraryScrollBenchmark {
             check(
                 device.wait(
                     Until.hasObject(By.text("全部")),
-                    10000
-                )
+                    10000,
+                ),
             ) { "Synthetic album not reached" }
             device.waitForIdle()
             repeat(5) {
@@ -74,7 +87,7 @@ class LibraryScrollBenchmark {
                     device.displayHeight * 3 / 4,
                     device.displayWidth / 2,
                     device.displayHeight / 3,
-                    30
+                    30,
                 )
                 device.waitForIdle()
             }
@@ -84,7 +97,7 @@ class LibraryScrollBenchmark {
                     device.displayHeight / 3,
                     device.displayWidth / 2,
                     device.displayHeight * 3 / 4,
-                    30
+                    30,
                 )
                 device.waitForIdle()
             }
@@ -96,7 +109,7 @@ class LibraryScrollBenchmark {
                     device.displayHeight * 3 / 4,
                     device.displayWidth / 2,
                     device.displayHeight / 3,
-                    25
+                    25,
                 )
             }
             repeat(12) {
@@ -105,8 +118,9 @@ class LibraryScrollBenchmark {
                     device.displayHeight / 3,
                     device.displayWidth / 2,
                     device.displayHeight * 3 / 4,
-                    25
+                    25,
                 )
             }
-        })
+        },
+    )
 }

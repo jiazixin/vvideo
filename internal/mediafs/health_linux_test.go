@@ -10,7 +10,7 @@ import (
 
 func TestMountProbeUsesPinnedDescriptor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "root")
-	if err := os.Mkdir(path, 0700); err != nil {
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.Open(path)

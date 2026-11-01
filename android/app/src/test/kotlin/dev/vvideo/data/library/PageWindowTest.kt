@@ -1,10 +1,14 @@
 package dev.vvideo.data.library
 
-import dev.vvideo.model.*
 import dev.vvideo.model.CaptureSource
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaPage
 import dev.vvideo.model.MediaStatus
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PageWindowTest {
@@ -26,7 +30,7 @@ class PageWindowTest {
                 0,
                 MediaStatus.Ready,
                 "",
-                CaptureSource.Modified
+                CaptureSource.Modified,
             )
         }
         return MediaPage(
@@ -36,7 +40,7 @@ class PageWindowTest {
             "prev$index",
             "",
             false,
-            true
+            true,
         )
     }
 

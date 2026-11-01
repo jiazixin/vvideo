@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
 	"vvideo/internal/config"
 	"vvideo/internal/library"
 	"vvideo/internal/mediafs"
@@ -22,10 +23,15 @@ func fixture(t *testing.T) (*Scanner, string) {
 	base := t.TempDir()
 	base, _ = config.Canonical(base)
 	root := filepath.Join(base, "media")
-	if e := os.Mkdir(root, 0700); e != nil {
+	if e := os.Mkdir(root, 0o700); e != nil {
 		t.Fatal(e)
 	}
-	c, e := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=test", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)}})
+	env := map[string]string{"VVIDEO_AUTH__TOKEN": "test", "VVIDEO_MEDIA": fmt.Sprintf(`[{"path":%q}]`, root)}
+	lookupEnv := func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+	c, e := config.Load(config.Source{WorkDir: base, LookupEnv: lookupEnv})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -38,19 +44,19 @@ func fixture(t *testing.T) (*Scanner, string) {
 	if e = index.Register(t.Context(), c); e != nil {
 		t.Fatal(e)
 	}
-	return &Scanner{Config: c, Index: index, Now: time.Now}, root
+	return &Scanner{Config: c, Index: index, now: time.Now}, root
 }
 func count(t *testing.T, s *Scanner) int {
 	t.Helper()
 	var n int
-	if e := s.Index.Store.Reader.QueryRow(`SELECT count(*) FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.generation=d.generation AND e.state='visible'`).Scan(&n); e != nil {
+	if e := s.Index.Store.QueryRow(t.Context(), `SELECT count(*) FROM entries e JOIN directories d ON d.id=e.directory_id WHERE e.generation=d.generation AND e.state='visible'`).Scan(&n); e != nil {
 		t.Fatal(e)
 	}
 	return n
 }
 func create(t *testing.T, root, name string) {
 	t.Helper()
-	if e := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0600); e != nil {
+	if e := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -67,7 +73,7 @@ func TestWalkBoundedPagesAndUnchangedScan(t *testing.T) {
 	}
 	writes := s.Index.Store.Metrics.Rows.Load()
 	var versions int
-	s.Index.Store.Reader.QueryRow("SELECT count(*) FROM versions").Scan(&versions)
+	s.Index.Store.QueryRow(t.Context(), "SELECT count(*) FROM versions").Scan(&versions)
 	if e := s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
 	}
@@ -75,12 +81,12 @@ func TestWalkBoundedPagesAndUnchangedScan(t *testing.T) {
 		t.Fatal("unchanged scan writes media rows")
 	}
 	var n int
-	s.Index.Store.Reader.QueryRow("SELECT count(*) FROM versions").Scan(&n)
+	s.Index.Store.QueryRow(t.Context(), "SELECT count(*) FROM versions").Scan(&n)
 	if n != versions {
 		t.Fatal("unchanged scan changes versions")
 	}
 	var tasks int
-	s.Index.Store.Reader.QueryRow("SELECT count(*) FROM jobs").Scan(&tasks)
+	s.Index.Store.QueryRow(t.Context(), "SELECT count(*) FROM jobs").Scan(&tasks)
 	if tasks != 257 {
 		t.Fatal("duplicate or absent jobs")
 	}
@@ -98,7 +104,7 @@ func TestFailedPublicationKeepsOldGeneration(t *testing.T) {
 		create(t, root, fmt.Sprintf("new%04d.mp4", i))
 	}
 	n := 0
-	s.Fault = func(at string) error {
+	s.onStep = func(at string) error {
 		if at == "build" {
 			n++
 			if n == 2 {
@@ -113,7 +119,7 @@ func TestFailedPublicationKeepsOldGeneration(t *testing.T) {
 	if count(t, s) != 1 {
 		t.Fatal("half generation published")
 	}
-	s.Fault = nil
+	s.onStep = nil
 	if e := s.Index.Recover(t.Context()); e != nil {
 		t.Fatal(e)
 	}
@@ -137,13 +143,13 @@ func TestMissingNeedsConsecutiveHealthyRoots(t *testing.T) {
 	if count(t, s) != 1 {
 		t.Fatal("hidden on first absence")
 	}
-	s.Stat = func(*os.File, string) (fs.FileInfo, error) { return nil, errors.New("permission fault") }
+	s.stat = func(*os.File, string) (fs.FileInfo, error) { return nil, errors.New("permission fault") }
 	create(t, root, "trigger.mp4")
 	if e := s.Run(t.Context(), false); e == nil {
 		t.Fatal("fault invisible")
 	}
 	os.Remove(filepath.Join(root, "trigger.mp4"))
-	s.Stat = mediafs.StatAt
+	s.stat = mediafs.StatAt
 	for i := range 2 {
 		if e := s.Run(t.Context(), false); e != nil {
 			t.Fatal(e)
@@ -169,7 +175,7 @@ func TestSlowFilesystemDoesNotHoldDatabase(t *testing.T) {
 	create(t, root, "a.mp4")
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	s.Stat = func(f *os.File, name string) (fs.FileInfo, error) {
+	s.stat = func(f *os.File, name string) (fs.FileInfo, error) {
 		select {
 		case entered <- struct{}{}:
 		default:
@@ -188,7 +194,7 @@ func TestSlowFilesystemDoesNotHoldDatabase(t *testing.T) {
 		t.Fatal(e)
 	}
 	if e := s.Index.Store.Write(queryCtx, 0, func(tx *sql.Tx) error {
-		_, e := tx.Exec("UPDATE counters SET value=value WHERE name='thumbnail_bytes'")
+		_, e := tx.ExecContext(t.Context(), "UPDATE counters SET value=value WHERE name='thumbnail_bytes'")
 		return e
 	}); e != nil {
 		t.Fatal(e)
@@ -217,7 +223,7 @@ func TestRootBoundaryAndIdentity(t *testing.T) {
 		t.Fatal("followed symlink")
 	}
 	os.Rename(root, root+".old")
-	os.Mkdir(root, 0700)
+	os.Mkdir(root, 0o700)
 	if e := s.Run(t.Context(), false); e == nil {
 		t.Fatal("replacement root accepted")
 	}
@@ -253,7 +259,10 @@ func TestMetadataGlobalParallelLimitAndCancel(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
-			go func() { _, e := Collect(ctx, es, p, stat, &Metrics{}); done <- e }()
+			go func() {
+				_, e := collectAttributes(ctx, es, collectOptions{parallel: p, stat: stat, metrics: &Metrics{}})
+				done <- e
+			}()
 			for range p {
 				<-entered
 			}

@@ -114,7 +114,7 @@ func (i *Index) Register(ctx context.Context, c config.Config) error {
 
 // Libraries lists the active libraries by name.
 func (i *Index) Libraries(ctx context.Context) ([]Library, error) {
-	rows, err := i.Store.Reader.QueryContext(ctx, "SELECT l.id,l.name,l.root,l.identity,d.id,l.healthy FROM libraries l JOIN directories d ON d.library_id=l.id AND d.relative='.' WHERE l.active=1 ORDER BY l.name,l.id LIMIT 200")
+	rows, err := i.Store.Query(ctx, "SELECT l.id,l.name,l.root,l.identity,d.id,l.healthy FROM libraries l JOIN directories d ON d.library_id=l.id AND d.relative='.' WHERE l.active=1 ORDER BY l.name,l.id LIMIT 200")
 	return storage.Collect(rows, err, func(rows *sql.Rows) (Library, error) {
 		var l Library
 		return l, rows.Scan(&l.ID, &l.Name, &l.Root, &l.Identity, &l.DirectoryID, &l.Healthy)
@@ -136,7 +136,7 @@ func scanDirectoryRow(rows *sql.Rows) (Directory, error) { return scanDirectory(
 
 // Directory reads one directory row, whatever its state.
 func (i *Index) Directory(ctx context.Context, id int64) (Directory, error) {
-	return scanDirectory(i.Store.Reader.QueryRowContext(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.id=?", id))
+	return scanDirectory(i.Store.QueryRow(ctx, "SELECT "+directoryColumns+" FROM directories d WHERE d.id=?", id))
 }
 
 // Visible returns ErrUnavailable unless the directory and all its ancestors
@@ -155,7 +155,7 @@ func (i *Index) Visible(ctx context.Context, id int64) error {
 		}
 		if d.ParentID == 0 {
 			var active bool
-			if err := i.Store.Reader.QueryRowContext(ctx, "SELECT active FROM libraries WHERE id=?", d.LibraryID).Scan(&active); err != nil {
+			if err := i.Store.QueryRow(ctx, "SELECT active FROM libraries WHERE id=?", d.LibraryID).Scan(&active); err != nil {
 				return err
 			}
 			if !active {
@@ -189,9 +189,34 @@ func (i *Index) Path(ctx context.Context, id int64) ([]Directory, error) {
 	return path, nil
 }
 
+// ChildObservation describes one subdirectory found during a scan round.
+type ChildObservation struct {
+	Parent                   Directory
+	Relative, Name, Identity string
+	Round                    int64
+}
+
+// GenerationBatch contains a bounded part of one unpublished generation.
+type GenerationBatch struct {
+	Directory  Directory
+	Generation int64
+	Entries    []Entry
+	ObservedAt time.Time
+}
+
+// Publication describes a fully staged generation and its filesystem check.
+type Publication struct {
+	Directory  Directory
+	Generation int64
+	Identity   string
+	Round      int64
+	Validate   func() error
+}
+
 // Child records a subdirectory observed in round under parent, creating it or
 // making it visible again, and returns its current row.
-func (i *Index) Child(ctx context.Context, parent Directory, relative, name, identity string, round int64) (Directory, error) {
+func (i *Index) Child(ctx context.Context, observation ChildObservation) (Directory, error) {
+	parent, relative, name, identity, round := observation.Parent, observation.Relative, observation.Name, observation.Identity, observation.Round
 	var id int64
 	err := i.Store.Write(ctx, 0, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO directories(library_id,parent_id,relative,name,identity,observed_round) VALUES(?,?,?,?,?,?) ON CONFLICT(library_id,relative) DO UPDATE SET observed_round=excluded.observed_round,state='visible',missing_streak=0", parent.LibraryID, parent.ID, relative, name, identity, round); err != nil {
@@ -216,7 +241,7 @@ func ScanEntry(row interface{ Scan(...any) error }) (Entry, error) {
 
 // Baseline pages the published entries of d by media ID, after the given ID.
 func (i *Index) Baseline(ctx context.Context, d Directory, after string) ([]Entry, error) {
-	rows, err := i.Store.Reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id>? ORDER BY e.media_id LIMIT ?`, d.ID, d.Generation, after, storage.BatchSize)
+	rows, err := i.Store.Query(ctx, `SELECT `+entryColumns+` FROM entries e JOIN directories d ON d.id=e.directory_id JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE e.directory_id=? AND e.generation=? AND e.media_id>? ORDER BY e.media_id LIMIT ?`, d.ID, d.Generation, after, storage.BatchSize)
 	return storage.Collect(rows, err, scanEntryRow)
 }
 
@@ -231,7 +256,7 @@ func scanID(rows *sql.Rows) (int64, error) {
 
 // Media returns the published, visible version of one media item.
 func (i *Index) Media(ctx context.Context, id string) (Entry, error) {
-	e, err := ScanEntry(i.Store.Reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM media m JOIN directories d ON d.id=m.directory_id JOIN libraries l ON l.id=d.library_id JOIN entries e ON e.media_id=m.id AND e.directory_id=d.id AND e.generation=d.generation JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE m.id=? AND l.active=1 AND e.state='visible'`, id))
+	e, err := ScanEntry(i.Store.QueryRow(ctx, `SELECT `+entryColumns+` FROM media m JOIN directories d ON d.id=m.directory_id JOIN libraries l ON l.id=d.library_id JOIN entries e ON e.media_id=m.id AND e.directory_id=d.id AND e.generation=d.generation JOIN versions v ON v.media_id=e.media_id AND v.version=e.version WHERE m.id=? AND l.active=1 AND e.state='visible'`, id))
 	if err != nil {
 		return e, err
 	}
@@ -251,7 +276,8 @@ func (i *Index) BeginBuild(ctx context.Context, d Directory) (int64, error) {
 
 // AddBatch writes up to storage.BatchSize entries of an unpublished generation
 // in one transaction, creating version rows and probe jobs for new versions.
-func (i *Index) AddBatch(ctx context.Context, d Directory, gen int64, entries []Entry, now time.Time) error {
+func (i *Index) AddBatch(ctx context.Context, batch GenerationBatch) error {
+	d, gen, entries, now := batch.Directory, batch.Generation, batch.Entries, batch.ObservedAt
 	if len(entries) > storage.BatchSize {
 		return errors.New("build batch exceeds limit")
 	}
@@ -305,7 +331,8 @@ func (i *Index) AddBatch(ctx context.Context, d Directory, gen int64, entries []
 // Publish makes generation gen the visible listing of d. validate re-checks
 // the directory on disk before the writer is taken; ErrConflict means another
 // publication replaced d's generation first.
-func (i *Index) Publish(ctx context.Context, d Directory, gen int64, identity string, round int64, validate func() error) error {
+func (i *Index) Publish(ctx context.Context, publication Publication) error {
+	d, gen, identity, round, validate := publication.Directory, publication.Generation, publication.Identity, publication.Round, publication.Validate
 	// Filesystem work happens before taking the writer.
 	if err := validate(); err != nil {
 		return err
@@ -340,7 +367,7 @@ const staleMemberships = `(EXISTS(SELECT 1 FROM entries WHERE directory_id=d.id 
 // read-only check first keeps unchanged directories from costing commits.
 func (i *Index) Cleanup(ctx context.Context, id int64) error {
 	var stale bool
-	err := i.Store.Reader.QueryRowContext(ctx, "SELECT "+staleMemberships+" FROM directories d WHERE d.id=?", id).Scan(&stale)
+	err := i.Store.QueryRow(ctx, "SELECT "+staleMemberships+" FROM directories d WHERE d.id=?", id).Scan(&stale)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -375,7 +402,7 @@ func (i *Index) Cleanup(ctx context.Context, id int64) error {
 func (i *Index) Recover(ctx context.Context) error {
 	var after int64
 	for {
-		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT ?", after, storage.BatchSize)
+		rows, err := i.Store.Query(ctx, "SELECT d.id FROM directories d WHERE d.id>? AND "+staleMemberships+" ORDER BY d.id LIMIT ?", after, storage.BatchSize)
 		ids, err := storage.Collect(rows, err, scanID)
 		if err != nil {
 			return err
@@ -412,7 +439,7 @@ func (i *Index) Recover(ctx context.Context) error {
 // the name has never been indexed there.
 func (i *Index) ResolveID(ctx context.Context, directory int64, name string) (string, error) {
 	var id string
-	err := i.Store.Reader.QueryRowContext(ctx, "SELECT id FROM media WHERE directory_id=? AND name=?", directory, name).Scan(&id)
+	err := i.Store.QueryRow(ctx, "SELECT id FROM media WHERE directory_id=? AND name=?", directory, name).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.New().String(), nil
 	}

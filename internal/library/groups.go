@@ -48,7 +48,7 @@ func (i *Index) RebuildGroups(ctx context.Context, id int64, pause func(context.
 	}
 	for _, sort := range []string{"capture", "mtime", "name"} {
 		for _, direction := range []string{"asc", "desc"} {
-			err = i.walkOrder(ctx, d, sort, direction, pause, func(ordinal int64, e orderedEntry) error {
+			err = i.walkOrder(ctx, walkOptions{directory: d, sort: sort, direction: direction, pause: pause}, func(ordinal int64, e orderedEntry) error {
 				if ordinal%groupSize != 0 {
 					return nil
 				}
@@ -127,7 +127,14 @@ func (e orderedEntry) anchor(sort, direction string) groupAnchor {
 // walkOrder visits the visible entries of d's published generation in one
 // listing order, reading a batch at a time and calling pause before each read.
 // visit receives each entry's zero-based position in that order.
-func (i *Index) walkOrder(ctx context.Context, d Directory, sort, direction string, pause func(context.Context) error, visit func(int64, orderedEntry) error) error {
+type walkOptions struct {
+	directory       Directory
+	sort, direction string
+	pause           func(context.Context) error
+}
+
+func (i *Index) walkOrder(ctx context.Context, options walkOptions, visit func(int64, orderedEntry) error) error {
+	d, sort, direction, pause := options.directory, options.sort, options.direction, options.pause
 	col := sortColumns[sort]
 	operator := ">"
 	if direction == "desc" {
@@ -144,7 +151,7 @@ func (i *Index) walkOrder(ctx context.Context, d Directory, sort, direction stri
 			filter = " AND (" + col + ",media_id)" + operator + "(?,?)"
 			args = append(args, last.key(sort), last.id)
 		}
-		rows, err := i.Store.Reader.QueryContext(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+direction+`,media_id `+direction+` LIMIT ?`, append(args, storage.BatchSize)...)
+		rows, err := i.Store.Query(ctx, `SELECT media_id,effective_time,mtime,name FROM entries WHERE directory_id=? AND generation=? AND state='visible'`+filter+` ORDER BY `+col+` `+direction+`,media_id `+direction+` LIMIT ?`, append(args, storage.BatchSize)...)
 		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (orderedEntry, error) {
 			var e orderedEntry
 			return e, rows.Scan(&e.id, &e.capture, &e.mtime, &e.name)
@@ -194,7 +201,7 @@ func (i *Index) PublishProbedTimes(ctx context.Context) (int64, error) {
 			id             int64
 			media, version string
 		}
-		rows, err := i.Store.Reader.QueryContext(ctx, "SELECT id,media_id,version FROM jobs WHERE kind='probe' AND state='probed' ORDER BY id LIMIT ?", storage.BatchSize)
+		rows, err := i.Store.Query(ctx, "SELECT id,media_id,version FROM jobs WHERE kind='probe' AND state='probed' ORDER BY id LIMIT ?", storage.BatchSize)
 		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (probed, error) {
 			var p probed
 			return p, rows.Scan(&p.id, &p.media, &p.version)
@@ -249,9 +256,9 @@ func (i *Index) PublishProbedTimes(ctx context.Context) (int64, error) {
 func (i *Index) DirtyDirectory(ctx context.Context, after int64) (int64, error) {
 	const next = "SELECT id FROM directories WHERE state='visible' AND group_revision!=revision AND id>? ORDER BY id LIMIT 1"
 	var id int64
-	err := i.Store.Reader.QueryRowContext(ctx, next, after).Scan(&id)
+	err := i.Store.QueryRow(ctx, next, after).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) && after > 0 {
-		err = i.Store.Reader.QueryRowContext(ctx, next, 0).Scan(&id)
+		err = i.Store.QueryRow(ctx, next, 0).Scan(&id)
 	}
 	return id, err
 }
@@ -259,7 +266,13 @@ func (i *Index) DirtyDirectory(ctx context.Context, after int64) (int64, error) 
 // groupStart returns the inclusive cursor of the album group containing e, so
 // an anchored page starts on a group boundary. A kind-filtered listing has no
 // groups and starts at e itself.
-func groupStart(ctx context.Context, tx *sql.Tx, d Directory, o ListOptions, e Entry) (Cursor, error) {
+type groupQuery struct {
+	directory Directory
+	options   ListOptions
+}
+
+func groupStart(ctx context.Context, tx *sql.Tx, query groupQuery, e Entry) (Cursor, error) {
+	d, o := query.directory, query.options
 	if o.Kind != "" {
 		return Cursor{ID: e.ID, Key: key(e, o.Sort)}, nil
 	}

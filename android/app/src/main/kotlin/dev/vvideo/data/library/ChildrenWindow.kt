@@ -4,7 +4,7 @@ import dev.vvideo.model.ChildrenPage
 import dev.vvideo.model.Directory
 
 /** Three pages; both edge cursors survive eviction. No growing cursor history. */
-class ChildrenWindow {
+internal class ChildrenWindow {
     private val pages = ArrayDeque<ChildrenPage>()
     val items: List<Directory> get() = pages.flatMap { it.items }
     val next: String get() = pages.lastOrNull()?.next.orEmpty()

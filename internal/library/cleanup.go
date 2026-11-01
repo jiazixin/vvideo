@@ -14,7 +14,7 @@ func (i *Index) CleanupVersions(ctx context.Context, directory int64) error {
 	type version struct{ id, value string }
 	afterID, afterVersion := "", ""
 	for {
-		rows, err := i.Store.Reader.QueryContext(ctx, `SELECT v.media_id,v.version FROM media m JOIN versions v ON v.media_id=m.id WHERE m.directory_id=? AND (v.media_id,v.version)>(?,?) AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.media_id=v.media_id AND e.version=v.version) AND NOT EXISTS(SELECT 1 FROM thumbnails t WHERE t.media_id=v.media_id AND t.version=v.version) AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.media_id=v.media_id AND j.version=v.version AND j.state='running') ORDER BY v.media_id,v.version LIMIT ?`, directory, afterID, afterVersion, storage.BatchSize)
+		rows, err := i.Store.Query(ctx, `SELECT v.media_id,v.version FROM media m JOIN versions v ON v.media_id=m.id WHERE m.directory_id=? AND (v.media_id,v.version)>(?,?) AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.media_id=v.media_id AND e.version=v.version) AND NOT EXISTS(SELECT 1 FROM thumbnails t WHERE t.media_id=v.media_id AND t.version=v.version) AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.media_id=v.media_id AND j.version=v.version AND j.state='running') ORDER BY v.media_id,v.version LIMIT ?`, directory, afterID, afterVersion, storage.BatchSize)
 		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (version, error) {
 			var v version
 			return v, rows.Scan(&v.id, &v.value)

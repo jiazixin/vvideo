@@ -10,13 +10,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
 	"vvideo/internal/jobs"
 	"vvideo/internal/thumbnail"
 )
 
 func TestThumbnailProgressLogsActiveWindowsOnly(t *testing.T) {
 	i, s, root := setup(t)
-	if e := os.WriteFile(filepath.Join(root, "a.mp4"), []byte("a"), 0600); e != nil {
+	if e := os.WriteFile(filepath.Join(root, "a.mp4"), []byte("a"), 0o600); e != nil {
 		t.Fatal(e)
 	}
 	if e := s.Run(t.Context(), false); e != nil {
@@ -36,10 +37,10 @@ func TestThumbnailProgressLogsActiveWindowsOnly(t *testing.T) {
 		t.Fatal(e)
 	}
 	var probing float64
-	if e := i.Store.Reader.QueryRow("SELECT count(*) FROM jobs WHERE kind='probe' AND state IN ('queued','running')").Scan(&probing); e != nil || probing == 0 {
+	if e := i.Store.QueryRow(t.Context(), "SELECT count(*) FROM jobs WHERE kind='probe' AND state IN ('queued','running')").Scan(&probing); e != nil || probing == 0 {
 		t.Fatalf("scan queued %v probes: %v", probing, e)
 	}
-	engine := &thumbnail.Engine{Queue: &jobs.Queue{Store: i.Store, Index: i, Now: time.Now}}
+	engine := &thumbnail.Engine{Queue: jobs.NewQueue(i, nil, time.Now)}
 	var out bytes.Buffer
 	p := &thumbnail.Progress{Engine: engine, Logger: slog.New(slog.NewJSONHandler(&out, nil))}
 	start := time.Unix(1_000_000, 0)

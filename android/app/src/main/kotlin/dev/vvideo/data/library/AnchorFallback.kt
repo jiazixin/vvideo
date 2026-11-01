@@ -7,7 +7,7 @@ import dev.vvideo.model.SortField
 import org.json.JSONObject
 
 /** The value [item] is ordered by under [field], as the server compares it. */
-fun Media.sortKey(field: SortField): String = when (field) {
+internal fun Media.sortKey(field: SortField): String = when (field) {
     SortField.Name -> name
     SortField.Modified -> mtime.toString()
     SortField.Capture -> effectiveTime.toString()
@@ -18,7 +18,7 @@ fun Media.sortKey(field: SortField): String = when (field) {
  * sort key, which the server uses when the anchored media itself is gone.
  * Bookmarks are only kept for unfiltered lists, so the kind is always blank.
  */
-fun anchorFallback(item: Media, revision: Long, sort: Sort): String = Base64.encodeToString(
+internal fun anchorFallback(item: Media, revision: Long, sort: Sort): String = Base64.encodeToString(
     JSONObject()
         .put("directory_id", item.directoryId)
         .put("revision", revision)
@@ -29,5 +29,5 @@ fun anchorFallback(item: Media, revision: Long, sort: Sort): String = Base64.enc
         .put("id", item.id)
         .toString()
         .toByteArray(),
-    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
 )

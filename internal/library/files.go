@@ -19,7 +19,7 @@ func (i *Index) OpenMedia(ctx context.Context, e Entry) (*os.File, func() error,
 		return nil, nil, err
 	}
 	var rootPath, identity string
-	if err = i.Store.Reader.QueryRowContext(ctx, "SELECT root,identity FROM libraries WHERE id=? AND active=1", e.LibraryID).Scan(&rootPath, &identity); err != nil {
+	if err = i.Store.QueryRow(ctx, "SELECT root,identity FROM libraries WHERE id=? AND active=1", e.LibraryID).Scan(&rootPath, &identity); err != nil {
 		return nil, nil, err
 	}
 	r, err := mediafs.Open(rootPath)

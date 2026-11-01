@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,9 +32,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
 import dev.vvideo.R
-import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
 import dev.vvideo.ui.component.ActionIcon
@@ -44,34 +42,30 @@ import dev.vvideo.ui.theme.LocalVVColors
 
 /** The search box under the folder's app bar. */
 @Composable
-internal fun FolderSearchField(
-    query: String,
-    onQuery: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
+internal fun FolderSearchField(query: String, onQuery: (String) -> Unit, modifier: Modifier = Modifier) {
     val colors = LocalVVColors.current
     val focus = LocalFocusManager.current
     Row(
         modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp)).background(colors.bgInput).height(40.dp)
+            .clip(RoundedCornerShape(10.dp)).background(colors.bgInput).heightIn(min = 48.dp)
             .padding(start = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(R.drawable.ic_search),
             null,
             Modifier.size(20.dp),
-            tint = colors.textSecondary
+            tint = colors.textSecondary,
         )
         Box(
             Modifier.weight(1f).padding(horizontal = 8.dp),
-            contentAlignment = Alignment.CenterStart
+            contentAlignment = Alignment.CenterStart,
         ) {
             if (query.isEmpty()) {
                 Text(
                     stringResource(R.string.search_hint),
                     color = colors.textSecondary,
-                    maxLines = 1
+                    maxLines = 1,
                 )
             }
             BasicTextField(
@@ -82,7 +76,7 @@ internal fun FolderSearchField(
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.textPrimary),
                 cursorBrush = SolidColor(colors.accentFill),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() })
+                keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             )
         }
         if (query.isNotEmpty()) {
@@ -98,11 +92,10 @@ internal fun FolderSearchField(
 @Composable
 internal fun FolderSearchResults(
     search: SearchState,
-    loader: ImageLoader,
-    connection: Connection,
+    thumbnail: ThumbnailContent,
     onOpen: (Long) -> Unit,
     onMedia: (Media) -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
 ) {
     val colors = LocalVVColors.current
     val result = search.result
@@ -110,7 +103,7 @@ internal fun FolderSearchResults(
         result == null && search.error -> EmptyState(
             stringResource(R.string.search_failed),
             action = stringResource(R.string.retry),
-            onAction = onRetry
+            onAction = onRetry,
         )
 
         result == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -127,13 +120,14 @@ internal fun FolderSearchResults(
                         dir.id.toString(),
                         dir.name,
                         compact = true,
-                        onClick = { onOpen(dir.id) })
+                        onClick = { onOpen(dir.id) },
+                    )
                 }
             }
             if (result.items.isNotEmpty()) {
                 item("media-title") { SectionTitle(stringResource(R.string.search_media)) }
                 items(result.items, key = { "media:${it.id}" }) { media ->
-                    SearchMediaRow(media, loader, connection) { onMedia(media) }
+                    SearchMediaRow(media, thumbnail) { onMedia(media) }
                 }
             }
             if (result.truncated) {
@@ -142,7 +136,7 @@ internal fun FolderSearchResults(
                         stringResource(R.string.search_truncated),
                         Modifier.padding(20.dp),
                         style = MaterialTheme.typography.bodySmall,
-                        color = colors.textSecondary
+                        color = colors.textSecondary,
                     )
                 }
             }
@@ -156,26 +150,21 @@ private fun SectionTitle(text: String) {
         text,
         Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
         style = MaterialTheme.typography.labelLarge,
-        color = LocalVVColors.current.textSecondary
+        color = LocalVVColors.current.textSecondary,
     )
 }
 
 @Composable
-private fun SearchMediaRow(
-    media: Media,
-    loader: ImageLoader,
-    connection: Connection,
-    onClick: () -> Unit
-) {
+private fun SearchMediaRow(media: Media, thumbnail: ThumbnailContent, onClick: () -> Unit) {
     val colors = LocalVVColors.current
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(colors.bgRaised)) {
-            Thumbnail(media, connection, loader) {}
+            thumbnail(media, false) {}
         }
         Column(Modifier.weight(1f)) {
             Text(media.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -186,7 +175,7 @@ private fun SearchMediaRow(
                     stringResource(R.string.tab_photo)
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.textSecondary
+                color = colors.textSecondary,
             )
         }
     }

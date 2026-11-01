@@ -24,7 +24,7 @@ func TestStoreConnectionPolicy(t *testing.T) {
 	s := fixture(t)
 	held := []*sql.Conn{}
 	for range 4 {
-		c, e := s.Reader.Conn(t.Context())
+		c, e := s.reader.Conn(t.Context())
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -35,7 +35,7 @@ func TestStoreConnectionPolicy(t *testing.T) {
 			c.Close()
 		}
 	}()
-	w, e := s.Writer.Conn(t.Context())
+	w, e := s.writer.Conn(t.Context())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -81,13 +81,13 @@ func TestBatchCommitAtomicity(t *testing.T) {
 	if e := write(128, 64); e == nil {
 		t.Fatal("fault accepted")
 	}
-	s.Fault = func(string) error { return errors.New("commit fault") }
+	s.fault = func(string) error { return errors.New("commit fault") }
 	if e := write(128, -1); e == nil {
 		t.Fatal("commit fault accepted")
 	}
-	s.Fault = nil
+	s.fault = nil
 	var n int
-	s.Reader.QueryRow("SELECT count(*) FROM counters WHERE name!='thumbnail_bytes'").Scan(&n)
+	s.reader.QueryRowContext(t.Context(), "SELECT count(*) FROM counters WHERE name!='thumbnail_bytes'").Scan(&n)
 	if n != 128 || s.Metrics.Rows.Load() != 128 {
 		t.Fatalf("partial write or counter: %d %d", n, s.Metrics.Rows.Load())
 	}
@@ -117,24 +117,24 @@ func TestWriterCancellation(t *testing.T) {
 }
 func TestReaderSnapshotAndRelease(t *testing.T) {
 	s := fixture(t)
-	tx, e := s.Reader.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	tx, e := s.reader.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
 	if e != nil {
 		t.Fatal(e)
 	}
 	var before int
-	tx.QueryRow("SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&before)
+	tx.QueryRowContext(t.Context(), "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&before)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if e := s.Write(ctx, 0, func(tx *sql.Tx) error {
-		_, e := tx.Exec("UPDATE counters SET value=10 WHERE name='thumbnail_bytes'")
+		_, e := tx.ExecContext(t.Context(), "UPDATE counters SET value=10 WHERE name='thumbnail_bytes'")
 		return e
 	}); e != nil {
 		t.Fatal(e)
 	}
 	var old, now int
-	tx.QueryRow("SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&old)
+	tx.QueryRowContext(t.Context(), "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&old)
 	tx.Rollback()
-	s.Reader.QueryRow("SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&now)
+	s.reader.QueryRowContext(t.Context(), "SELECT value FROM counters WHERE name='thumbnail_bytes'").Scan(&now)
 	if old != before || now != 10 {
 		t.Fatal("snapshot broken")
 	}
@@ -170,7 +170,7 @@ func TestOtherSchemaVersionRefused(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Writer.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", v)); e != nil {
+		if _, e = s.writer.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", v)); e != nil {
 			t.Fatal(e)
 		}
 		s.Close()

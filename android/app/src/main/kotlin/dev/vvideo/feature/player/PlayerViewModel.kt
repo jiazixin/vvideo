@@ -2,14 +2,13 @@ package dev.vvideo.feature.player
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.vvideo.data.library.LibraryRepository
+import dev.vvideo.data.library.LibraryData
 import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.library.PageResult
 import dev.vvideo.data.library.PageWindow
 import dev.vvideo.data.library.PagingGate
 import dev.vvideo.data.library.remote.RevisionChanged
 import dev.vvideo.data.settings.Connection
-import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
 import dev.vvideo.ui.component.pathText
@@ -19,18 +18,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class PlayerUiState(
-    val endReached: Boolean = false,
-    val pathLabel: String = "",
-    val items: List<Media> = emptyList(),
-    val error: Boolean = false,
-    val initialId: String = ""
-)
-
 /** The queue a viewer pages through: one kind of media of one folder, in its sort order. */
-class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
+internal class PlayerViewModel(private val repository: LibraryData) : ViewModel() {
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
     private var connection = Connection()
@@ -43,7 +35,7 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
     private var pageJob: Job? = null
     private var retryJob: Job? = null
 
-    /** Bumped by every cancellation; replies to an older round are dropped. */
+    /** Cancelling jobs cannot skip their finally blocks; this identity prevents old cleanup from resetting a new paging gate. */
     private var generation = 0L
     private var selectedId = ""
 
@@ -67,16 +59,20 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
         this.sort = sort
         this.kind = kind
         selectedId = id
-        _state.value = PlayerUiState(initialId = id)
+        _state.update { latest -> PlayerUiState(initialId = id) }
         val photo = kind == MediaKind.Image
         openJob = viewModelScope.launch {
             try {
-                val path =
-                    runCatching { pathText(repository.path(connection, directoryId)) }.getOrDefault(
-                        ""
-                    )
+                // The path label is optional; the viewer opens without it.
+                val path = try {
+                    pathText(repository.path(connection, directoryId))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    ""
+                }
                 ensureActive()
-                _state.value = _state.value.copy(pathLabel = path)
+                _state.update { current -> current.copy(pathLabel = path) }
                 // A photo whose queue cannot be placed (the folder is being rescanned, or
                 // the photo left it) still opens on its own, as it did before it had a queue.
                 val page = try {
@@ -89,16 +85,18 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
                 }
                 if (page == null || photo && page.items.none { it.id == id }) {
                     window.clear()
-                    _state.value =
-                        _state.value.copy(items = listOf(repository.media(connection, id)))
+                    val item = repository.media(connection, id)
+                    _state.update { it.copy(items = listOf(item)) }
                     return@launch
                 }
                 window.reset(page)
-                _state.value = _state.value.copy(items = window.items)
+                _state.update { current ->
+                    current.copy(items = window.items, endReached = window.next.isEmpty())
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _state.value = _state.value.copy(error = true)
+                _state.update { current -> current.copy(error = true) }
             }
         }
     }
@@ -115,18 +113,20 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
                 ensureActive()
                 if (round != generation) return@launch
                 result = if (page.items.isEmpty()) PageResult.Empty else PageResult.Items
-                // The server hands out a next cursor with every non-empty page; only an
-                // empty answer shows that the last loaded item ends the folder.
+                // A missing next cursor marks the last page, including an anchored
+                // queue opened on the last item. An empty response also ends that edge.
                 if (page.items.isEmpty()) {
-                    if (edge == PageEdge.Next) _state.value = _state.value.copy(endReached = true)
+                    if (edge == PageEdge.Next) _state.update { current -> current.copy(endReached = true) }
                 } else {
                     val tail = window.next
                     if (edge == PageEdge.Previous) window.prepend(page) else window.append(page)
-                    _state.value = _state.value.let {
-                        it.copy(
-                            items = window.items,
-                            endReached = it.endReached && window.next == tail
-                        )
+                    _state.update { latest ->
+                        latest.let {
+                            it.copy(
+                                items = window.items,
+                                endReached = window.next.isEmpty() || it.endReached && window.next == tail,
+                            )
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -134,7 +134,7 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
             } catch (_: RevisionChanged) {
                 if (round == generation) open(connection, directoryId, sort, selectedId, kind)
             } catch (_: Exception) {
-                if (round == generation) _state.value = _state.value.copy(error = true)
+                if (round == generation) _state.update { current -> current.copy(error = true) }
             } finally {
                 if (round == generation) gate.end(result)?.let(::page)
             }
@@ -149,14 +149,18 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
             try {
                 val refreshed = repository.media(connection, id)
                 ensureActive()
-                if (round == generation) _state.value = _state.value.copy(
-                    items = _state.value.items.map { if (it.id == id) refreshed else it },
-                    error = false
-                )
+                if (round == generation) {
+                    _state.update { current ->
+                        current.copy(
+                            items = current.items.map { if (it.id == id) refreshed else it },
+                            error = false,
+                        )
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                if (round == generation) _state.value = _state.value.copy(error = true)
+                if (round == generation) _state.update { current -> current.copy(error = true) }
             }
         }
     }
@@ -164,6 +168,6 @@ class PlayerViewModel(private val repository: LibraryRepository) : ViewModel() {
     fun leave() {
         cancelRequests()
         window.clear()
-        _state.value = PlayerUiState()
+        _state.update { latest -> PlayerUiState() }
     }
 }

@@ -56,16 +56,16 @@ private const val BULLETIN_VISIBLE_MS = 3000L
 private val ButtonShape = RoundedCornerShape(12.dp)
 private val SheetShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
 
-enum class ButtonKind { Primary, Secondary }
+internal enum class ButtonKind { Primary, Secondary }
 
 @Composable
-fun VVButton(
+internal fun VVButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     busy: Boolean = false,
-    kind: ButtonKind = ButtonKind.Primary
+    kind: ButtonKind = ButtonKind.Primary,
 ) {
     val colors = LocalVVColors.current
     val buttonColors = ButtonDefaults.buttonColors(
@@ -83,7 +83,7 @@ fun VVButton(
         modifier.heightIn(min = 50.dp),
         enabled && !busy,
         shape = ButtonShape,
-        colors = buttonColors
+        colors = buttonColors,
     ) {
         if (busy) {
             CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
@@ -94,23 +94,23 @@ fun VVButton(
 }
 
 @Composable
-fun Bulletin(message: String, modifier: Modifier = Modifier) {
+internal fun Bulletin(message: String, modifier: Modifier = Modifier) {
     Surface(
         modifier.fillMaxWidth(),
         shape = ButtonShape,
         color = BulletinBackground,
-        shadowElevation = 4.dp
+        shadowElevation = 4.dp,
     ) {
         Row(
             Modifier.heightIn(min = 52.dp).padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Icon(
                 painterResource(R.drawable.ic_info),
                 null,
                 tint = Color.White,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(22.dp),
             )
             Text(message, color = Color.White, style = MaterialTheme.typography.bodyMedium)
         }
@@ -118,7 +118,7 @@ fun Bulletin(message: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun BulletinHost(message: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+internal fun BulletinHost(message: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val dismiss by rememberUpdatedState(onDismiss)
     LaunchedEffect(message) {
         if (message != null) {
@@ -137,66 +137,67 @@ fun BulletinHost(message: String?, onDismiss: () -> Unit, modifier: Modifier = M
         message != null,
         modifier,
         enter = fadeIn(fade()) + slideInVertically(move()) { it / 2 },
-        exit = fadeOut(fade()) + slideOutVertically(move()) { it / 2 }) {
+        exit = fadeOut(fade()) + slideOutVertically(move()) { it / 2 },
+    ) {
         Bulletin(
             shown.text,
-            Modifier.navigationBarsPadding().padding(horizontal = 8.dp, vertical = 16.dp)
+            Modifier.navigationBarsPadding().padding(horizontal = 8.dp, vertical = 16.dp),
         )
     }
 }
 
 @Composable
-fun OfflineBanner(message: String = stringResource(R.string.offline_banner), onRetry: () -> Unit) {
+internal fun OfflineBanner(message: String = stringResource(R.string.offline_banner), onRetry: () -> Unit) {
     val colors = LocalVVColors.current
     Row(
         Modifier.fillMaxWidth().background(colors.bannerBackground)
             .heightIn(min = 44.dp).padding(start = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(R.drawable.ic_wifi_off),
             null,
             tint = colors.bannerContent,
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(22.dp),
         )
         Text(
             message,
             Modifier.weight(1f).padding(horizontal = 10.dp),
             color = colors.bannerContent,
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
         )
         TextButton(onClick = onRetry) {
             Text(
                 stringResource(R.string.retry),
-                color = colors.bannerContent
+                color = colors.bannerContent,
             )
         }
     }
 }
 
 @Composable
-fun EmptyState(
+internal fun EmptyState(
     title: String,
     modifier: Modifier = Modifier,
     action: String? = null,
-    onAction: () -> Unit = {}
+    onAction: () -> Unit = {},
 ) {
     val colors = LocalVVColors.current
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.widthIn(max = 280.dp).padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Box(
                 Modifier.size(72.dp).background(colors.bgRaised, CircleShape),
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_folder),
                     null,
                     tint = colors.icon,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(32.dp),
                 )
             }
             Text(title, style = MaterialTheme.typography.titleSmall, color = colors.textPrimary)
@@ -207,11 +208,11 @@ fun EmptyState(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VVBottomSheet(
+internal fun VVBottomSheet(
     title: String,
     onDismiss: () -> Unit,
     darkViewer: Boolean = false,
-    content: @Composable ColumnScope.() -> Unit
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalVVColors.current
     ModalBottomSheet(
@@ -222,26 +223,27 @@ fun VVBottomSheet(
         dragHandle = {
             Box(
                 Modifier.padding(top = 8.dp, bottom = 12.dp).size(36.dp, 4.dp)
-                    .background(colors.textTertiary, CircleShape)
+                    .background(colors.textTertiary, CircleShape),
             )
-        }) {
+        },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 title,
                 Modifier.weight(1f),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = 18.sp,
-                    lineHeight = 24.sp
-                )
+                    lineHeight = 24.sp,
+                ),
             )
             ActionIcon(
                 R.drawable.ic_close,
                 R.string.close,
                 onDismiss,
-                tint = if (darkViewer) Color.White else colors.icon
+                tint = if (darkViewer) Color.White else colors.icon,
             )
         }
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp), content = content)

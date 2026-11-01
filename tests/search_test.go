@@ -16,13 +16,12 @@ import (
 	"vvideo/internal/app"
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
-	"vvideo/internal/streaming"
 )
 
 func TestSearchFindsNamesInTheFolderSubtree(t *testing.T) {
 	index, scan, root := setup(t)
 	for _, dir := range []string{"Trip 2024/Beach days", "Trip 2024/day1", "other"} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -34,7 +33,7 @@ func TestSearchFindsNamesInTheFolderSubtree(t *testing.T) {
 		"Trip 2024/notes.txt",
 		"other/beach.mp4",
 	} {
-		if err := os.WriteFile(filepath.Join(root, file), []byte(file), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, file), []byte(file), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -98,12 +97,12 @@ func TestSearchFindsNamesInTheFolderSubtree(t *testing.T) {
 		}
 	}
 
-	server := &app.App{Config: scan.Config, Index: index, Stream: streaming.New(index, jobs.NewPriority())}
+	server := &app.App{Config: scan.Config, Index: index, Stream: app.NewStreamHandler(index, jobs.NewPriority(time.Now))}
 	for _, tc := range []struct {
 		query  string
 		status int
 	}{{"BEACH", 200}, {"", 400}} {
-		r := httptest.NewRequest("GET", fmt.Sprintf("/v1/directories/%d/search?q=%s", trip.ID, url.QueryEscape(tc.query)), nil)
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/directories/%d/search?q=%s", trip.ID, url.QueryEscape(tc.query)), nil)
 		r.Header.Set("Authorization", "Bearer fixture")
 		w := httptest.NewRecorder()
 		server.Handler().ServeHTTP(w, r)
@@ -152,11 +151,11 @@ func TestSearchLargeFolderIsCapped(t *testing.T) {
 				Kind: "video", Fingerprint: fmt.Sprint(j), Size: 1, NewVersion: true, Present: true, State: "visible",
 			})
 		}
-		if err = index.AddBatch(t.Context(), d, gen, batch, time.Now()); err != nil {
+		if err = index.AddBatch(t.Context(), library.GenerationBatch{Directory: d, Generation: gen, Entries: batch, ObservedAt: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = index.Publish(t.Context(), d, gen, "fixture", 1, func() error { return nil }); err != nil {
+	if err = index.Publish(t.Context(), library.Publication{Directory: d, Generation: gen, Identity: "fixture", Round: 1, Validate: func() error { return nil }}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {

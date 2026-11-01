@@ -32,10 +32,10 @@ private const val DEFAULT_SYSTEM_BRIGHTNESS = 128
 private const val UNKNOWN_BRIGHTNESS = 0.5f
 
 /** The level a vertical drag on a viewer edge adjusts. */
-enum class EdgeControl { Brightness, Volume }
+internal enum class EdgeControl { Brightness, Volume }
 
 /** The control for a touch at [x], or null outside both edge strips. */
-fun edgeControlAt(x: Float, width: Float): EdgeControl? = when {
+internal fun edgeControlAt(x: Float, width: Float): EdgeControl? = when {
     width <= 0f -> null
     x < width * EDGE_FRACTION -> EdgeControl.Brightness
     x > width * (1 - EDGE_FRACTION) -> EdgeControl.Volume
@@ -43,16 +43,16 @@ fun edgeControlAt(x: Float, width: Float): EdgeControl? = when {
 }
 
 /** The level after dragging [dragY] pixels (negative is up) from [start], within 0..1. */
-fun adjustedLevel(start: Float, dragY: Float, height: Float): Float {
+internal fun adjustedLevel(start: Float, dragY: Float, height: Float): Float {
     if (height <= 0f) return start.coerceIn(0f, 1f)
     return (start - dragY / (height * FULL_RANGE_FRACTION)).coerceIn(0f, 1f)
 }
 
 /** The stream volume index closest to [level] for a stream with [max] steps. */
-fun volumeIndex(level: Float, max: Int): Int = (level.coerceIn(0f, 1f) * max).roundToInt()
+internal fun volumeIndex(level: Float, max: Int): Int = (level.coerceIn(0f, 1f) * max).roundToInt()
 
 /** Percent shown for a level. */
-fun levelPercent(level: Float): Int = (level.coerceIn(0f, 1f) * 100).roundToInt()
+internal fun levelPercent(level: Float): Int = (level.coerceIn(0f, 1f) * 100).roundToInt()
 
 /**
  * Vertical drags that start in the left or right edge strip adjust brightness or
@@ -62,10 +62,10 @@ fun levelPercent(level: Float): Int = (level.coerceIn(0f, 1f) * 100).roundToInt(
  *
  * [onStart] returns the control's current level; [onAdjust] receives each new level.
  */
-fun Modifier.edgeAdjustGestures(
+internal fun Modifier.edgeAdjustGestures(
     onStart: (EdgeControl) -> Float,
     onAdjust: (EdgeControl, Float) -> Unit,
-    onEnd: () -> Unit
+    onEnd: () -> Unit,
 ): Modifier = pointerInput(Unit) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -95,7 +95,7 @@ fun Modifier.edgeAdjustGestures(
             }
             onAdjust(
                 control,
-                adjustedLevel(start, change.position.y - startY, size.height.toFloat())
+                adjustedLevel(start, change.position.y - startY, size.height.toFloat()),
             )
             change.consume()
         }
@@ -104,7 +104,7 @@ fun Modifier.edgeAdjustGestures(
 }
 
 /** Reads and sets the viewer window's brightness and the media volume. */
-class ViewerLevels(private val activity: Activity?) {
+internal class ViewerLevels(private val activity: Activity?) {
     private val audio = activity?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     /** The window's brightness, or the system brightness while the window follows it. */
@@ -115,7 +115,7 @@ class ViewerLevels(private val activity: Activity?) {
         val system = Settings.System.getInt(
             activity.contentResolver,
             Settings.System.SCREEN_BRIGHTNESS,
-            DEFAULT_SYSTEM_BRIGHTNESS
+            DEFAULT_SYSTEM_BRIGHTNESS,
         )
         return (system / SYSTEM_BRIGHTNESS_MAX.toFloat()).coerceIn(0f, 1f)
     }

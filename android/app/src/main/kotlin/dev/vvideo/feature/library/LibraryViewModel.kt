@@ -1,16 +1,17 @@
 package dev.vvideo.feature.library
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.vvideo.data.library.ChildrenWindow
-import dev.vvideo.data.library.LibraryRepository
+import dev.vvideo.data.library.LibraryData
 import dev.vvideo.data.library.PageEdge
 import dev.vvideo.data.library.PageWindow
 import dev.vvideo.data.library.anchorFallback
-import dev.vvideo.data.library.local.BookmarkEntity
+import dev.vvideo.data.library.libraryError
 import dev.vvideo.data.library.remote.RevisionChanged
-import dev.vvideo.data.library.remote.serviceStatus
 import dev.vvideo.data.settings.Connection
+import dev.vvideo.model.Bookmark
 import dev.vvideo.model.Directory
 import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
@@ -20,8 +21,8 @@ import dev.vvideo.model.SortField
 import dev.vvideo.ui.component.TimeLabels
 import dev.vvideo.ui.component.pathLabel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -29,11 +30,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Loads that finish sooner slide straight into loaded content; slower ones reveal
 // the destination with its placeholder. Tuning value, not a measured threshold.
+private const val TAG = "LibraryViewModel"
+
 private const val REVEAL_DELAY_MS = 120L
 
 /** Typing pauses this long before a search request is sent. */
@@ -48,10 +52,12 @@ private const val ALBUM_SIZE = 10
 /** No reported position: the list has not been shown since it was (re)loaded. */
 private val NO_POSITION = FolderPosition("", 0, 0)
 
-class LibraryViewModel(
-    private val repository: LibraryRepository,
+internal class LibraryViewModel(
+    private val repository: LibraryData,
     private val persistScope: CoroutineScope,
-    private val timeLabels: TimeLabels? = null
+    /** Runs album grouping and time labels off the main thread. */
+    private val default: CoroutineDispatcher,
+    private val timeLabels: TimeLabels? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LibraryUiState())
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
@@ -70,7 +76,7 @@ class LibraryViewModel(
     private var searchJob: Job? = null
     private var saveJob: Job? = null
 
-    /** Bumped by every cancellation; replies to an older round are dropped. */
+    /** Cancelling jobs cannot skip their finally blocks; this identity prevents old cleanup from resetting a new paging gate. */
     private var generation = 0L
 
     // True while another directory loads behind the still displayed page; that
@@ -84,18 +90,14 @@ class LibraryViewModel(
     // The loaded page a placeholder replaced. The windows keep its pages until
     // another directory finishes loading, so going back to it needs no request
     // and still works when the destination never loaded.
-    private class KeptPage(
-        val state: LibraryUiState,
-        val bookmark: BookmarkEntity?,
-        val position: FolderPosition
-    )
+    private class KeptPage(val state: LibraryUiState, val bookmark: Bookmark?, val position: FolderPosition)
 
     private var kept: KeptPage? = null
 
     private var paginating = false
     private var canPageNext = true
     private var canPagePrevious = true
-    private var bookmark: BookmarkEntity? = null
+    private var bookmark: Bookmark? = null
 
     private fun cancelRequests() {
         generation++
@@ -129,17 +131,17 @@ class LibraryViewModel(
         connection = newConnection
         watchRecentFolders(newConnection.id)
         openJob = viewModelScope.launch {
-            _state.value =
+            _state.update { latest ->
                 LibraryUiState(busy = true, recent = previousRecent, libraries = previousLibraries)
+            }
             try {
                 val libraries = repository.libraries(newConnection)
-                _state.value = _state.value.copy(libraries = libraries, busy = false)
+                _state.update { current -> current.copy(libraries = libraries, busy = false) }
                 if (newConnection.lastDirectory != 0L) open(newConnection.lastDirectory)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value =
-                    _state.value.copy(busy = false, error = true, errorStatus = e.serviceStatus())
+                _state.update { latest -> latest.copy(busy = false, error = true, failure = e.libraryError()) }
             }
         }
     }
@@ -147,11 +149,17 @@ class LibraryViewModel(
     private fun watchRecentFolders(connectionId: String) {
         recentJob?.cancel()
         recentJob = viewModelScope.launch {
-            repository.recentFolders(connectionId).collectLatest { records ->
-                val recent = withContext(Dispatchers.Default) {
-                    records.map { RecentFolder(it, timeLabels?.recent(it.visitedAt).orEmpty()) }
+            try {
+                repository.recentFolders(connectionId).collectLatest { records ->
+                    val recent = withContext(default) {
+                        records.map { RecentFolder(it, timeLabels?.recent(it.visitedAt).orEmpty()) }
+                    }
+                    _state.update { current -> current.copy(recent = recent) }
                 }
-                _state.value = _state.value.copy(recent = recent)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                persistenceFailed()
             }
         }
     }
@@ -162,21 +170,23 @@ class LibraryViewModel(
         val current = _state.value
         val saved = bookmark
         val reported = shownPosition.key.isNotEmpty()
-        _state.value = current.copy(
-            restore = ScrollRestore(
-                key = shownPosition.key,
-                anchor = saved?.anchor.orEmpty(),
-                offset = if (reported) shownPosition.offset else saved?.pixelOffset ?: 0,
-                width = if (reported) shownPosition.width else saved?.width ?: 0,
-                serial = current.restore.serial + 1
+        _state.update { latest ->
+            latest.copy(
+                restore = ScrollRestore(
+                    key = shownPosition.key,
+                    anchor = saved?.anchor.orEmpty(),
+                    offset = if (reported) shownPosition.offset else saved?.pixelOffset ?: 0,
+                    width = if (reported) shownPosition.width else saved?.width ?: 0,
+                    serial = current.restore.serial + 1,
+                ),
             )
-        )
+        }
     }
 
     // The notice belongs to the load that missed the anchor; resuming the page or
     // coming back from a viewer does not repeat it.
     fun anchorNoticeShown() {
-        if (_state.value.anchorMissing) _state.value = _state.value.copy(anchorMissing = false)
+        if (_state.value.anchorMissing) _state.update { current -> current.copy(anchorMissing = false) }
     }
 
     /** The first visible row [key], scrolled [offset] px into a list [width] px wide. */
@@ -184,7 +194,11 @@ class LibraryViewModel(
         if (blocked) return
         shownPosition = FolderPosition(key, offset, width)
         val index = _state.value.albums.indexOfFirst { albumKey(it) == key }
-        if (index >= 0) save(index, offset, width) else if (isFolderKey(key)) saveStart()
+        if (index >= 0) {
+            save(index, offset, width)
+        } else if (isFolderKey(key)) {
+            saveStart()
+        }
     }
 
     fun back() {
@@ -197,16 +211,18 @@ class LibraryViewModel(
         val directory = _state.value.directory ?: return
         searchJob?.cancel()
         if (query.isBlank()) {
-            _state.value = _state.value.copy(search = SearchState(query))
+            _state.update { current -> current.copy(search = SearchState(query)) }
             return
         }
-        _state.value = _state.value.copy(
-            search = _state.value.search.copy(
-                query = query,
-                busy = true,
-                error = false
+        _state.update { current ->
+            current.copy(
+                search = current.search.copy(
+                    query = query,
+                    busy = true,
+                    error = false,
+                ),
             )
-        )
+        }
         val searchConnection = connection
         searchJob = viewModelScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
@@ -218,7 +234,7 @@ class LibraryViewModel(
                 _state.value.search.copy(busy = false, error = true)
             }
             if (_state.value.directory?.id == directory.id && _state.value.search.query == query) {
-                _state.value = _state.value.copy(search = outcome)
+                _state.update { current -> current.copy(search = outcome) }
             }
         }
     }
@@ -229,20 +245,19 @@ class LibraryViewModel(
         flush()
         cancelRequests()
         forgetShownFolder()
-        _state.value =
-            LibraryUiState(libraries = _state.value.libraries, recent = _state.value.recent)
-        viewModelScope.launch { repository.setLastDirectory(0) }
+        _state.update { latest -> LibraryUiState(libraries = latest.libraries, recent = latest.recent) }
+        viewModelScope.launch { persist { repository.setLastDirectory(0) } }
         // The list stays shown; the reply refreshes library health or reports the
         // server unreachable, instead of the state from before the folder opened.
         val shown = connection
         openJob = viewModelScope.launch {
             try {
                 val libraries = repository.libraries(shown)
-                _state.value = _state.value.copy(libraries = libraries, error = false, errorStatus = 0)
+                _state.update { current -> current.copy(libraries = libraries, error = false, failure = null) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
+                _state.update { current -> current.copy(error = true, failure = e.libraryError()) }
             }
         }
     }
@@ -256,7 +271,7 @@ class LibraryViewModel(
         requestedSort: Sort? = null,
         refresh: Boolean = false,
         filter: MediaKind? = null,
-        fromStart: Boolean = false
+        fromStart: Boolean = false,
     ) {
         val left = shownPosition
         val restore = requestedSort == null && filter == null && !fromStart
@@ -267,8 +282,9 @@ class LibraryViewModel(
         cancelRequests()
         shownPosition = NO_POSITION
         // Opening any folder, including one found by a search, ends the search.
-        if (_state.value.search != SearchState()) _state.value =
-            _state.value.copy(search = SearchState())
+        if (_state.value.search != SearchState()) {
+            _state.update { latest -> latest.copy(search = SearchState()) }
+        }
         kept?.let { page ->
             if (page.state.directory?.id == id && restore && !refresh) {
                 restoreKept(page)
@@ -278,19 +294,23 @@ class LibraryViewModel(
         loading = true
         val origin = _state.value
         val leaving = origin.directory?.id != id
-        if (!leaving) _state.value = origin.copy(busy = true, error = false, filter = filter)
+        if (!leaving) _state.update { latest -> origin.copy(busy = true, error = false, filter = filter) }
         openJob = viewModelScope.launch {
             // The displayed page stays intact while another directory loads; only a slow
             // load reveals the destination early, carrying its own first-load placeholder.
             val reveal = if (leaving) revealLater(origin, id, left) else null
-            val saved = if (refresh && bookmark?.directory == id) bookmark else repository.bookmark(
-                connection.id,
-                id
-            )
-            val sort = requestedSort ?: saved?.let {
-                Sort(SortField.fromWire(it.sort), SortDirection.fromWire(it.direction))
-            } ?: Sort()
             try {
+                val saved = if (refresh && bookmark?.directory == id) {
+                    bookmark
+                } else {
+                    repository.bookmark(
+                        connection.id,
+                        id,
+                    )
+                }
+                val sort = requestedSort ?: saved?.let {
+                    Sort(SortField.fromWire(it.sort), SortDirection.fromWire(it.direction))
+                } ?: Sort()
                 val first =
                     repository.firstPage(connection, id, sort, if (restore) saved else null, filter)
                 val subfolders = repository.children(connection, id)
@@ -307,40 +327,46 @@ class LibraryViewModel(
                 kept = null
                 canPageNext = true
                 canPagePrevious = first.previous.isNotEmpty()
-                bookmark = if (requestedSort == null && saved != null) saved else BookmarkEntity(
-                    connection.id,
-                    id,
-                    first.directory.libraryId,
-                    sort.field.wire,
-                    sort.direction.wire
-                )
+                bookmark = if (requestedSort == null && saved != null) {
+                    saved
+                } else {
+                    Bookmark(
+                        connection.id,
+                        id,
+                        first.directory.libraryId,
+                        sort.field.wire,
+                        sort.direction.wire,
+                    )
+                }
                 loading = false
                 val current = _state.value
-                _state.value = current.copy(
-                    directory = first.directory,
-                    filter = filter,
-                    subfolders = Subfolders(subfolders.items, subfolders.next, subfolders.previous),
-                    pageBusy = false,
-                    path = path,
-                    pathLabel = pathLabel(path),
-                    sort = sort,
-                    hasMedia = first.items.isNotEmpty() || (filter != null && current.hasMedia),
-                    hasPrevious = !mediaWindow.atStart,
-                    albums = albums,
-                    busy = false,
-                    error = false,
-                    errorStatus = 0,
-                    healthy = first.healthy,
-                    restore = ScrollRestore(
-                        key = returnedTo?.key.orEmpty(),
-                        anchor = if (restore) saved?.anchor.orEmpty() else "",
-                        offset = returnedTo?.offset ?: if (restore) saved?.pixelOffset ?: 0 else 0,
-                        width = returnedTo?.width ?: saved?.width ?: 0,
-                        serial = current.restore.serial + 1
-                    ),
-                    anchorMissing = restore && anchorMoved(saved?.anchor.orEmpty(), first)
-                )
-                recordVisit(id, first.directory, path, first.healthy)
+                _state.update { latest ->
+                    latest.copy(
+                        directory = first.directory,
+                        filter = filter,
+                        subfolders = Subfolders(subfolders.items, subfolders.next, subfolders.previous),
+                        pageBusy = false,
+                        path = path,
+                        pathLabel = pathLabel(path),
+                        sort = sort,
+                        hasMedia = first.items.isNotEmpty() || (filter != null && current.hasMedia),
+                        hasPrevious = !mediaWindow.atStart,
+                        albums = albums,
+                        busy = false,
+                        error = false,
+                        failure = null,
+                        healthy = first.healthy,
+                        restore = ScrollRestore(
+                            key = returnedTo?.key.orEmpty(),
+                            anchor = if (restore) saved?.anchor.orEmpty() else "",
+                            offset = returnedTo?.offset ?: if (restore) saved?.pixelOffset ?: 0 else 0,
+                            width = returnedTo?.width ?: saved?.width ?: 0,
+                            serial = current.restore.serial + 1,
+                        ),
+                        anchorMissing = restore && anchorMoved(saved?.anchor.orEmpty(), first),
+                    )
+                }
+                persist { recordVisit(id, first.directory, path, first.healthy) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -351,10 +377,11 @@ class LibraryViewModel(
                 // back moves up a level instead of staying on the folder being left.
                 val pending = if (leaving && _state.value.directory?.id != id) {
                     pendingDirectory(origin, id)
-                } else null
+                } else {
+                    null
+                }
                 if (pending != null) reveal(origin, pending, left)
-                _state.value =
-                    _state.value.copy(busy = false, error = true, errorStatus = e.serviceStatus())
+                _state.update { latest -> latest.copy(busy = false, error = true, failure = e.libraryError()) }
             }
         }
     }
@@ -364,16 +391,12 @@ class LibraryViewModel(
      * enough to notice, keeping [origin] to return to. A destination that cannot be
      * named yet marks the displayed page busy instead.
      */
-    private fun CoroutineScope.revealLater(
-        origin: LibraryUiState,
-        id: Long,
-        left: FolderPosition
-    ): Job {
+    private fun CoroutineScope.revealLater(origin: LibraryUiState, id: Long, left: FolderPosition): Job {
         val pending = pendingDirectory(origin, id)
         return launch {
             delay(REVEAL_DELAY_MS)
             if (pending == null) {
-                _state.value = _state.value.copy(busy = true)
+                _state.update { current -> current.copy(busy = true) }
                 return@launch
             }
             reveal(origin, pending, left)
@@ -388,16 +411,11 @@ class LibraryViewModel(
         }
         // The placeholder was built from the state at the tap; lists refreshed since then stay.
         bookmark = null
-        _state.value =
-            _state.value.let { pending.copy(recent = it.recent, libraries = it.libraries) }
+        _state.update { latest -> latest.let { pending.copy(recent = it.recent, libraries = it.libraries) } }
     }
 
     /** The path down to [directory], from the [known] path when it leads there, else from the server. */
-    private suspend fun resolvePath(
-        known: List<Directory>,
-        id: Long,
-        directory: Directory
-    ): List<Directory> {
+    private suspend fun resolvePath(known: List<Directory>, id: Long, directory: Directory): List<Directory> {
         val existing = known.indexOfFirst { it.id == id }
         val path = when {
             existing >= 0 -> known.take(existing + 1)
@@ -410,23 +428,18 @@ class LibraryViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // Browsing remains available if an older service has no directory endpoint.
+            // Path labels are optional when the path request fails temporarily.
             path
         }
     }
 
     /** Records the opened folder for the recent list and, while it is reachable, for a cold start. */
-    private suspend fun recordVisit(
-        id: Long,
-        directory: Directory,
-        path: List<Directory>,
-        healthy: Boolean
-    ) {
+    private suspend fun recordVisit(id: Long, directory: Directory, path: List<Directory>, healthy: Boolean) {
         val record = checkNotNull(bookmark).copy(
             name = directory.name,
             pathLabel = pathLabel(path),
             visitedAt = System.currentTimeMillis(),
-            hiddenFromRecent = false
+            hiddenFromRecent = false,
         )
         bookmark = record
         repository.recordVisit(record)
@@ -445,15 +458,12 @@ class LibraryViewModel(
         kept = null
         bookmark = page.bookmark
         shownPosition = page.position
-        _state.value = restoredPage(page.state, _state.value)
+        _state.update { latest -> restoredPage(page.state, latest) }
         resume()
     }
 
-    private suspend fun albums(
-        sort: Sort = _state.value.sort,
-        items: List<Media> = mediaWindow.items
-    ) =
-        withContext(Dispatchers.Default) {
+    private suspend fun albums(sort: Sort = _state.value.sort, items: List<Media> = mediaWindow.items) =
+        withContext(default) {
             datedAlbums(items.chunked(ALBUM_SIZE).map { Album(it) }, sort, timeLabels)
         }
 
@@ -470,7 +480,7 @@ class LibraryViewModel(
                 it.id,
                 current.sort,
                 filter = current.filter,
-                fromStart = true
+                fromStart = true,
             )
         }
     }
@@ -484,7 +494,7 @@ class LibraryViewModel(
         val cursor = if (previous) mediaWindow.previous else mediaWindow.next
         if (cursor.isEmpty()) return
         paginating = true
-        _state.value = _state.value.copy(pageBusy = true)
+        _state.update { current -> current.copy(pageBusy = true) }
         val round = generation
         val sort = _state.value.sort
         pageJob = viewModelScope.launch {
@@ -495,7 +505,7 @@ class LibraryViewModel(
                     sort,
                     cursor,
                     edge,
-                    _state.value.filter
+                    _state.value.filter,
                 )
                 ensureActive()
                 if (round != generation) return@launch
@@ -503,7 +513,7 @@ class LibraryViewModel(
                     if (previous) {
                         canPagePrevious = false
                         mediaWindow.reachedStart()
-                        _state.value = _state.value.copy(hasPrevious = false)
+                        _state.update { current -> current.copy(hasPrevious = false) }
                     } else {
                         canPageNext = false
                     }
@@ -516,23 +526,25 @@ class LibraryViewModel(
                         canPagePrevious = true
                     }
                     val albums = albums()
-                    _state.value = _state.value.copy(
-                        albums = albums,
-                        hasPrevious = !mediaWindow.atStart,
-                        error = false,
-                        errorStatus = 0
-                    )
+                    _state.update { current ->
+                        current.copy(
+                            albums = albums,
+                            hasPrevious = !mediaWindow.atStart,
+                            error = false,
+                            failure = null,
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: RevisionChanged) {
                 open(directory.id, refresh = true, filter = _state.value.filter)
             } catch (e: Exception) {
-                _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
+                _state.update { current -> current.copy(error = true, failure = e.libraryError()) }
             } finally {
                 if (round == generation) {
                     paginating = false
-                    _state.value = _state.value.copy(pageBusy = false)
+                    _state.update { current -> current.copy(pageBusy = false) }
                 }
             }
         }
@@ -546,32 +558,33 @@ class LibraryViewModel(
         if (cursor.isEmpty() || subfolderJob?.isActive == true || blocked) return
         val round = generation
         subfolderJob = viewModelScope.launch {
-            _state.value = _state.value.copy(subfolders = _state.value.subfolders.copy(busy = true))
+            _state.update { current -> current.copy(subfolders = current.subfolders.copy(busy = true)) }
             try {
                 val page = repository.children(connection, directory.id, cursor, edge)
                 ensureActive()
                 if (round == generation) {
                     val exhausted = page.items.isEmpty()
                     if (!exhausted) subfolderWindow.add(page, edge)
-                    _state.value = _state.value.copy(
-                        subfolders = _state.value.subfolders.copy(
-                            items = subfolderWindow.items,
-                            next = if (edge == PageEdge.Next && exhausted) "" else subfolderWindow.next,
-                            previous = if (edge == PageEdge.Previous && exhausted) "" else subfolderWindow.previous
-                        ),
-                        error = false
-                    )
+                    _state.update { current ->
+                        current.copy(
+                            subfolders = current.subfolders.copy(
+                                items = subfolderWindow.items,
+                                next = if (edge == PageEdge.Next && exhausted) "" else subfolderWindow.next,
+                                previous = if (edge == PageEdge.Previous && exhausted) "" else subfolderWindow.previous,
+                            ),
+                            error = false,
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (round == generation) {
-                    _state.value = _state.value.copy(error = true, errorStatus = e.serviceStatus())
+                    _state.update { current -> current.copy(error = true, failure = e.libraryError()) }
                 }
             } finally {
                 if (round == generation) {
-                    _state.value =
-                        _state.value.copy(subfolders = _state.value.subfolders.copy(busy = false))
+                    _state.update { latest -> latest.copy(subfolders = latest.subfolders.copy(busy = false)) }
                 }
             }
         }
@@ -592,7 +605,7 @@ class LibraryViewModel(
             pixelOffset = offset,
             width = width,
             revision = revision,
-            savedAt = System.currentTimeMillis()
+            savedAt = System.currentTimeMillis(),
         )
         scheduleSave()
     }
@@ -614,15 +627,17 @@ class LibraryViewModel(
             pixelOffset = 0,
             width = 0,
             revision = current.directory?.revision ?: 0L,
-            savedAt = System.currentTimeMillis()
+            savedAt = System.currentTimeMillis(),
         )
         scheduleSave()
     }
 
     private fun scheduleSave() {
-        if (saveJob?.isActive != true) saveJob = persistScope.launch {
-            delay(BOOKMARK_SAVE_DELAY_MS)
-            bookmark?.let { repository.saveBookmark(it) }
+        if (saveJob?.isActive != true) {
+            saveJob = persistScope.launch {
+                delay(BOOKMARK_SAVE_DELAY_MS)
+                bookmark?.let { record -> persist { repository.saveBookmark(record) } }
+            }
         }
     }
 
@@ -631,7 +646,7 @@ class LibraryViewModel(
         if (_state.value.filter != null) return
         val record = bookmark ?: return
         saveJob?.cancel()
-        persistScope.launch { repository.saveBookmark(record) }
+        persistScope.launch { persist { repository.saveBookmark(record) } }
     }
 
     fun sort(sort: Sort) {
@@ -642,16 +657,35 @@ class LibraryViewModel(
             return
         }
         val cleared =
-            BookmarkEntity(
+            Bookmark(
                 connection.id,
                 directory.id,
                 directory.libraryId,
                 sort.field.wire,
-                sort.direction.wire
+                sort.direction.wire,
             )
         bookmark = cleared
-        persistScope.launch { repository.saveBookmark(cleared) }
+        persistScope.launch { persist { repository.saveBookmark(cleared) } }
         open(directory.id, sort)
+    }
+
+    private suspend fun persist(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            persistenceFailed()
+        }
+    }
+
+    private fun persistenceFailed() {
+        Log.w(TAG, "bookmark_persistence_failed")
+        _state.update { it.copy(persistenceFailed = true) }
+    }
+
+    fun persistenceNoticeShown() {
+        _state.update { it.copy(persistenceFailed = false) }
     }
 
     override fun onCleared() {

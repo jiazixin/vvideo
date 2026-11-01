@@ -7,8 +7,7 @@ import org.junit.Test
 
 class TelegramGroupedLayoutTest {
     // The test phone: 1440 px wide portrait at density 3.5.
-    private fun layout(vararg ratios: Float) =
-        TelegramGroupedLayout.calculate(ratios.toList(), 3.5f, 1440f)
+    private fun layout(vararg ratios: Float) = TelegramGroupedLayout.calculate(ratios.toList(), 3.5f, 1440f)
 
     private fun rows(positions: List<GroupedPosition>) =
         positions.groupBy { it.minY }.toSortedMap().values.map { it.size }
@@ -58,10 +57,12 @@ class TelegramGroupedLayoutTest {
 
     @Test
     fun everyItemIsPlacedOnceWithPositiveSize() {
-        for (count in 1..10) for (shape in listOf(.3f, .75f, 1f, 1.33f, 1.78f, 3f)) {
-            val positions = layout(*FloatArray(count) { if (it % 2 == 0) shape else 1f })
-            assertEquals(count, positions.size)
-            assertTrue(positions.all { it.pw > 0 && it.ph > 0f })
+        for (count in 1..10) {
+            for (shape in listOf(.3f, .75f, 1f, 1.33f, 1.78f, 3f)) {
+                val positions = layout(*FloatArray(count) { if (it % 2 == 0) shape else 1f })
+                assertEquals(count, positions.size)
+                assertTrue(positions.all { it.pw > 0 && it.ph > 0f })
+            }
         }
         assertTrue(layout().isEmpty())
     }

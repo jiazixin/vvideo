@@ -40,9 +40,29 @@ type Job struct {
 
 // Queue stores jobs in the jobs table and leases them to workers.
 type Queue struct {
-	Store *storage.Store
-	Index *library.Index
-	Now   func() time.Time
+	Store  *storage.Store
+	Index  *library.Index
+	now    func() time.Time
+	Logger *slog.Logger // nil discards
+}
+
+// NewQueue constructs a queue without starting workers. now is immutable and
+// must be safe for concurrent calls; production passes time.Now.
+func NewQueue(index *library.Index, logger *slog.Logger, now func() time.Time) *Queue {
+	if now == nil {
+		now = time.Now
+	}
+	return &Queue{Store: index.Store, Index: index, Logger: logger, now: now}
+}
+
+// Now returns the clock shared by the queue and its probe/thumbnail workers.
+func (q *Queue) Now() time.Time { return q.now() }
+
+func (q *Queue) logger() *slog.Logger {
+	if q.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return q.Logger
 }
 
 // currentJob is an SQL condition on the job row j: it belongs to a published
@@ -73,9 +93,9 @@ const currentJob = `EXISTS(
 // queued foreground jobs instead of scanning the backlog for priority>0.
 func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
 	now := q.Now().UnixMilli()
-	j, err := q.candidate(ctx, "jobs j INDEXED BY job_foreground", " AND j.priority>0", kind, now)
+	j, err := q.candidate(ctx, candidateQuery{from: "jobs j INDEXED BY job_foreground", filter: " AND j.priority>0", kind: kind, now: now})
 	if errors.Is(err, sql.ErrNoRows) {
-		j, err = q.candidate(ctx, "jobs j", "", kind, now)
+		j, err = q.candidate(ctx, candidateQuery{from: "jobs j", kind: kind, now: now})
 	}
 	if err != nil {
 		return j, err
@@ -98,9 +118,15 @@ func (q *Queue) Claim(ctx context.Context, kind string) (Job, error) {
 }
 
 // candidate finds the next due job of kind on a read connection.
-func (q *Queue) candidate(ctx context.Context, from, filter, kind string, now int64) (Job, error) {
+type candidateQuery struct {
+	from, filter, kind string
+	now                int64
+}
+
+func (q *Queue) candidate(ctx context.Context, query candidateQuery) (Job, error) {
+	from, filter, kind, now := query.from, query.filter, query.kind, query.now
 	var j Job
-	err := q.Store.Reader.QueryRowContext(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM `+from+` WHERE j.kind=? AND j.state='queued' AND j.due<=?`+filter+` AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, now).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
+	err := q.Store.QueryRow(ctx, `SELECT j.id,j.media_id,j.version,j.kind,j.parameters,j.fingerprint,j.first_observed,j.attempts FROM `+from+` WHERE j.kind=? AND j.state='queued' AND j.due<=?`+filter+` AND `+currentJob+` ORDER BY j.due,j.id LIMIT 1`, kind, now).Scan(&j.ID, &j.MediaID, &j.Version, &j.Kind, &j.Parameters, &j.Fingerprint, &j.FirstObserved, &j.Attempts)
 	return j, err
 }
 
@@ -115,7 +141,7 @@ type Backlog struct {
 // poll it at most every few minutes rather than per job or request.
 func (q *Queue) Backlog(ctx context.Context, kind string) (Backlog, error) {
 	var b Backlog
-	rows, err := q.Store.Reader.QueryContext(ctx, "SELECT state,count(*) FROM jobs WHERE kind=? GROUP BY state", kind)
+	rows, err := q.Store.Query(ctx, "SELECT state,count(*) FROM jobs WHERE kind=? GROUP BY state", kind)
 	if err != nil {
 		return b, err
 	}
@@ -201,14 +227,20 @@ func (q *Queue) Worker(ctx context.Context, kind string, run func(context.Contex
 	wait := idlePoll
 	for ctx.Err() == nil {
 		claimed, err := q.runNext(ctx, kind, run)
-		if claimed {
+		if claimed && err == nil {
 			wait = idlePoll
 			continue
 		}
 		if err != nil && ctx.Err() == nil {
 			// A failing database is retried with backoff, logged once per step.
 			wait = min(wait*2, maxClaimBackoff)
-			slog.Warn("job_claim_failed", "kind", kind, "retry_in", wait.String(), "error", err.Error())
+			event := "job_claim_failed"
+			if claimed {
+				event = "job_state_update_failed"
+			}
+			q.logger().Warn(event, "kind", kind, "retry_in_ms", wait.Milliseconds(), "error", err)
+		} else if err != nil {
+			q.logger().Warn("job_state_update_failed", "kind", kind, "error", err)
 		} else if err == nil {
 			wait = idlePoll
 		}
@@ -219,8 +251,7 @@ func (q *Queue) Worker(ctx context.Context, kind string, run func(context.Contex
 	}
 }
 
-// runNext reports whether it claimed a job, or the claim error other than
-// "nothing to do".
+// runNext reports whether it claimed a job and any claim or outcome-write error.
 func (q *Queue) runNext(ctx context.Context, kind string, run func(context.Context, Job) error) (bool, error) {
 	j, err := q.Claim(ctx, kind)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -229,25 +260,30 @@ func (q *Queue) runNext(ctx context.Context, kind string, run func(context.Conte
 	if err != nil {
 		return false, err
 	}
-	if e, err := q.Index.Media(ctx, j.MediaID); err != nil || e.Version != j.Version {
-		q.Finish(ctx, j, "stale", "version_unavailable")
-		return true, nil
+	return true, q.runClaimed(ctx, j, run)
+}
+
+func (q *Queue) runClaimed(ctx context.Context, j Job, run func(context.Context, Job) error) error {
+	e, err := q.Index.Media(ctx, j.MediaID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && e.Version != j.Version) {
+		err = library.ErrConflict
+	} else if err == nil {
+		err = run(ctx, j)
 	}
-	if err = run(ctx, j); err == nil {
-		return true, nil
+	if err == nil {
+		return nil
 	}
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
 	switch {
 	case ctx.Err() != nil:
-		q.Release(finishCtx, j)
+		return q.Release(finishCtx, j)
 	case errors.Is(err, library.ErrConflict):
-		q.Finish(finishCtx, j, "stale", "version_changed")
+		return q.Finish(finishCtx, j, "stale", "version_changed")
 	default:
 		if j.Attempts >= MaxAttempts {
-			slog.Warn("job_failed", "kind", kind, "media_id", j.MediaID, "attempts", j.Attempts, "error", err.Error())
+			q.logger().Warn("job_failed", "kind", j.Kind, "media_id", j.MediaID, "attempts", j.Attempts, "error", err)
 		}
-		q.Finish(finishCtx, j, "retry", kind+"_failed")
+		return q.Finish(finishCtx, j, "retry", j.Kind+"_failed")
 	}
-	return true, nil
 }

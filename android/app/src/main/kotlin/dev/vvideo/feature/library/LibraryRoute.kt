@@ -6,45 +6,36 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.ImageLoader
-import dev.vvideo.data.library.PageEdge
+import dev.vvideo.R
 import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
 import dev.vvideo.ui.theme.LocalAnimations
 import dev.vvideo.ui.theme.PageMotion
 import dev.vvideo.ui.theme.pageSlide
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.sample
-
-/** The list position is reported to the ViewModel at most this often while it moves. */
-private const val VIEWPORT_SAMPLE_MS = 200L
 
 @OptIn(FlowPreview::class, ExperimentalActivityApi::class)
 @Composable
-fun LibraryRoute(
+internal fun LibraryRoute(
     vm: LibraryViewModel,
     connection: Connection,
     loader: ImageLoader,
@@ -52,25 +43,28 @@ fun LibraryRoute(
     onMedia: (Media) -> Unit,
     onInteraction: (Boolean) -> Unit,
     onDetails: (Media) -> Unit = {},
-    onConnection: () -> Unit = onSettings
+    onConnection: () -> Unit = onSettings,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val list = key(state.directory?.id) { rememberLazyListState() }
+    val snackbar = remember { SnackbarHostState() }
+    val persistenceMessage = stringResource(R.string.bookmark_persistence_failed)
+    LaunchedEffect(state.persistenceFailed) {
+        if (state.persistenceFailed) {
+            snackbar.showSnackbar(persistenceMessage)
+            vm.persistenceNoticeShown()
+        }
+    }
     var predictive by remember { mutableFloatStateOf(0f) }
     val animations = LocalAnimations.current
     PredictiveBackHandler(state.directory != null) { events ->
         try {
             events.collect { predictive = it.progress }
             vm.back()
-        } catch (_: CancellationException) {
         } finally {
             predictive = 0f
         }
     }
     val owner = LocalLifecycleOwner.current
-    val width =
-        with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.roundToPx() }
-    var restoring by remember { mutableStateOf(false) }
     // Draw order of the two pages in a transition: a page entered by going back
     // lies beneath the one it replaces. Only the latest pair is retained.
     val layers = remember { mutableMapOf<Long?, Float>() }
@@ -90,7 +84,7 @@ fun LibraryRoute(
         }
         shown.parentId = directory?.parentId
     }
-    LaunchedEffect(connection.id, connection.token, width) {
+    LaunchedEffect(connection.id, connection.token) {
         vm.connect(connection)
         vm.resume()
     }
@@ -103,47 +97,6 @@ fun LibraryRoute(
             onInteraction(false)
             owner.lifecycle.removeObserver(observer)
         }
-    }
-    LaunchedEffect(state.restore.serial, list) {
-        restoring = true
-        val restore = state.restore
-        val keys = libraryKeys(state)
-        // A position whose row is gone starts the list at its top, not part way into it.
-        val index = restoreIndex(keys, state.albums, restore.key, restore.anchor)
-        list.scrollToItem(
-            index ?: 0,
-            if (index != null && restore.width == width) restore.offset else 0
-        )
-        restoring = false
-    }
-    LaunchedEffect(list, width) {
-        snapshotFlow {
-            list.layoutInfo.visibleItemsInfo.let { items ->
-                items.firstOrNull { isPositionKey(it.key.toString()) } ?: items.firstOrNull()
-            }?.let { it.key to -it.offset }
-        }.sample(VIEWPORT_SAMPLE_MS).collect { visible ->
-            if (!restoring && visible != null) {
-                vm.reportViewport(visible.first.toString(), visible.second.coerceAtLeast(0), width)
-            }
-        }
-    }
-    LaunchedEffect(list) {
-        snapshotFlow { list.isScrollInProgress }.distinctUntilChanged().collect(onInteraction)
-    }
-    // hasPrevious decides whether the subfolder rows are listed, so it restarts this too.
-    LaunchedEffect(list, state.albums, state.subfolders.items, state.hasPrevious) {
-        snapshotFlow { list.layoutInfo.visibleItemsInfo.map { it.key } }.distinctUntilChanged()
-            .collect { keys ->
-                val subfolders = state.subfolders.items
-                if (subfoldersShown(state) && subfolders.isNotEmpty()) {
-                    if (keys.contains(folderKey(subfolders.last().id))) vm.moreSubfolders(PageEdge.Next)
-                    if (keys.contains(folderKey(subfolders.first().id))) vm.moreSubfolders(PageEdge.Previous)
-                }
-                if (state.albums.isNotEmpty()) {
-                    if (keys.contains(albumKey(state.albums.last()))) vm.page(PageEdge.Next)
-                    if (keys.contains(albumKey(state.albums.first()))) vm.page(PageEdge.Previous)
-                }
-            }
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         // AnimatedContent discards the page being left when its target changes during
@@ -171,7 +124,7 @@ fun LibraryRoute(
                 }
                 pageSlide(returning, durationMs).apply { targetContentZIndex = layer }
             },
-            label = "directory"
+            label = "directory",
         ) { id ->
             // The current page follows live state and the list that restoration,
             // pagination and viewport persistence observe; a page being left keeps
@@ -180,19 +133,20 @@ fun LibraryRoute(
             val page = remember {
                 object {
                     var latest = state
-                    var shownList = list
                 }
             }
             if (state.directory?.id == id) {
                 page.latest = state
-                page.shownList = list
             }
             val screen = page.latest
             LibraryScreen(
-                state = screen,
-                loader = loader,
-                connection = connection,
-                list = page.shownList,
+                state = screen.copy(active = state.directory?.id == id),
+                thumbnail = { item, label, loaded -> Thumbnail(item, connection, loader, label, loaded) },
+                onViewport = vm::reportViewport,
+                onResize = vm::resume,
+                onInteraction = onInteraction,
+                onPage = vm::page,
+                onSubfolderPage = vm::moreSubfolders,
                 onSettings = onSettings,
                 onBack = vm::back,
                 onOpen = vm::openDirectory,
@@ -207,9 +161,10 @@ fun LibraryRoute(
                 onDetails = onDetails,
                 onConnection = onConnection,
                 onAnchorNotice = vm::anchorNoticeShown,
-                onSearch = vm::search
+                onSearch = vm::search,
             )
         }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 }
 

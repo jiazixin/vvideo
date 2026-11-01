@@ -1,7 +1,7 @@
 package dev.vvideo.data.library
 
 /** How an edge request ended. */
-enum class PageResult {
+internal enum class PageResult {
     /** The page had items. */
     Items,
 
@@ -9,7 +9,7 @@ enum class PageResult {
     Empty,
 
     /** The request failed; both edges stay as they were. */
-    Failed
+    Failed,
 }
 
 /**
@@ -17,7 +17,7 @@ enum class PageResult {
  * so the opposite edge asked for while a request runs is kept and handed back
  * when that request ends instead of being dropped for good.
  */
-class PagingGate {
+internal class PagingGate {
     private var running: PageEdge? = null
     private var waiting: PageEdge? = null
     private var nextOpen = true
@@ -56,11 +56,19 @@ class PagingGate {
         val edge = running ?: return null
         running = null
         when (result) {
-            PageResult.Items -> if (edge == PageEdge.Previous) nextOpen = true else previousOpen =
-                true
+            PageResult.Items -> if (edge == PageEdge.Previous) {
+                nextOpen = true
+            } else {
+                previousOpen =
+                    true
+            }
 
-            PageResult.Empty -> if (edge == PageEdge.Previous) previousOpen = false else nextOpen =
-                false
+            PageResult.Empty -> if (edge == PageEdge.Previous) {
+                previousOpen = false
+            } else {
+                nextOpen =
+                    false
+            }
 
             PageResult.Failed -> Unit
         }

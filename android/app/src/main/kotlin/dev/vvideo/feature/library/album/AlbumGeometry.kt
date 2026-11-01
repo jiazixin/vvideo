@@ -12,14 +12,14 @@ import kotlin.math.ceil
 import kotlin.math.max
 
 /** One item's rectangle in px, inside an album that starts at 0,0. */
-data class AlbumCell(
+internal data class AlbumCell(
     val index: Int,
     val x: Float,
     val y: Float,
     val width: Float,
     val height: Float,
     /** POSITION_FLAG_* bits: which album edges this cell touches. */
-    val flags: Int
+    val flags: Int,
 ) {
     val atLeft get() = (flags and POSITION_FLAG_LEFT) != 0
     val atRight get() = (flags and POSITION_FLAG_RIGHT) != 0
@@ -28,9 +28,9 @@ data class AlbumCell(
 }
 
 /** An album's cells and its size, in px. */
-data class AlbumGeometry(val cells: List<AlbumCell>, val width: Float, val height: Float)
+internal data class AlbumGeometry(val cells: List<AlbumCell>, val width: Float, val height: Float)
 
-object AlbumGeometryCalculator {
+internal object AlbumGeometryCalculator {
     /**
      * Places [positions] the way Telegram does on a [screenWidth]×[screenHeight] px
      * screen, scales the album to [albumWidth] px and leaves [gap] px between cells.
@@ -40,13 +40,15 @@ object AlbumGeometryCalculator {
         screenWidth: Float,
         screenHeight: Float,
         albumWidth: Float,
-        gap: Float
+        gap: Float,
     ): AlbumGeometry {
-        if (positions.isEmpty() || albumWidth <= 0f) return AlbumGeometry(
-            emptyList(),
-            albumWidth,
-            0f
-        )
+        if (positions.isEmpty() || albumWidth <= 0f) {
+            return AlbumGeometry(
+                emptyList(),
+                albumWidth,
+                0f,
+            )
+        }
         val dWidth = screenWidth
         val maxHeight = max(screenWidth, screenHeight) * 0.5f
         fun units(value: Int) = ceil(value / 1000.0f * dWidth)

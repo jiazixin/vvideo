@@ -7,7 +7,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -17,18 +16,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import dev.vvideo.model.ThemeMode
 
-@Immutable
-data class VVColors(
-    val bgPage: Color, val bgSurface: Color, val bgRaised: Color, val bgInput: Color,
-    val bgPlaceholder: Color, val pinnedRow: Color, val divider: Color,
-    val textPrimary: Color, val textSecondary: Color, val textTertiary: Color, val icon: Color,
-    val accentText: Color, val accentFill: Color, val accentSoft: Color,
-    val online: Color, val warn: Color, val error: Color,
-    val datePill: Color, val datePillText: Color,
-    val bannerBackground: Color, val bannerContent: Color, val isDark: Boolean,
+internal data class VVColors(
+    val bgPage: Color,
+    val bgSurface: Color,
+    val bgRaised: Color,
+    val bgInput: Color,
+    val bgPlaceholder: Color,
+    val pinnedRow: Color,
+    val divider: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    val icon: Color,
+    val accentText: Color,
+    val accentFill: Color,
+    val accentSoft: Color,
+    val online: Color,
+    val warn: Color,
+    val error: Color,
+    val datePill: Color,
+    val datePillText: Color,
+    val bannerBackground: Color,
+    val bannerContent: Color,
+    val isDark: Boolean,
 )
 
-val NightBlue = VVColors(
+internal val NightBlue = VVColors(
     bgPage = Color(0xFF0E1621), bgSurface = Color(0xFF17212B), bgRaised = Color(0xFF1E2C3A),
     bgInput = Color(0xFF111A23), bgPlaceholder = Color(0xFF1A2531), pinnedRow = Color(0xFF1A2531),
     divider = Color(0xFF222F3C), textPrimary = Color(0xFFE9EEF3), textSecondary = Color(0xFF8B9BAB),
@@ -39,7 +52,7 @@ val NightBlue = VVColors(
     bannerBackground = Color(0xFF3A2F17), bannerContent = Color(0xFFF1D59C), isDark = true,
 )
 
-val Day = VVColors(
+internal val Day = VVColors(
     bgPage = Color(0xFFE3EAF0), bgSurface = Color.White, bgRaised = Color.White,
     bgInput = Color(0xFFF4F6F8), bgPlaceholder = Color(0xFFD5DEE6), pinnedRow = Color(0xFFF6F8FA),
     divider = Color(0xFFE8EBEF), textPrimary = Color(0xFF15191E), textSecondary = Color(0xFF6B7682),
@@ -50,19 +63,23 @@ val Day = VVColors(
     bannerBackground = Color(0xFFFFF4DE), bannerContent = Color(0xFF7A4E00), isDark = false,
 )
 
-val AvatarGradients: List<Brush> = listOf(
-    0xFFF2836B to 0xFFD14C4C, 0xFFF5B256 to 0xFFE0782E, 0xFFA891F2 to 0xFF6A5BD6,
-    0xFF86C566 to 0xFF3E9F4A, 0xFF4FCFC4 to 0xFF1E9C93, 0xFF5DB4EE to 0xFF2E7FCB,
+internal val AvatarGradients: List<Brush> = listOf(
+    0xFFF2836B to 0xFFD14C4C,
+    0xFFF5B256 to 0xFFE0782E,
+    0xFFA891F2 to 0xFF6A5BD6,
+    0xFF86C566 to 0xFF3E9F4A,
+    0xFF4FCFC4 to 0xFF1E9C93,
+    0xFF5DB4EE to 0xFF2E7FCB,
     0xFFF287A6 to 0xFFC94F72,
 ).map { (top, bottom) -> Brush.verticalGradient(listOf(Color(top), Color(bottom))) }
 
 /** The blue avatar gradient, also behind the server and app icons in Settings and setup. */
-val ServerGradient: Brush = AvatarGradients[5]
+internal val ServerGradient: Brush = AvatarGradients[5]
 
-val LocalVVColors = staticCompositionLocalOf { NightBlue }
+internal val LocalVVColors = staticCompositionLocalOf { NightBlue }
 
 @Composable
-fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
+internal fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
     val dark = when (mode) {
         ThemeMode.System -> isSystemInDarkTheme()
         ThemeMode.Dark -> true
@@ -94,19 +111,21 @@ fun VVideoTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> U
     )
     CompositionLocalProvider(
         LocalVVColors provides colors,
-        LocalAnimations provides animationsEnabled()
+        LocalAnimations provides animationsEnabled(),
     ) {
         MaterialTheme(colorScheme = scheme, typography = VVTypography, content = content)
     }
 }
 
 private fun type(size: Int, line: Int, medium: Boolean = false) = TextStyle(
-    fontFamily = FontFamily.Default, fontSize = size.sp, lineHeight = line.sp,
+    fontFamily = FontFamily.Default,
+    fontSize = size.sp,
+    lineHeight = line.sp,
     fontWeight = if (medium) FontWeight.Medium else FontWeight.Normal,
     fontFeatureSettings = "tnum",
 )
 
-val VVTypography = Typography(
+internal val VVTypography = Typography(
     headlineSmall = type(22, 30, true),
     titleLarge = type(20, 26, true),
     titleMedium = type(17, 22, true),

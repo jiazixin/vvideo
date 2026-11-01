@@ -16,9 +16,7 @@ const playbackSettle = 10 * time.Second
 // shift; scans, probes and covers keep running during playback. It never holds
 // its mutex while waiting, doing IO, or acquiring a writer.
 type Priority struct {
-	// Now is the clock; tests replace it before concurrent use.
-	Now func() time.Time
-
+	now     func() time.Time
 	mu      sync.Mutex
 	active  int
 	lastEnd time.Time
@@ -26,8 +24,11 @@ type Priority struct {
 	changed chan struct{}
 }
 
-// NewPriority returns a Priority with no active transfers.
-func NewPriority() *Priority { return &Priority{Now: time.Now, changed: make(chan struct{})} }
+// NewPriority returns a Priority with no active transfers. now is an immutable
+// clock; production uses time.Now and tests can control the cooldown boundary.
+func NewPriority(now func() time.Time) *Priority {
+	return &Priority{now: now, changed: make(chan struct{})}
+}
 
 // Begin records the start of a media transfer. Call the returned function when
 // it ends; extra calls are ignored.
@@ -39,7 +40,7 @@ func (p *Priority) Begin() func() {
 	return sync.OnceFunc(func() {
 		p.mu.Lock()
 		p.active--
-		p.lastEnd = p.Now()
+		p.lastEnd = p.now()
 		p.signal()
 		p.mu.Unlock()
 	})
@@ -91,6 +92,6 @@ func (p *Priority) readyLocked() (bool, time.Duration) {
 	if p.lastEnd.IsZero() {
 		return true, 0
 	}
-	remaining := playbackSettle - p.Now().Sub(p.lastEnd)
+	remaining := playbackSettle - p.now().Sub(p.lastEnd)
 	return remaining <= 0, remaining
 }

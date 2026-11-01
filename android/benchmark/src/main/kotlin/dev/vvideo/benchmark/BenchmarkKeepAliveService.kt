@@ -17,15 +17,16 @@ class BenchmarkKeepAliveService : Service() {
             NotificationChannel(
                 channel,
                 "VVideo device validation",
-                NotificationManager.IMPORTANCE_LOW
-            )
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
         startForeground(
-            1, Notification.Builder(this, channel)
+            1,
+            Notification.Builder(this, channel)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentTitle("VVideo device validation")
                 .setContentText("Measuring the foreground app; ends with the test")
-                .setOngoing(true).build()
+                .setOngoing(true).build(),
         )
     }
 

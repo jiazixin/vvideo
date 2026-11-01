@@ -42,7 +42,7 @@ type stage struct {
 func newStage(ctx context.Context, storageDir string) (*stage, error) {
 	database := filepath.Join(storageDir, config.DatabaseFile)
 	dir := filepath.Join(config.StageDir(storageDir), fmt.Sprintf("%x", sha256.Sum256([]byte(database))))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	// The database-owner lock excludes another scan for this storage path.
@@ -53,8 +53,7 @@ func newStage(ctx context.Context, storageDir string) (*stage, error) {
 	}
 	for {
 		if ctx.Err() != nil {
-			directory.Close()
-			return nil, ctx.Err()
+			return nil, errors.Join(ctx.Err(), directory.Close())
 		}
 		batch, readErr := directory.ReadDir(storage.BatchSize)
 		for _, entry := range batch {
@@ -66,32 +65,37 @@ func newStage(ctx context.Context, storageDir string) (*stage, error) {
 				continue
 			}
 			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-				directory.Close()
-				return nil, err
+				return nil, errors.Join(err, directory.Close())
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			directory.Close()
-			return nil, readErr
+			return nil, errors.Join(readErr, directory.Close())
 		}
 	}
-	directory.Close()
+	if err := directory.Close(); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(dir, uuid.New().String()+".sqlite")
-	db, err := sql.Open("sqlite", path+"?_pragma=synchronous(OFF)&_pragma=journal_mode(OFF)")
+	// Set private permissions at creation, before SQLite writes media names.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, errors.Join(err, os.Remove(path))
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=synchronous(OFF)&_pragma=journal_mode(OFF)")
+	if err != nil {
+		return nil, errors.Join(err, os.Remove(path))
 	}
 	db.SetMaxOpenConns(1)
 	_, err = db.ExecContext(ctx, stageSchema)
 	if err != nil {
-		db.Close()
-		os.Remove(path)
-		return nil, err
+		return nil, errors.Join(err, db.Close(), os.Remove(path))
 	}
-	os.Chmod(path, 0600)
 	return &stage{db: db, path: path}, nil
 }
 
@@ -170,7 +174,14 @@ func (s *stage) put(ctx context.Context, e library.Entry) error {
 // files get a new one, and baseline entries no longer listed stay as absent
 // (or ignored) so missing confirmation can count them. It returns the number
 // of changes; zero means the directory needs no new generation.
-func (s *stage) merge(ctx context.Context, d library.Directory, ignored func(string) bool, force bool, resolve func(string) (string, error)) (int64, error) {
+type mergeOptions struct {
+	ignored func(string) bool
+	force   bool
+	resolve func(string) (string, error)
+}
+
+func (s *stage) merge(ctx context.Context, d library.Directory, options mergeOptions) (int64, error) {
+	ignored, force, resolve := options.ignored, options.force, options.resolve
 	known, err := s.mergeBaseline(ctx, d, ignored, force)
 	if err != nil {
 		return 0, err
@@ -194,7 +205,7 @@ func (s *stage) mergeBaseline(ctx context.Context, d library.Directory, ignored 
 		}
 		for _, e := range batch {
 			after = e.ID
-			next, changes, err := s.observed(ctx, d, e, ignored, force)
+			next, changes, err := s.observed(ctx, d, e, mergeOptions{ignored: ignored, force: force})
 			if err != nil {
 				return 0, err
 			}
@@ -208,7 +219,8 @@ func (s *stage) mergeBaseline(ctx context.Context, d library.Directory, ignored 
 
 // observed is baseline entry e as the second pass found it, and how many
 // changes that makes: a new version, and a different state or presence.
-func (s *stage) observed(ctx context.Context, d library.Directory, e library.Entry, ignored func(string) bool, force bool) (library.Entry, int64, error) {
+func (s *stage) observed(ctx context.Context, d library.Directory, e library.Entry, options mergeOptions) (library.Entry, int64, error) {
+	ignored, force := options.ignored, options.force
 	original := e
 	var changes int64
 	a := Attributes{Name: e.Name}

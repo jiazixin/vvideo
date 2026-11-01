@@ -12,11 +12,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"vvideo/internal/app"
 	"vvideo/internal/jobs"
-	"vvideo/internal/streaming"
 )
 
 // TestNonUTF8NamesStayListable: a Linux file system accepts names that are not
@@ -26,7 +26,7 @@ import (
 func TestNonUTF8NamesStayListable(t *testing.T) {
 	index, scan, root := setup(t)
 	gbkDir, gbkFile := "\xc4\xbf\xc2\xbc\xb5\xc4", "\xb2\xe2\xca\xd4.mp4"
-	if err := os.Mkdir(filepath.Join(root, gbkDir), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(root, gbkDir), 0o700); err != nil {
 		if errors.Is(err, syscall.EILSEQ) {
 			t.Skip("this file system rejects names that are not UTF-8")
 		}
@@ -34,7 +34,7 @@ func TestNonUTF8NamesStayListable(t *testing.T) {
 	}
 	files := []string{"a.mp4", gbkFile, "z.mp4", "\xffclip.mp4"}
 	for _, name := range append(files, filepath.Join(gbkDir, "inner.mp4")) {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ func TestNonUTF8NamesStayListable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := (&app.App{Config: scan.Config, Index: index, Stream: streaming.New(index, jobs.NewPriority())}).Handler()
+	handler := (&app.App{Config: scan.Config, Index: index, Stream: app.NewStreamHandler(index, jobs.NewPriority(time.Now))}).Handler()
 	get := func(path string, out any) {
 		t.Helper()
 		r := httptest.NewRequest("GET", path, nil)
@@ -66,7 +66,7 @@ func TestNonUTF8NamesStayListable(t *testing.T) {
 	var children struct {
 		Items []named `json:"items"`
 	}
-	get(fmt.Sprintf("/v1/directories/%d/children", libs[0].DirectoryID), &children)
+	get(fmt.Sprintf("/api/directories/%d/children", libs[0].DirectoryID), &children)
 	if len(children.Items) != 1 || !strings.ContainsRune(children.Items[0].Name, utf8.RuneError) {
 		t.Fatalf("folder list %+v", children.Items)
 	}
@@ -76,13 +76,19 @@ func TestNonUTF8NamesStayListable(t *testing.T) {
 	for range len(files) + 1 {
 		var page struct {
 			Items []named `json:"items"`
-			Next  string  `json:"next"`
+			Next  string  `json:"next_cursor"`
 		}
-		get(fmt.Sprintf("/v1/directories/%d/media?sort=name&direction=asc&limit=1&cursor=%s", libs[0].DirectoryID, url.QueryEscape(cursor)), &page)
+		get(fmt.Sprintf("/api/directories/%d/media?sort=name&direction=asc&limit=1&cursor=%s", libs[0].DirectoryID, url.QueryEscape(cursor)), &page)
 		if len(page.Items) == 0 {
 			break
 		}
 		seen = append(seen, page.Items[0].Name)
+		if page.Next == "" {
+			break
+		}
+		if page.Next == cursor {
+			t.Fatalf("non-empty page did not advance its cursor: %+v", page)
+		}
 		cursor = page.Next
 	}
 	want := slices.Sorted(slices.Values(files))
@@ -95,7 +101,7 @@ func TestNonUTF8NamesStayListable(t *testing.T) {
 	var found struct {
 		Items []named `json:"items"`
 	}
-	get(fmt.Sprintf("/v1/directories/%d/search?q=mp4", libs[0].DirectoryID), &found)
+	get(fmt.Sprintf("/api/directories/%d/search?q=mp4", libs[0].DirectoryID), &found)
 	if len(found.Items) != len(files)+1 {
 		t.Fatalf("search found %d items: %+v", len(found.Items), found.Items)
 	}

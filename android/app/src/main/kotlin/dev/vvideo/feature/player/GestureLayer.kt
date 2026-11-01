@@ -29,7 +29,7 @@ internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
     onTap: () -> Unit,
     onDoubleTap: ((Offset) -> Unit)? = null,
     onLongPress: ((Offset) -> Unit)? = null,
-    onPress: suspend PressGestureScope.(Offset) -> Unit = {}
+    onPress: suspend PressGestureScope.(Offset) -> Unit = {},
 ) = coroutineScope {
     // Whether the last press seen from down to release stayed within the slop.
     var tappable = false
@@ -54,16 +54,16 @@ internal suspend fun PointerInputScope.detectTapsIgnoringDrags(
         onDoubleTap = onDoubleTap,
         onLongPress = onLongPress,
         onPress = onPress,
-        onTap = { if (tappable) onTap() }
+        onTap = { if (tappable) onTap() },
     )
 }
 
 /** Tap recognition yields vertical movement to the pager. Only the seek bar consumes drags. */
-fun Modifier.viewerGestures(
+internal fun Modifier.viewerGestures(
     player: Player,
     onTap: () -> Unit,
     onHold: (Boolean) -> Unit,
-    onSeek: (Boolean) -> Unit
+    onSeek: (Boolean) -> Unit,
 ): Modifier = pointerInput(player) {
     var held = false
     var originalSpeed = 1f

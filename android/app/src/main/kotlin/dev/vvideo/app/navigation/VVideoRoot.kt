@@ -37,14 +37,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.util.UnstableApi
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import coil3.ImageLoader
 import dev.vvideo.R
 import dev.vvideo.app.VVideoApplication
@@ -53,14 +52,14 @@ import dev.vvideo.data.settings.Connection
 import dev.vvideo.feature.library.LibraryRoute
 import dev.vvideo.feature.library.LibraryViewModel
 import dev.vvideo.feature.player.MediaDetailsSheet
-import dev.vvideo.feature.player.PhotoScreen
+import dev.vvideo.feature.player.PhotoRoute
 import dev.vvideo.feature.player.PlayerRoute
 import dev.vvideo.feature.player.PlayerViewModel
 import dev.vvideo.feature.player.retainedWhileLeaving
-import dev.vvideo.feature.settings.ConnectionForm
+import dev.vvideo.feature.settings.ConnectionRoute
 import dev.vvideo.feature.settings.SettingsRoute
 import dev.vvideo.feature.settings.SettingsViewModel
-import dev.vvideo.feature.settings.StorageScreen
+import dev.vvideo.feature.settings.StorageRoute
 import dev.vvideo.model.Media
 import dev.vvideo.model.MediaKind
 import dev.vvideo.model.Sort
@@ -72,7 +71,6 @@ import dev.vvideo.ui.theme.LocalAnimations
 import dev.vvideo.ui.theme.LocalVVColors
 import dev.vvideo.ui.theme.PageMotion
 import dev.vvideo.ui.theme.pageSlide
-import kotlinx.coroutines.CancellationException
 
 /** A viewer opens from this scale and closes back to it. */
 private const val VIEWER_SCALE = .92f
@@ -80,33 +78,12 @@ private const val VIEWER_SCALE = .92f
 /** A predictive back gesture dims the page it is leaving by up to this much. */
 private const val PREDICTIVE_BACK_DIM = .15f
 
-/** The pages of the app. */
-private enum class Route(val isViewer: Boolean = false) {
-    Setup,
-    Library,
-    Settings,
-    Storage,
-    Connection,
-    Video(isViewer = true),
-    Photo(isViewer = true)
-}
-
-private class NavigationState : ViewModel() {
-    var route by mutableStateOf(Route.Library)
-}
-
-private class ViewModelFactory<T : ViewModel>(val create: () -> T) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <V : ViewModel> create(modelClass: Class<V>): V = create() as V
-}
-
 /** A media details sheet opened from an album, with the folder path at the time it opened. */
 private class DetailsRequest(val item: Media, val pathLabel: String)
 
-@UnstableApi
 @OptIn(ExperimentalActivityApi::class)
 @Composable
-fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit) {
+internal fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit) {
     val graph = application.graph
     val ready by application.ready.collectAsStateWithLifecycle()
     val failure by application.failure.collectAsStateWithLifecycle()
@@ -114,8 +91,11 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
     // the setup form for a frame and a new install never shows anything else.
     val stored by graph.settings.connection.collectAsStateWithLifecycle(initialValue = null)
     val loader by graph.cache.loader.collectAsStateWithLifecycle()
-    val navigation: NavigationState = viewModel(factory = ViewModelFactory { NavigationState() })
-    val route = navigation.route
+    val cacheFailure by graph.cache.failure.collectAsStateWithLifecycle()
+    val navigation: NavigationViewModel =
+        viewModel(factory = viewModelFactory { initializer { NavigationViewModel() } })
+    val navigationState by navigation.state.collectAsStateWithLifecycle()
+    val route = navigationState.route
     // The media a viewer opens, kept across recreation; the sort is the folder's at the tap.
     var selectionBeganMs by remember { mutableLongStateOf(0L) }
     var mediaId by rememberSaveable { mutableStateOf("") }
@@ -123,21 +103,21 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
     var sortField by rememberSaveable { mutableStateOf(SortField.Capture) }
     var sortDirection by rememberSaveable { mutableStateOf(SortDirection.Ascending) }
     val timeLabels = rememberTimeLabels()
-    val library: LibraryViewModel = viewModel(factory = ViewModelFactory {
-        LibraryViewModel(graph.library, graph.scope, timeLabels)
-    })
-    val settings: SettingsViewModel =
-        viewModel(factory = ViewModelFactory {
-            SettingsViewModel(
-                graph.settings,
-                graph.cache,
-                graph.library
-            )
-        })
-    val player: PlayerViewModel =
-        viewModel(factory = ViewModelFactory { PlayerViewModel(graph.library) })
+    val library: LibraryViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { LibraryViewModel(graph.library, graph.scope, graph.dispatchers.default, timeLabels) }
+        },
+    )
+    val settings: SettingsViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { SettingsViewModel(graph.settings, graph.cache, graph.library) }
+        },
+    )
+    val player: PlayerViewModel = viewModel(
+        factory = viewModelFactory { initializer { PlayerViewModel(graph.library) } },
+    )
     if (!ready || loader == null || stored == null) {
-        InitializingScreen(failure, onRetry = { application.initialize() })
+        InitializingScreen(failure || cacheFailure, onRetry = { application.initialize() })
         return
     }
     val imageLoader = checkNotNull(loader)
@@ -147,7 +127,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
     SystemBarAppearance(dark = LocalVVColors.current.isDark || route.isViewer)
     val back = {
         player.leave()
-        navigation.route = Route.Library
+        navigation.navigate(Route.Library)
         onInteraction(false)
     }
     val openViewer = { kind: MediaKind ->
@@ -157,7 +137,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
     details?.let { request ->
         MediaDetailsSheet(request.item, request.pathLabel) { details = null }
     }
-    val settingsBack = { navigation.route = Route.Settings }
+    val settingsBack = { navigation.navigate(Route.Settings) }
     var predictive by remember { mutableFloatStateOf(0f) }
     val animations = LocalAnimations.current
     // Draw order of the two pages in a transition; see routeTransition.
@@ -166,11 +146,10 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
         try {
             events.collect { predictive = it.progress }
             if (route == Route.Storage || route == Route.Connection) {
-                navigation.route = Route.Settings
+                navigation.navigate(Route.Settings)
             } else {
                 back()
             }
-        } catch (_: CancellationException) {
         } finally {
             predictive = 0f
         }
@@ -186,22 +165,22 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                 alpha = 1f - predictive * PREDICTIVE_BACK_DIM
             },
             transitionSpec = { routeTransition(animations, layers) },
-            label = "route"
+            label = "route",
         ) { displayedRoute ->
             val leaving = displayedRoute != screen
             when (displayedRoute) {
-                Route.Setup -> ConnectionForm(settings, connection) {
-                    navigation.route = Route.Library
+                Route.Setup -> ConnectionRoute(settings, connection) {
+                    navigation.navigate(Route.Library)
                 }
 
-                Route.Connection -> ConnectionForm(settings, connection, settingsBack)
-                Route.Storage -> StorageScreen(settings, connection, settingsBack)
+                Route.Connection -> ConnectionRoute(settings, connection, settingsBack)
+                Route.Storage -> StorageRoute(settings, connection, settingsBack)
                 Route.Settings -> SettingsRoute(
                     settings,
                     connection,
-                    onDone = { navigation.route = Route.Library },
-                    onStorage = { navigation.route = Route.Storage },
-                    onConnection = { navigation.route = Route.Connection }
+                    onDone = { navigation.navigate(Route.Library) },
+                    onStorage = { navigation.navigate(Route.Storage) },
+                    onConnection = { navigation.navigate(Route.Connection) },
                 )
 
                 Route.Video -> VideoRoute(
@@ -212,7 +191,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                     back,
                     onInteraction,
                     selectionBeganMs,
-                    leaving
+                    leaving,
                 )
 
                 Route.Photo -> PhotoRoute(
@@ -221,7 +200,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                     imageLoader,
                     back,
                     { openViewer(MediaKind.Image) },
-                    leaving
+                    leaving,
                 )
 
                 Route.Library -> LibraryRoute(
@@ -230,7 +209,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                     imageLoader,
                     onSettings = {
                         library.flush()
-                        navigation.route = Route.Settings
+                        navigation.navigate(Route.Settings)
                     },
                     onMedia = { item ->
                         selectionBeganMs = SystemClock.elapsedRealtime()
@@ -240,8 +219,7 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                         sortField = sort.field
                         sortDirection = sort.direction
                         mediaId = item.id
-                        navigation.route =
-                            if (item.kind == MediaKind.Video) Route.Video else Route.Photo
+                        navigation.navigate(if (item.kind == MediaKind.Video) Route.Video else Route.Photo)
                     },
                     onInteraction = onInteraction,
                     onDetails = {
@@ -249,8 +227,8 @@ fun VVideoRoot(application: VVideoApplication, onInteraction: (Boolean) -> Unit)
                     },
                     onConnection = {
                         library.flush()
-                        navigation.route = Route.Connection
-                    }
+                        navigation.navigate(Route.Connection)
+                    },
                 )
             }
         }
@@ -275,7 +253,7 @@ private fun InitializingScreen(failure: Boolean, onRetry: () -> Unit) {
 /** Date labels in the current locale, rebuilt when the configuration changes. */
 @Composable
 private fun rememberTimeLabels(): TimeLabels {
-    val resources = LocalContext.current.resources
+    val resources = LocalResources.current
     return remember(LocalConfiguration.current) {
         TimeLabels(
             today = resources.getString(R.string.today),
@@ -284,7 +262,7 @@ private fun rememberTimeLabels(): TimeLabels {
             yearPattern = resources.getString(R.string.date_year_pattern),
             recentPattern = resources.getString(R.string.recent_date_pattern),
             oldPattern = resources.getString(R.string.recent_old_pattern),
-            weekdayPattern = resources.getString(R.string.weekday_pattern)
+            weekdayPattern = resources.getString(R.string.weekday_pattern),
         )
     }
 }
@@ -316,12 +294,14 @@ private fun SystemBarAppearance(dark: Boolean) {
  */
 private fun AnimatedContentTransitionScope<Route>.routeTransition(
     animations: Boolean,
-    layers: MutableMap<Route, Float>
+    layers: MutableMap<Route, Float>,
 ): ContentTransform {
     val viewer = targetState.isViewer || initialState.isViewer
     // Finishing the setup form moves forward into the library.
-    val returning = targetState == Route.Library && initialState != Route.Setup ||
-            (initialState == Route.Storage || initialState == Route.Connection) && targetState == Route.Settings
+    val returning = targetState == Route.Library &&
+        initialState != Route.Setup ||
+        (initialState == Route.Storage || initialState == Route.Connection) &&
+        targetState == Route.Settings
     val durationMs = when {
         !animations -> 0
         viewer && returning -> PageMotion.VIEWER_CLOSE
@@ -355,7 +335,6 @@ private fun AnimatedContentTransitionScope<Route>.routeTransition(
  * while the replacement waits for its session, so the transition does not animate
  * through an empty layout.
  */
-@UnstableApi
 @Composable
 private fun VideoRoute(
     player: PlayerViewModel,
@@ -365,7 +344,7 @@ private fun VideoRoute(
     onBack: () -> Unit,
     onInteraction: (Boolean) -> Unit,
     selectionBeganMs: Long,
-    leaving: Boolean
+    leaving: Boolean,
 ) {
     Box(Modifier.fillMaxSize()) {
         key(retainedWhileLeaving(selectionBeganMs, leaving)) {
@@ -378,30 +357,8 @@ private fun VideoRoute(
                 onBack,
                 onInteraction,
                 selectionBeganMs,
-                leaving
+                leaving,
             )
         }
     }
-}
-
-@Composable
-private fun PhotoRoute(
-    player: PlayerViewModel,
-    connection: Connection,
-    imageLoader: ImageLoader,
-    onBack: () -> Unit,
-    onRetry: () -> Unit,
-    leaving: Boolean
-) {
-    val live by player.state.collectAsStateWithLifecycle()
-    PhotoScreen(
-        retainedWhileLeaving(live, leaving),
-        connection,
-        imageLoader,
-        onBack,
-        onRetry,
-        player::selected,
-        player::page,
-        leaving
-    )
 }

@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 	"uuid"
+
+	"vvideo/internal/app"
 	"vvideo/internal/config"
 	"vvideo/internal/jobs"
 	"vvideo/internal/library"
-	"vvideo/internal/mediafs"
-	"vvideo/internal/probe"
 	"vvideo/internal/scanner"
 	"vvideo/internal/storage"
 	"vvideo/internal/streaming"
@@ -34,10 +34,15 @@ func setup(t *testing.T) (*library.Index, *scanner.Scanner, string) {
 		t.Fatal(e)
 	}
 	root := filepath.Join(base, "media")
-	if e = os.Mkdir(root, 0700); e != nil {
+	if e = os.Mkdir(root, 0o700); e != nil {
 		t.Fatal(e)
 	}
-	c, e := config.Load(config.Source{WorkDir: base, Env: []string{"VVIDEO_AUTH__TOKEN=fixture", fmt.Sprintf(`VVIDEO_MEDIA=[{"path":%q}]`, root)}})
+	env := map[string]string{"VVIDEO_AUTH__TOKEN": "fixture", "VVIDEO_MEDIA": fmt.Sprintf(`[{"path":%q}]`, root)}
+	lookupEnv := func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+	c, e := config.Load(config.Source{WorkDir: base, LookupEnv: lookupEnv})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -50,7 +55,7 @@ func setup(t *testing.T) (*library.Index, *scanner.Scanner, string) {
 	if e = i.Register(t.Context(), c); e != nil {
 		t.Fatal(e)
 	}
-	return i, &scanner.Scanner{Config: c, Index: i, Now: time.Now}, root
+	return i, &scanner.Scanner{Config: c, Index: i}, root
 }
 func first(t *testing.T, i *library.Index) library.Entry {
 	t.Helper()
@@ -68,7 +73,7 @@ func TestRangeAndVersionIsolation(t *testing.T) {
 	i, s, root := setup(t)
 	data := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
 	path := filepath.Join(root, "sample.mp4")
-	if e := os.WriteFile(path, data, 0600); e != nil {
+	if e := os.WriteFile(path, data, 0o600); e != nil {
 		t.Fatal(e)
 	}
 	if e := s.Run(t.Context(), false); e != nil {
@@ -76,7 +81,7 @@ func TestRangeAndVersionIsolation(t *testing.T) {
 	}
 	entry := first(t, i)
 	mux := http.NewServeMux()
-	mux.Handle("GET /media/{id}", streaming.New(i, jobs.NewPriority()))
+	mux.Handle("GET /media/{id}", app.NewStreamHandler(i, jobs.NewPriority(time.Now)))
 	url := "/media/" + entry.ID + "?version=" + entry.Version
 	for _, tc := range []struct {
 		rangeHeader string
@@ -106,7 +111,7 @@ func TestRangeAndVersionIsolation(t *testing.T) {
 	if w.Code != 304 {
 		t.Fatal(w.Code)
 	}
-	if e := os.WriteFile(path, []byte("changed bytes with a different length"), 0600); e != nil {
+	if e := os.WriteFile(path, []byte("changed bytes with a different length"), 0o600); e != nil {
 		t.Fatal(e)
 	}
 	w = httptest.NewRecorder()
@@ -153,64 +158,6 @@ func TestMP4OriginalOffsetsAndMalformedFallback(t *testing.T) {
 		t.Fatal(e)
 	}
 }
-func TestDurableTaskDueRetryAndObsoleteVersion(t *testing.T) {
-	i, s, root := setup(t)
-	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("first"), 0600)
-	now := time.Now()
-	s.Now = func() time.Time { return now }
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	q := jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return now }}
-	if _, e := q.Claim(t.Context(), "probe"); !errors.Is(e, sql.ErrNoRows) {
-		t.Fatal("probe ran before 60 seconds", e)
-	}
-	now = now.Add(60 * time.Second)
-	j, e := q.Claim(t.Context(), "probe")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = q.Finish(t.Context(), j, "retry", "fixture"); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = q.Claim(t.Context(), "probe"); !errors.Is(e, sql.ErrNoRows) {
-		t.Fatal("retry ran before delay")
-	}
-	for range 2 {
-		now = now.Add(30 * time.Second)
-		j, e = q.Claim(t.Context(), "probe")
-		if e != nil {
-			t.Fatal(e)
-		}
-		if e = q.Finish(t.Context(), j, "retry", "fixture"); e != nil {
-			t.Fatal(e)
-		}
-	}
-	var state string
-	var attempts int
-	if e = i.Store.Reader.QueryRow("SELECT state,attempts FROM jobs WHERE id=?", j.ID).Scan(&state, &attempts); e != nil {
-		t.Fatal(e)
-	}
-	if state != "failed" || attempts != 3 {
-		t.Fatalf("%s/%d", state, attempts)
-	}
-	var status string
-	if e = i.Store.Reader.QueryRow("SELECT status FROM versions WHERE media_id=? AND version=?", j.MediaID, j.Version).Scan(&status); e != nil || status != "failed" {
-		t.Fatal("exhausted job left its version waiting", status, e)
-	}
-	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("second version"), 0600)
-	if e = s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	now = now.Add(60 * time.Second)
-	newJob, e := q.Claim(t.Context(), "probe")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if newJob.Version == j.Version {
-		t.Fatal("obsolete job reclaimed")
-	}
-}
 func TestExactGroupsKeysetsAndDeepRestore(t *testing.T) {
 	i, _, _ := setup(t)
 	ls, e := i.Libraries(t.Context())
@@ -243,18 +190,18 @@ func TestExactGroupsKeysetsAndDeepRestore(t *testing.T) {
 			}
 			batch = append(batch, library.Entry{ID: id, Version: uuid.New().String(), Name: fmt.Sprintf("%08d.mp4", j), Kind: "video", Fingerprint: fmt.Sprint(j), Size: 100, Mtime: int64(j / 3), EffectiveTime: int64(j / 3), NewVersion: true, Present: true, State: "visible"})
 		}
-		if e = i.AddBatch(t.Context(), d, gen, batch, time.Now()); e != nil {
+		if e = i.AddBatch(t.Context(), library.GenerationBatch{Directory: d, Generation: gen, Entries: batch, ObservedAt: time.Now()}); e != nil {
 			t.Fatal(e)
 		}
 	}
-	if e = i.Publish(t.Context(), d, gen, "fixture", 1, func() error { return nil }); e != nil {
+	if e = i.Publish(t.Context(), library.Publication{Directory: d, Generation: gen, Identity: "fixture", Round: 1, Validate: func() error { return nil }}); e != nil {
 		t.Fatal(e)
 	}
 	d, e = i.Directory(t.Context(), d.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = i.RebuildGroups(t.Context(), d.ID, jobs.NewPriority().Wait); e != nil {
+	if e = i.RebuildGroups(t.Context(), d.ID, jobs.NewPriority(time.Now).Wait); e != nil {
 		t.Fatal(e)
 	}
 	t.Logf("seed+groups items=%d elapsed=%s", n, time.Since(start))
@@ -299,6 +246,9 @@ func TestExactGroupsKeysetsAndDeepRestore(t *testing.T) {
 					opts.Cursor = p.Next
 					if total > n {
 						t.Fatal("cursor cycle")
+					}
+					if opts.Cursor == "" {
+						break
 					}
 				}
 				if total != n || expected == "" {
@@ -346,10 +296,10 @@ func TestExactGroupsKeysetsAndDeepRestore(t *testing.T) {
 	}
 	// The restore query uses the anchors index, not a prefix COUNT / OFFSET scan.
 	var token string
-	if e := i.Store.Reader.QueryRow("SELECT group_token FROM directories WHERE id=?", d.ID).Scan(&token); e != nil {
+	if e := i.Store.QueryRow(t.Context(), "SELECT group_token FROM directories WHERE id=?", d.ID).Scan(&token); e != nil {
 		t.Fatal(e)
 	}
-	rows, e := i.Store.Reader.QueryContext(t.Context(), "EXPLAIN QUERY PLAN SELECT media_id FROM group_anchors WHERE directory_id=? AND token=? AND sort='name' AND direction='asc' AND (name_key,media_id)<=(?,?) ORDER BY name_key DESC,media_id DESC LIMIT 1", d.ID, token, "x", "y")
+	rows, e := i.Store.Query(t.Context(), "EXPLAIN QUERY PLAN SELECT media_id FROM group_anchors WHERE directory_id=? AND token=? AND sort='name' AND direction='asc' AND (name_key,media_id)<=(?,?) ORDER BY name_key DESC,media_id DESC LIMIT 1", d.ID, token, "x", "y")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -363,120 +313,10 @@ func TestExactGroupsKeysetsAndDeepRestore(t *testing.T) {
 		t.Log(plan)
 	}
 }
-func TestDirectoryAbsenceInterruptedByFailedRoot(t *testing.T) {
-	i, s, root := setup(t)
-	sub := filepath.Join(root, "child")
-	os.Mkdir(sub, 0700)
-	os.WriteFile(filepath.Join(sub, "a.mp4"), []byte("fixture"), 0600)
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	ls, _ := i.Libraries(t.Context())
-	children, e := i.Children(t.Context(), ls[0].DirectoryID, "", false)
-	if e != nil || len(children.Items) != 1 {
-		t.Fatal(e)
-	}
-	id := children.Items[0].ID
-	os.RemoveAll(sub)
-	if e = s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	os.WriteFile(filepath.Join(root, "fault.mp4"), []byte("fixture"), 0600)
-	s.Stat = func(*os.File, string) (os.FileInfo, error) { return nil, errors.New("permission denied") }
-	if e = s.Run(t.Context(), false); e == nil {
-		t.Fatal("fault lost")
-	}
-	os.Remove(filepath.Join(root, "fault.mp4"))
-	s.Stat = mediafs.StatAt
-	if e = s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	d, e := i.Directory(t.Context(), id)
-	if e != nil || d.State != "visible" {
-		t.Fatal("directory hidden across failed root", e, d.State)
-	}
-	if e = s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	d, e = i.Directory(t.Context(), id)
-	if e != nil || d.State != "missing" {
-		t.Fatal("directory not hidden after two healthy rounds", e, d.State)
-	}
-}
-
-func TestProbePublicationInterleavingAndLateOldResult(t *testing.T) {
-	i, s, root := setup(t)
-	path := filepath.Join(root, "original.mp4")
-	os.WriteFile(path, []byte("original"), 0600)
-	now := time.Now()
-	s.Now = func() time.Time { return now }
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	now = now.Add(time.Minute)
-	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return now }}
-	j, e := q.Claim(t.Context(), "probe")
-	if e != nil {
-		t.Fatal(e)
-	}
-	worker := probe.Worker{Queue: q, Now: q.Now, Parameters: probe.Parameters(10), Tool: func(context.Context, *os.File, library.Entry) (probe.Result, error) {
-		return probe.Result{Width: 1920, Height: 1080, DurationMS: 8000, EffectiveTime: 123456, CapturedSource: "fixture"}, nil
-	}}
-	os.WriteFile(filepath.Join(root, "new.mp4"), []byte("new"), 0600)
-	s.Fault = func(at string) error {
-		if at == "publish" {
-			return worker.Run(t.Context(), j)
-		}
-		return nil
-	}
-	if e = s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	s.Fault = nil
-	before, e := i.Directory(t.Context(), 1)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 1 {
-		t.Fatal("probed capture time was not published once", moved, e)
-	}
-	after, e := i.Directory(t.Context(), 1)
-	if e != nil || after.Revision != before.Revision+1 {
-		t.Fatal("reorder did not change the directory revision exactly once", before.Revision, after.Revision, e)
-	}
-	current, e := i.Media(t.Context(), j.MediaID)
-	if e != nil || current.EffectiveTime != 123456 || current.Width != 1920 {
-		t.Fatal("publication overwrote probe result", e, current)
-	}
-	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 0 {
-		t.Fatal("published capture times were applied twice", moved, e)
-	}
-	// The old tool finishes after a rescan published a replacement. Neither its
-	// metadata nor thumbnail intent may be attached to that replacement version.
-	now = now.Add(time.Minute)
-	late, e := q.Claim(t.Context(), "probe")
-	if e != nil {
-		t.Fatal(e)
-	}
-	worker.Tool = func(ctx context.Context, f *os.File, old library.Entry) (probe.Result, error) {
-		os.WriteFile(filepath.Join(root, old.Name), []byte("replacement file content"), 0600)
-		if e := s.Run(ctx, false); e != nil {
-			t.Fatal(e)
-		}
-		return probe.Result{Width: 9999, Height: 9999, DurationMS: 1, EffectiveTime: 1}, nil
-	}
-	if e = worker.Run(t.Context(), late); !errors.Is(e, library.ErrConflict) {
-		t.Fatal("late result accepted", e)
-	}
-	replacement, e := i.Media(t.Context(), late.MediaID)
-	if e != nil || replacement.Version == late.Version || replacement.Width == 9999 {
-		t.Fatal("late metadata leaked", e, replacement)
-	}
-}
 func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	i, s, root := setup(t)
 	for _, name := range []string{"a.mp4", "b.mp4", "c.mp4"} {
-		os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0600)
+		os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600)
 	}
 	if e := s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
@@ -486,25 +326,25 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	q := &jobs.Queue{Store: i.Store, Index: i, Now: time.Now}
+	q := jobs.NewQueue(i, nil, time.Now)
 	c := s.Config
 	c.Cache.MaxSize = 15
 	engine := thumbnail.New(c, q)
-	os.MkdirAll(c.Cache.Path, 0700)
+	os.MkdirAll(c.Cache.Path, 0o700)
 	for j, item := range p.Items {
 		key := engine.Key(item)
-		os.WriteFile(filepath.Join(c.Cache.Path, key+".webp"), []byte("0123456789"), 0600)
+		os.WriteFile(filepath.Join(c.Cache.Path, key+".webp"), []byte("0123456789"), 0o600)
 		if e = i.Store.Write(t.Context(), 0, func(tx *sql.Tx) error {
-			if _, e := tx.Exec("INSERT INTO thumbnails VALUES(?,?,?,?,?,'ready')", key, item.ID, item.Version, 10, j); e != nil {
+			if _, e := tx.ExecContext(t.Context(), "INSERT INTO thumbnails VALUES(?,?,?,?,?,'ready')", key, item.ID, item.Version, 10, j); e != nil {
 				return e
 			}
-			if _, e := tx.Exec("UPDATE counters SET value=value+10 WHERE name='thumbnail_bytes'"); e != nil {
+			if _, e := tx.ExecContext(t.Context(), "UPDATE counters SET value=value+10 WHERE name='thumbnail_bytes'"); e != nil {
 				return e
 			}
-			if _, e := tx.Exec("UPDATE versions SET status='ready' WHERE media_id=? AND version=?", item.ID, item.Version); e != nil {
+			if _, e := tx.ExecContext(t.Context(), "UPDATE versions SET status='ready' WHERE media_id=? AND version=?", item.ID, item.Version); e != nil {
 				return e
 			}
-			_, e := tx.Exec("INSERT INTO jobs(media_id,version,kind,parameters,due,state,attempts)VALUES(?,?,'thumbnail',?,0,'done',3)", item.ID, item.Version, engine.Parameters)
+			_, e := tx.ExecContext(t.Context(), "INSERT INTO jobs(media_id,version,kind,parameters,due,state,attempts)VALUES(?,?,'thumbnail',?,0,'done',3)", item.ID, item.Version, engine.Parameters)
 			return e
 		}); e != nil {
 			t.Fatal(e)
@@ -534,7 +374,7 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 		t.Fatal(e)
 	}
 	var pending int
-	if e = i.Store.Reader.QueryRow("SELECT count(*) FROM jobs WHERE kind='thumbnail' AND state='queued'").Scan(&pending); e != nil || pending != 0 {
+	if e = i.Store.QueryRow(t.Context(), "SELECT count(*) FROM jobs WHERE kind='thumbnail' AND state='queued'").Scan(&pending); e != nil || pending != 0 {
 		t.Fatal("unchanged scan refills evicted covers", e, pending)
 	}
 	if e = q.EnqueueThumbnail(t.Context(), p.Items[0], engine.Parameters, true); e != nil {
@@ -546,7 +386,7 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 	}
 	q.Finish(t.Context(), task, "done", "")
 	orphan := filepath.Join(c.Cache.Path, "0123456789012345678901234567890123456789012345678901234567890123.webp")
-	os.WriteFile(orphan, []byte("orphan"), 0600)
+	os.WriteFile(orphan, []byte("orphan"), 0o600)
 	if e = engine.Reconcile(t.Context()); e != nil {
 		t.Fatal(e)
 	}
@@ -566,7 +406,7 @@ func TestThumbnailPinsLedgerRecoveryAndNoAutomaticRefill(t *testing.T) {
 func TestForegroundCoverClaimsAheadOfBacklog(t *testing.T) {
 	i, s, root := setup(t)
 	for _, name := range []string{"a.mp4", "b.mp4"} {
-		os.WriteFile(filepath.Join(root, name), []byte(name), 0600)
+		os.WriteFile(filepath.Join(root, name), []byte(name), 0o600)
 	}
 	if e := s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
@@ -593,7 +433,7 @@ func TestForegroundCoverClaimsAheadOfBacklog(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
-	q := &jobs.Queue{Store: i.Store, Index: i, Now: time.Now}
+	q := jobs.NewQueue(i, nil, time.Now)
 	if e = q.EnqueueThumbnail(t.Context(), wanted, "cover", true); e != nil {
 		t.Fatal(e)
 	}
@@ -625,159 +465,14 @@ func TestForegroundCoverClaimsAheadOfBacklog(t *testing.T) {
 
 // TestPlaybackCooldown covers the gate list reordering still waits on; scans,
 // probes and covers no longer consult it.
-func TestPlaybackCooldown(t *testing.T) {
-	p := jobs.NewPriority()
-	now := time.Now()
-	p.Now = func() time.Time { return now }
-	end := p.Begin()
-	if p.Ready() {
-		t.Fatal("list reordering ready during playback")
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if e := p.Wait(ctx); !errors.Is(e, context.Canceled) {
-		t.Fatal(e)
-	}
-	end()
-	end()
-	now = now.Add(9 * time.Second)
-	if p.Ready() {
-		t.Fatal("early cooldown")
-	}
-	now = now.Add(time.Second)
-	if !p.Ready() {
-		t.Fatal("cooldown did not finish")
-	}
-}
-
-// TestChangeDuringPublicationIsRescanned: a file rewritten after observation
-// but before publication is published as observed and corrected next round.
-func TestChangeDuringPublicationIsRescanned(t *testing.T) {
-	i, s, root := setup(t)
-	path := filepath.Join(root, "new.mp4")
-	os.WriteFile(path, []byte("new"), 0600)
-	s.Fault = func(at string) error {
-		if at == "publish" {
-			os.WriteFile(path, []byte("changed between observation and publication"), 0600)
-		}
-		return nil
-	}
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	observed := first(t, i)
-	s.Fault = nil
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	if current := first(t, i); current.ID != observed.ID || current.Version == observed.Version {
-		t.Fatal("rewrite during publication was not picked up by the next scan")
-	}
-}
-
-func TestUnavailableAncestorAndUnpublishedJobsRemainRecoverable(t *testing.T) {
-	i, s, root := setup(t)
-	nested := filepath.Join(root, "parent", "child")
-	if err := os.MkdirAll(nested, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(nested, "a.mp4"), []byte("fixture"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	s.Now = func() time.Time { return now }
-	if err := s.Run(t.Context(), false); err != nil {
-		t.Fatal(err)
-	}
-	var parent int64
-	if err := i.Store.Reader.QueryRow("SELECT id FROM directories WHERE relative='parent'").Scan(&parent); err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(time.Minute)
-	q := jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return now }}
-	for _, state := range []string{"missing", "ignored"} {
-		if err := i.Store.Write(t.Context(), 0, func(tx *sql.Tx) error {
-			_, err := tx.Exec("UPDATE directories SET state=? WHERE id=?", state, parent)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		commits := i.Store.Metrics.Commits.Load()
-		if _, err := q.Claim(t.Context(), "probe"); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatal("claimed through unavailable ancestor", state, err)
-		}
-		if i.Store.Metrics.Commits.Load() != commits {
-			t.Fatal("empty candidate search acquires writer")
-		}
-	}
-	if err := i.Store.Write(t.Context(), 0, func(tx *sql.Tx) error {
-		_, err := tx.Exec("UPDATE directories SET state='visible' WHERE id=?", parent)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	j, err := q.Claim(t.Context(), "probe")
-	if err != nil || j.Attempts != 1 {
-		t.Fatal("reappearance lost task or consumed retries", err, j)
-	}
-	if err = q.Finish(t.Context(), j, "done", ""); err != nil {
-		t.Fatal(err)
-	}
-	libs, err := i.Libraries(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := i.Directory(t.Context(), libs[0].DirectoryID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gen, err := i.BeginBuild(t.Context(), d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Due but unpublished jobs can be numerous. An empty claim must not search
-	// them while owning the single formal writer.
-	n := 257
-	if raw := os.Getenv("VV_JOB_ITEMS"); raw != "" {
-		n, err = strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 510000 {
-			t.Fatal("invalid job scale")
-		}
-	}
-	for start := 0; start < n; start += 128 {
-		batch := make([]library.Entry, 0, 128)
-		for index := start; index < min(n, start+128); index++ {
-			batch = append(batch, library.Entry{ID: uuid.New().String(), Version: uuid.New().String(), Name: fmt.Sprintf("candidate-%08d.mp4", index), Kind: "video", Size: 1, Fingerprint: fmt.Sprint(index), EffectiveTime: 1, Mtime: 1, NewVersion: true, Present: true, State: "visible"})
-		}
-		if err = i.AddBatch(t.Context(), d, gen, batch, now.Add(-time.Minute)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	commits := i.Store.Metrics.Commits.Load()
-	began := time.Now()
-	if _, err = q.Claim(t.Context(), "probe"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatal("unpublished job claimed", err)
-	}
-	t.Logf("unpublished_candidates=%d read_search=%s writer_commits=%d", n, time.Since(began), i.Store.Metrics.Commits.Load()-commits)
-	if i.Store.Metrics.Commits.Load() != commits {
-		t.Fatal("unpublished search acquired writer")
-	}
-	if err = i.Publish(t.Context(), d, gen, "fixture", 1, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = q.Claim(t.Context(), "probe"); err != nil {
-		t.Fatal("published job remained unavailable", err)
-	}
-}
-
 func TestShutdownInterruptedJobKeepsItsAttempts(t *testing.T) {
 	i, s, root := setup(t)
-	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("first"), 0600)
+	os.WriteFile(filepath.Join(root, "a.mp4"), []byte("first"), 0o600)
 	if e := s.Run(t.Context(), false); e != nil {
 		t.Fatal(e)
 	}
 	later := time.Now().Add(2 * time.Minute)
-	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return later }}
+	q := jobs.NewQueue(i, nil, func() time.Time { return later })
 	for round := range 5 {
 		ctx, cancel := context.WithCancel(t.Context())
 		ran := false
@@ -793,49 +488,10 @@ func TestShutdownInterruptedJobKeepsItsAttempts(t *testing.T) {
 	}
 	var state string
 	var attempts int
-	if e := i.Store.Reader.QueryRow("SELECT state,attempts FROM jobs WHERE kind='probe'").Scan(&state, &attempts); e != nil {
+	if e := i.Store.QueryRow(t.Context(), "SELECT state,attempts FROM jobs WHERE kind='probe'").Scan(&state, &attempts); e != nil {
 		t.Fatal(e)
 	}
 	if state != "queued" || attempts != 0 {
 		t.Fatalf("interrupted job became %s with %d attempts", state, attempts)
-	}
-}
-
-func TestManyProbesChangeDirectoryRevisionOnce(t *testing.T) {
-	i, s, root := setup(t)
-	for n := range 20 {
-		os.WriteFile(filepath.Join(root, fmt.Sprintf("v%02d.mp4", n)), []byte{byte(n)}, 0600)
-	}
-	if e := s.Run(t.Context(), false); e != nil {
-		t.Fatal(e)
-	}
-	later := time.Now().Add(2 * time.Minute)
-	q := &jobs.Queue{Store: i.Store, Index: i, Now: func() time.Time { return later }}
-	worker := probe.Worker{Queue: q, Now: q.Now, Parameters: probe.Parameters(10), Tool: func(_ context.Context, _ *os.File, e library.Entry) (probe.Result, error) {
-		return probe.Result{Width: 2, Height: 2, DurationMS: 1000, EffectiveTime: e.Mtime - int64(time.Hour), CapturedSource: "fixture"}, nil
-	}}
-	before, e := i.Directory(t.Context(), 1)
-	if e != nil {
-		t.Fatal(e)
-	}
-	for range 20 {
-		j, e := q.Claim(t.Context(), "probe")
-		if e != nil {
-			t.Fatal(e)
-		}
-		if e = worker.Run(t.Context(), j); e != nil {
-			t.Fatal(e)
-		}
-	}
-	unpublished, e := i.Directory(t.Context(), 1)
-	if e != nil || unpublished.Revision != before.Revision {
-		t.Fatal("probe results changed the revision before publication", e)
-	}
-	if moved, e := i.PublishProbedTimes(t.Context()); e != nil || moved != 20 {
-		t.Fatal(moved, e)
-	}
-	after, e := i.Directory(t.Context(), 1)
-	if e != nil || after.Revision != before.Revision+1 {
-		t.Fatalf("revision moved %d times for one batch", after.Revision-before.Revision)
 	}
 }

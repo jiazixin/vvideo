@@ -15,6 +15,8 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 
+private const val TAG = "VVideoCodec"
+
 @UnstableApi
 internal class SeekRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
     init {
@@ -40,7 +42,7 @@ internal class SeekRenderersFactory(context: Context) : DefaultRenderersFactory(
                 handler,
                 listener,
                 joiningMs,
-                out
+                out,
             )
             return
         }
@@ -56,8 +58,7 @@ internal class SeekRenderersFactory(context: Context) : DefaultRenderersFactory(
 }
 
 @UnstableApi
-private class SeekVideoRenderer(builder: MediaCodecVideoRenderer.Builder) :
-    MediaCodecVideoRenderer(builder) {
+private class SeekVideoRenderer(builder: MediaCodecVideoRenderer.Builder) : MediaCodecVideoRenderer(builder) {
     private var burst = false
     private var deadlineMs = 0L
 
@@ -68,29 +69,33 @@ private class SeekVideoRenderer(builder: MediaCodecVideoRenderer.Builder) :
         updateCodecOperatingRate()
     }
 
-    override fun getCodecOperatingRateV23(
-        speed: Float,
-        format: Format,
-        streamFormats: Array<Format>
-    ): Float {
+    override fun getCodecOperatingRateV23(speed: Float, format: Format, streamFormats: Array<Format>): Float {
         val normal = super.getCodecOperatingRateV23(speed, format, streamFormats)
         val info = getCodecInfo()
         // Unknown rates stay unset: returning to an unset rate after a hint would
         // reinitialize the codec. Software and undeclared capabilities also retain
         // Media3's defaults. This hint never changes presentation/playback speed.
-        if (!burst || !normal.isFinite() || normal <= 0 ||
+        if (!burst ||
+            !normal.isFinite() ||
+            normal <= 0 ||
             format.sampleMimeType != MimeTypes.VIDEO_H265 ||
-            format.width <= 0 || format.height <= 0 ||
+            format.width <= 0 ||
+            format.height <= 0 ||
             format.width.toLong() * format.height < 3840L * 2160 ||
-            info == null || !info.hardwareAccelerated
-        ) return normal
+            info == null ||
+            !info.hardwareAccelerated
+        ) {
+            return normal
+        }
         val maximum = info.getMaxSupportedFrameRate(format.width, format.height)
         if (!maximum.isFinite() || maximum <= normal) return normal
         val requested = maxOf(normal, minOf(maximum, 120f))
-        if (requested > normal) Log.i(
-            "VVideoCodec",
-            "seek_operating_rate=$requested normal=$normal dimensions=${format.width}x${format.height}"
-        )
+        if (requested > normal) {
+            Log.i(
+                TAG,
+                "seek_operating_rate=$requested normal=$normal dimensions=${format.width}x${format.height}",
+            )
+        }
         return requested
     }
 
@@ -98,7 +103,7 @@ private class SeekVideoRenderer(builder: MediaCodecVideoRenderer.Builder) :
         codec: MediaCodecAdapter,
         index: Int,
         presentationTimeUs: Long,
-        releaseTimeNs: Long
+        releaseTimeNs: Long,
     ) {
         super.renderOutputBufferV21(codec, index, presentationTimeUs, releaseTimeNs)
         endBurst()

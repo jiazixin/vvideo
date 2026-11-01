@@ -65,7 +65,13 @@ func (e *Engine) removeIfOrphan(ctx context.Context, item fs.DirEntry) error {
 	path := filepath.Join(e.Config.Cache.Path, name)
 	if strings.HasPrefix(name, ".frame-") && strings.HasSuffix(name, ".webp") {
 		info, err := item.Info()
-		if err != nil || time.Since(info.ModTime()) <= staleTempAge {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // Another cleanup already removed this disposable file.
+		}
+		if err != nil {
+			return err
+		}
+		if time.Since(info.ModTime()) <= staleTempAge {
 			return nil
 		}
 		return removeFile(path)
@@ -78,7 +84,7 @@ func (e *Engine) removeIfOrphan(ctx context.Context, item fs.DirEntry) error {
 	e.budget.Lock()
 	defer e.budget.Unlock()
 	var exists int
-	err := e.Queue.Store.Reader.QueryRowContext(ctx, "SELECT 1 FROM thumbnails WHERE key=?", key).Scan(&exists)
+	err := e.Queue.Store.QueryRow(ctx, "SELECT 1 FROM thumbnails WHERE key=?", key).Scan(&exists)
 	switch {
 	case err == nil: // the ledger knows this cover
 		return nil
@@ -101,7 +107,7 @@ func (e *Engine) forgetMissingFiles(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rows, err := e.Queue.Store.Reader.QueryContext(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT ?", cursor, storage.BatchSize)
+		rows, err := e.Queue.Store.Query(ctx, "SELECT key,size FROM thumbnails WHERE key>? ORDER BY key LIMIT ?", cursor, storage.BatchSize)
 		batch, err := storage.Collect(rows, err, func(rows *sql.Rows) (entry, error) {
 			var x entry
 			return x, rows.Scan(&x.key, &x.size)

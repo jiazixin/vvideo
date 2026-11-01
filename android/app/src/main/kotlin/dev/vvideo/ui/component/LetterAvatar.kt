@@ -18,7 +18,7 @@ import dev.vvideo.ui.theme.AvatarGradients
 import java.util.Locale
 import kotlin.math.abs
 
-fun avatarLetter(name: String): String {
+internal fun avatarLetter(name: String): String {
     val points = name.codePoints().toArray()
     val point = points.firstOrNull { Character.isLetter(it) }
         ?: points.firstOrNull { Character.isDigit(it) } ?: return "?"
@@ -26,10 +26,10 @@ fun avatarLetter(name: String): String {
 }
 
 /** Index into [AvatarGradients] for an item; the same ID always gets the same colour. */
-fun avatarColorIndex(id: String): Int = (abs(id.hashCode().toLong()) % AvatarGradients.size).toInt()
+internal fun avatarColorIndex(id: String): Int = (abs(id.hashCode().toLong()) % AvatarGradients.size).toInt()
 
 @Composable
-fun LetterAvatar(id: String, name: String, size: Dp = 52.dp) {
+internal fun LetterAvatar(id: String, name: String, size: Dp = 52.dp) {
     val letter = remember(name) { avatarLetter(name) }
     val brush = remember(id) { AvatarGradients[avatarColorIndex(id)] }
     Box(Modifier.size(size).background(brush, CircleShape), contentAlignment = Alignment.Center) {
@@ -37,7 +37,7 @@ fun LetterAvatar(id: String, name: String, size: Dp = 52.dp) {
             letter,
             color = Color.White,
             fontSize = (size.value * .4f).sp,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Medium,
         )
     }
 }

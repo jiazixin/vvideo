@@ -30,7 +30,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 ## 项目状态
 
-**首个版本，验收尚未全部完成。** 服务端和应用已实现，并在合成媒体和真机（iQOO 12 Pro）上测试。尚未验证：NAS 上的完整真实媒体库、全部编码与容器组合、持久化的正式部署。最近一次暖缓存滚动帧测量未达到 1% 超时帧目标。[验收记录](docs/ACCEPTANCE.md)列出测量内容、对应构建和已知限制。
+**首个版本，验收尚未全部完成。** 服务端和应用已实现，并在合成媒体和真机（iQOO 12 Pro）上测试。尚未验证：NAS 上的完整真实媒体库、全部编码与容器组合、持久化的正式部署。2026-11-01 最终布局修复后的 120 Hz 暖相册三轮达到 1% 超时帧门槛；实际 144 Hz、真实 NAS 与 Wi-Fi 条件仍未验证。[验收记录](docs/ACCEPTANCE.md)列出测量内容、对应构建和已知限制。
 
 本版范围：仅限家庭内网、原画播放、仅安卓。不在本版范围：公网服务、转码、iOS 和推荐。
 
@@ -62,7 +62,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 安卓应用 ──HTTP（Bearer 令牌）──▶ Go 服务 ──▶ SQLite（索引、任务）
   Compose 界面                      │  扫描器 ─▶ 只读媒体目录
   Media3 播放器 ◀── Range 字节 ─────┤  ffprobe / FFmpeg ─▶ 封面缓存
-  磁盘缓存（1/5/10 GB）             └  REST API /v1
+  磁盘缓存（1/5/10 GB）             └  REST API /api
 ```
 
 产品行为与性能目标见 [docs/DESIGN.md](docs/DESIGN.md)，服务端扫描、存储与性能规则见 [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)。
@@ -74,7 +74,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 ├── .github/workflows/  CI 与发布工作流
 ├── cmd/vvideo/         服务入口（参数、日志、启动与退出）
 ├── internal/           服务端各包
-│   ├── app/            装配存储、后台任务和 HTTP API
+│   ├── app/            装配存储、后台任务、HTTP API 与 Range 响应
 │   ├── config/         严格的配置加载
 │   ├── jobs/           持久任务队列与播放活动跟踪
 │   ├── library/        已发布索引：目录、媒体、分页、相册锚点
@@ -82,8 +82,9 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 │   ├── probe/          ffprobe 与 EXIF 元信息
 │   ├── scanner/        两遍观测目录并发布结果
 │   ├── storage/        SQLite 独占、连接与 schema
-│   ├── streaming/      Range 响应与容器索引提示
-│   └── thumbnail/      封面生成与 LRU 缓存
+│   ├── streaming/      原容器的索引范围提示
+│   ├── thumbnail/      封面生成与 LRU 缓存
+│   └── timefmt/        UTC 毫秒时间的传输格式
 ├── tests/              Go 跨包集成测试
 ├── configs/            配置示例（本地配置被 Git 忽略）
 ├── deploy/             systemd 服务定义
@@ -151,7 +152,7 @@ Relative paths inside the configuration file resolve against its directory.
 ffmpeg (with libwebp) and ffprobe must be on PATH.
 ```
 
-退出码：成功、`--help` 或 `--version` 为 0（帮助与版本输出到 stdout，不读取配置）；命令行错误为 2；服务无法启动或运行失败为 1。命令行错误、配置错误（含配置文件及出错行）和日志文件无法打开时，以 `vvideo: <错误>` 纯文本写入 stderr，命令行错误另附 `Run 'vvideo --help' for usage.`。日志就绪后的启动失败记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作：进行中的 HTTP 请求最多再等 10 秒，之后仍未结束的连接（例如已停止读取的播放流）被关闭；整个停止过程不超过 30 秒。
+退出码：成功、`--help` 或 `--version` 为 0（帮助与版本输出到 stdout，不读取配置）；命令行错误为 2；服务无法启动或运行失败为 1。命令行错误以 `vvideo: <错误>` 写入 stderr，另起一行附 `Run 'vvideo --help' for usage.`；配置错误（含配置文件及出错行）和日志文件无法打开时，写一行 `vvideo: config: <错误>` 或 `vvideo: log: <错误>`。错误文本为英文，配置项错误以字段路径开头，例如 `vvideo: config: server.port: must be an integer between 1 and 65535`。日志就绪后的启动失败记录一条 `service_failed` 事件并写明原因，例如缺少 `ffmpeg`/`ffprobe`、FFmpeg 不带 `libwebp`、数据库已被另一进程锁定、端口已被占用。收到 SIGTERM 后取消后台工作：进行中的 HTTP 请求最多再等 10 秒，之后仍未结束的连接（例如已停止读取的播放流）被关闭；整个停止过程不超过 30 秒。
 
 ### 构建并安装安卓应用
 
@@ -164,21 +165,23 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 在应用设置中填写服务根地址（例如 `http://192.168.1.10:8080`）和令牌。任意主机都可以使用 HTTP 或 HTTPS。HTTP 不加密连接，同一网络中的任何人都能读到令牌和媒体内容。
 
+令牌通过 Android Keystore 的 AES/GCM 密钥加密保存。本次未保留旧接口或明文令牌存储的兼容逻辑，旧开发包升级后需重新输入令牌。
+
 构建变体、真机测试和性能测量见 [android/README.md](android/README.md)。
 
 ## 配置
 
 [configs/config.example.yaml](configs/config.example.yaml) 列出全部支持的字段。只有 `auth.token` 和至少一个 `media[].path` 是必填项，其余都有默认值。配置只在启动时读取，修改后需要重启。
 
-**选择配置文件。** `-c`/`--config`（也可写 `--config=<file>`；同时给出不同文件时报命令行错误）优先于 `CONFIG_FILE`，后者优先于工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。显式指定的文件为空、不存在、不可读或格式错误时报错；只有隐式默认文件允许不存在，此时必须由环境变量提供必填项。
+**选择配置文件。** `-c`/`--config`（也可写 `--config=<file>`；同时给出不同文件时报命令行错误）优先于 `CONFIG_FILE`，后者优先于工作目录下的 `configs/config.local.yaml`。相对路径以工作目录为基准。`CONFIG_FILE` 已设置但为空或全空白时报 `CONFIG_FILE is set but empty`（退出码 1）。显式指定的文件为空、不存在、不可读或格式错误时报错；只有隐式默认文件允许不存在，此时必须由环境变量提供必填项。
 
-**优先级与环境变量。** `VVIDEO_*` 环境变量覆盖 YAML 文件，YAML 覆盖默认值。变量名为 `VVIDEO_` 加大写字段路径，层级之间用 `__` 连接，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA` 和 `VVIDEO_IGNORE` 用 `{"path": "..."}` 对象组成的 JSON 数组替换整个列表。未知或旧字段、重复键、YAML 别名和标签、类型错误、必填项为空都会被拒绝。不加载 `.env`，YAML 中也不做变量替换。
+**优先级与环境变量。** `VVIDEO_*` 环境变量覆盖 YAML 文件，YAML 覆盖默认值。变量名为 `VVIDEO_` 加大写字段路径，层级之间用 `__` 连接，例如 `VVIDEO_AUTH__TOKEN`、`VVIDEO_CACHE__PATH`。`VVIDEO_MEDIA` 和 `VVIDEO_IGNORE` 用 `{"path": "..."}` 对象组成的 JSON 数组替换整个列表。未知或旧字段、重复键、YAML 别名和标签、类型错误、必填项为空都会被拒绝；不对应任何字段的 `VVIDEO_*` 变量（含大小写不符的变量名）同样被拒绝。不加载 `.env`，YAML 中也不做变量替换。
 
 | 配置项 | 含义 | 默认值 |
 | --- | --- | --- |
 | `server.listen` | 主机名或 IP 地址，不含端口；IPv6 写作 `::` | `0.0.0.0` |
 | `server.port` | TCP 端口，1–65535 | `8080` |
-| `auth.token` | 客户端必须携带的 Bearer 令牌 | 必填 |
+| `auth.token` | 客户端必须携带的 Bearer 令牌，1–4096 个可见 ASCII 字符，不含空格 | 必填 |
 | `storage` | 数据目录，内含 `data.sqlite` 和扫描暂存区 `.scan-tmp/` | `data` |
 | `media[].path` | 媒体根目录，彼此不能重叠 | 必填 |
 | `ignore[].path` | 媒体根内要排除的具体文件或目录子树，不支持通配符 | 无 |
@@ -216,11 +219,22 @@ go test ./...
 android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest :app:lintDebug :core:media:lintDebug
 ```
 
-每次推送到 `main` 和每个 PR 都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：Go 部分检查 `gofmt`、`go vet`（含 macOS 交叉检查）、`go test -race` 和 Linux amd64/arm64 交叉编译；安卓部分运行单元测试、Lint 以及 debug 和 profile 构建。CI 还用 GoReleaser 快照检查发布配置。推送 `vX.Y.Z` tag 时，[发布工作流](.github/workflows/release.yml) 用仓库 Secrets 中的密钥签名 APK，再用 GoReleaser 发布服务端压缩包和 APK；签名方式见 [android/README.md](android/README.md#release-signing)。真机测试和性能测量需要手机，不在 CI 中运行。
+每次推送到 `main` 和每个 PR 都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：Go 部分检查模块校验、`tidy -diff`、`gofmt`、`goimports`、`go vet`（Linux 两架构及 macOS）、Staticcheck、`go test -race`、govulncheck 和 Linux amd64/arm64 交叉编译；安卓部分运行 ktlint、单元测试、零警告 Lint、debug/profile/release 构建，并编译设备测试与 benchmark APK。CI 还用 GoReleaser 快照检查发布配置。推送 `vX.Y.Z` tag 时，[发布工作流](.github/workflows/release.yml) 用仓库 Secrets 中的密钥签名 APK，再用 GoReleaser 发布服务端压缩包和 APK；签名方式见 [android/README.md](android/README.md#release-signing)。真机测试和性能测量需要手机，不在 CI 中运行。
 
 `scripts/generate-media.py <目录>` 生成一个小型合成媒体库（MP4、MKV、TS、MOV 容器中的 H.264、HEVC、AV1 视频，以及照片），用于本地测试。不要提交真实媒体、令牌或服务器地址。
 
 工作流程、代码风格和提交 PR 前需要通过的检查见[贡献指南](docs/CONTRIBUTING.md)。使用 AI 代理参与开发时，还需遵守 [AGENTS.md](AGENTS.md)。
+
+### 代码例外
+
+| 规则 | 实际做法 | 原因与依据 | 适用范围 | 重新评估条件 |
+| --- | --- | --- | --- | --- |
+| [Go代码规范.md](Go代码规范.md) 第 7 节 `config.Source` 只有 `Path`、`Explicit`、`WorkDir`、`LookupEnv` | 另有 `Environ []string`（生产中为 `os.Environ()`），只用其中的变量名拒绝不对应任何字段的 `VVIDEO_*` 变量；取值仍只经 `LookupEnv` | `LookupEnv` 无法枚举变量，而拒绝拼错或已废弃的变量是既有配置协议（见“配置”） | `internal/config`、`cmd/vvideo` | 不再拒绝未知 `VVIDEO_*` 变量，或规范提供枚举方式时 |
+| [Go代码规范.md](Go代码规范.md) 第 2 节包名不用复数 | 保留 `internal/jobs` 与跨包测试 `tests` | [项目目录决策](docs/decisions/2026-10-08-project-layout.md) 已指定这两个职责目录；包名与目录一致 | Go 队列与跨包测试 | 项目目录决策调整时 |
+| [Go代码规范.md](Go代码规范.md) 第 6 节 `os.OpenRoot` | 使用固定目录描述符、逐段 `openat` / `O_NOFOLLOW` 与 `filepath.IsLocal` | [设计](docs/DESIGN.md) 禁止跟随根内媒体符号链接；本地 Go 1.27.3 `go doc os.Root` 确认其允许跟随根内链接，不能直接替代更严格的现有行为 | `internal/mediafs`；Linux 目标及 Darwin 测试适配 | 标准库提供等价的不跟随链接与目录身份守卫时 |
+| [Go代码规范.md](Go代码规范.md) 第 8 节 Store 只暴露业务方法、两参数 Write | Store 提供受控 Query/QueryRow/BeginRead 与 `Write(ctx, rows, fn)`，连接字段私有；业务 SQL 在各领域包 | [实施说明](docs/IMPLEMENTATION.md) 明确 storage 不放媒体业务 SQL，且要求写入行数与事务计量；所有正式写入仍经单一写者 | `internal/storage` 及其领域调用方 | 改变数据库边界或性能计量模型时 |
+| [Go代码规范.md](Go代码规范.md) 第 7 节存储时间格式 | SQLite 内部使用 UTC Unix 纳秒及整数排序键；HTTP 时间统一转 UTC 毫秒 RFC 3339 | [实施说明](docs/IMPLEMENTATION.md) 的文件版本守卫须保留文件系统纳秒精度，分页需索引范围比较；不可把毫秒传输格式当原始指纹精度 | 内部索引、任务时间与版本守卫；不改变 API 格式 | 文件系统精度、存储或游标设计改变时 |
+| [Go代码规范.md](Go代码规范.md) 第 6 节 `/api/` 全部 no-store | JSON 与错误 no-store；成功的版本化媒体/封面为 private、immutable | [设计](docs/DESIGN.md) 要求同版本缓存复用；[API](docs/API.md) 的版本键和 ETag 防止混用字节 | 仅成功的 bytes/thumbnail 二进制响应 | 不再使用不可变版本键或新增非版本化媒体时 |
 
 ## 文档
 

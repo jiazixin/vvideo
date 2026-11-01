@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
 	"vvideo/internal/library"
 )
 
@@ -62,7 +63,7 @@ func TestOriginalExifUnknownTimezoneOverridesContainerTime(t *testing.T) {
 	// Isolate external-tool parsing while exercising the actual Run path and
 	// EXIF file reader. This fixture is metadata, not a playable JPEG sample.
 	script := "#!/bin/sh\nprintf '%s\\n' '{\"streams\":[{\"codec_type\":\"video\",\"width\":80,\"height\":40}],\"format\":{\"tags\":{\"creation_time\":\"2025-06-01T00:00:00Z\"}}}'\n"
-	if err := os.WriteFile(filepath.Join(directory, "ffprobe"), []byte(script), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "ffprobe"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -76,7 +77,7 @@ func TestOriginalExifUnknownTimezoneOverridesContainerTime(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "metadata.jpg")
-			if err := os.WriteFile(path, exifTimeFixture(tc.raw, tc.offset), 0600); err != nil {
+			if err := os.WriteFile(path, exifTimeFixture(tc.raw, tc.offset), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			f, err := os.Open(path)

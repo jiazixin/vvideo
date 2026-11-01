@@ -1,6 +1,6 @@
 package dev.vvideo.feature.player
 
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -27,7 +27,7 @@ class SeekChainTest {
     }
 
     @Test
-    fun expiryAndResetHideTheFigure() = runBlocking {
+    fun expiryAndResetHideTheFigure() = runTest {
         val chain = SeekChain()
         chain.tap(forward = false, nowMs = 10_000)
         chain.expire()

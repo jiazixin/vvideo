@@ -18,17 +18,19 @@ class AlbumGeometryTest {
 
     @Test
     fun cellsTileTheAlbumWithoutOverlapping() {
-        for (count in 1..10) for (shape in listOf(.5f, 1f, 1.5f, 2.5f)) {
-            val album = geometry(*FloatArray(count) { if (it % 3 == 0) shape else 1f })
-            assertEquals(count, album.cells.size)
-            for (cell in album.cells) {
-                assertTrue(cell.width > 0f && cell.height > 0f)
-                assertTrue(cell.x >= 0f && cell.x + cell.width <= albumWidth + .01f)
-                assertTrue(cell.y >= 0f && cell.y + cell.height <= album.height + .01f)
-                if (cell.atRight) assertEquals(albumWidth, cell.x + cell.width, .01f)
-                if (cell.atBottom) assertEquals(album.height, cell.y + cell.height, .01f)
+        for (count in 1..10) {
+            for (shape in listOf(.5f, 1f, 1.5f, 2.5f)) {
+                val album = geometry(*FloatArray(count) { if (it % 3 == 0) shape else 1f })
+                assertEquals(count, album.cells.size)
+                for (cell in album.cells) {
+                    assertTrue(cell.width > 0f && cell.height > 0f)
+                    assertTrue(cell.x >= 0f && cell.x + cell.width <= albumWidth + .01f)
+                    assertTrue(cell.y >= 0f && cell.y + cell.height <= album.height + .01f)
+                    if (cell.atRight) assertEquals(albumWidth, cell.x + cell.width, .01f)
+                    if (cell.atBottom) assertEquals(album.height, cell.y + cell.height, .01f)
+                }
+                for (a in album.cells) for (b in album.cells) if (a !== b) assertTrue(!a.overlaps(b))
             }
-            for (a in album.cells) for (b in album.cells) if (a !== b) assertTrue(!a.overlaps(b))
         }
     }
 

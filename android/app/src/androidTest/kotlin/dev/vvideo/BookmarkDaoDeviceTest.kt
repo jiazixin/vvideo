@@ -2,16 +2,18 @@ package dev.vvideo
 
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.vvideo.data.library.local.*
-import kotlinx.coroutines.*
+import dev.vvideo.data.library.local.BookmarkEntity
+import dev.vvideo.data.library.local.BrowseDatabase
 import kotlinx.coroutines.flow.first
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Room's real schema on the device; no room-testing dependency. */
 class BookmarkDaoDeviceTest {
     @Test
-    fun visitsCannotBeOverwrittenOrResurrectedByScroll() = runBlocking {
+    fun visitsCannotBeOverwrittenOrResurrectedByScroll() = deviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val db = Room.inMemoryDatabaseBuilder(context, BrowseDatabase::class.java).build()
         try {

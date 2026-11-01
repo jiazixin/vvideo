@@ -1,10 +1,20 @@
 package dev.vvideo.feature.library
 
-import dev.vvideo.model.*
+import dev.vvideo.model.CaptureSource
+import dev.vvideo.model.Directory
+import dev.vvideo.model.Media
+import dev.vvideo.model.MediaKind
+import dev.vvideo.model.MediaStatus
+import dev.vvideo.model.Sort
+import dev.vvideo.model.SortField
 import dev.vvideo.ui.component.TimeLabels
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.*
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.Locale
 
 class TimeLabelsTest {
@@ -16,7 +26,7 @@ class TimeLabelsTest {
         "M月d日",
         "yyyy/M/d",
         "EEE",
-        Locale.CHINA
+        Locale.CHINA,
     )
     private val zone = ZoneId.of("Asia/Shanghai")
     private val now = Instant.parse("2026-10-10T08:00:00Z")
@@ -30,11 +40,11 @@ class TimeLabelsTest {
             "2026-10-09T12:00:00" to "昨天",
             "2026-10-07T12:00:00" to "周三",
             "2026-10-03T12:00:00" to "10月3日",
-            "2023-10-03T12:00:00" to "2023/10/3"
+            "2023-10-03T12:00:00" to "2023/10/3",
         ).forEach { (input, expected) ->
             assertEquals(
                 expected,
-                labels.recent(instant(input).toEpochMilli(), now, zone)
+                labels.recent(instant(input).toEpochMilli(), now, zone),
             )
         }
     }
@@ -46,7 +56,7 @@ class TimeLabelsTest {
             "2026-10-09T12:00:00" to "昨天",
             "2026-10-07T12:00:00" to "10月7日 周三",
             "2026-04-06T12:00:00" to "4月6日 周一",
-            "2024-04-06T12:00:00" to "2024年4月6日 周六"
+            "2024-04-06T12:00:00" to "2024年4月6日 周六",
         ).forEach { (input, expected) -> assertEquals(expected, labels.date(ns(input), now, zone)) }
     }
 
@@ -57,18 +67,18 @@ class TimeLabelsTest {
             "2026-10-09T12:00:15",
             "2026-10-07T12:00:15",
             "2026-04-06T12:00:15",
-            "2024-04-06T12:00:15"
+            "2024-04-06T12:00:15",
         ).forEach { input ->
             val date = LocalDateTime.parse(input)
             val expected =
                 "${date.year}年${date.monthValue}月${date.dayOfMonth}日 " + input.substring(11, 16)
             assertEquals(
                 expected,
-                TimeLabels.timestamp(ns(input), "yyyy年M月d日 HH:mm", zone, Locale.CHINA)
+                TimeLabels.timestamp(ns(input), "yyyy年M月d日 HH:mm", zone, Locale.CHINA),
             )
             assertEquals(
                 expected + ":15",
-                TimeLabels.timestamp(ns(input), "yyyy年M月d日 HH:mm:ss", zone, Locale.CHINA)
+                TimeLabels.timestamp(ns(input), "yyyy年M月d日 HH:mm:ss", zone, Locale.CHINA),
             )
         }
     }
@@ -97,9 +107,9 @@ class TimeLabelsTest {
                 ns(date),
                 MediaStatus.Ready,
                 "",
-                CaptureSource.Unknown
-            )
-        )
+                CaptureSource.Unknown,
+            ),
+        ),
     )
 
     @Test
@@ -111,7 +121,8 @@ class TimeLabelsTest {
         assertEquals(listOf("今天", null, "昨天"), result.map { it.dateLabel })
         assertEquals(
             listOf("今天", null),
-            datedAlbums(listOf(a, b), Sort(), labels, now, zone).map { it.dateLabel })
+            datedAlbums(listOf(a, b), Sort(), labels, now, zone).map { it.dateLabel },
+        )
         assertEquals("今天", datedAlbums(listOf(b, c), Sort(), labels, now, zone).first().dateLabel)
         assertTrue(
             datedAlbums(
@@ -119,8 +130,9 @@ class TimeLabelsTest {
                 Sort(SortField.Name),
                 labels,
                 now,
-                zone
-            ).all { it.dateLabel == null && it.dayLabel == null })
+                zone,
+            ).all { it.dateLabel == null && it.dayLabel == null },
+        )
     }
 
     @Test
@@ -131,7 +143,7 @@ class TimeLabelsTest {
         val state =
             LibraryUiState(
                 albums = albums,
-                subfolders = Subfolders(listOf(Directory(4, "l", 1, "child", 1)))
+                subfolders = Subfolders(listOf(Directory(4, "l", 1, "child", 1))),
             )
         val keys = libraryKeys(state)
         assertEquals(listOf("folder:4", "date:a", "album:a", "date:b", "album:b"), keys)
@@ -155,7 +167,7 @@ class TimeLabelsTest {
             Sort(),
             labels,
             now,
-            zone
+            zone,
         )
         val keys = libraryKeys(LibraryUiState(albums = prepended))
         assertEquals(5, restoreIndex(keys, prepended, "album:b", "b"))
@@ -164,13 +176,12 @@ class TimeLabelsTest {
                 subfolders = Subfolders(
                     listOf(
                         Directory(1, "l", 0, "one", 1),
-                        Directory(2, "l", 0, "two", 1)
-                    )
-                )
-            )
+                        Directory(2, "l", 0, "two", 1),
+                    ),
+                ),
+            ),
         )
         assertEquals(listOf("folder:1", "folder:2"), folders)
         assertEquals(1, restoreIndex(folders, emptyList(), "folder:2", ""))
     }
-
 }

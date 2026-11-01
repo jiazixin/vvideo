@@ -17,7 +17,6 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -28,21 +27,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
-import coil3.compose.AsyncImage
 import dev.vvideo.R
 import dev.vvideo.data.library.PageEdge
-import dev.vvideo.data.library.remote.MediaResource
-import dev.vvideo.data.settings.Connection
 import dev.vvideo.model.Media
-import dev.vvideo.ui.component.imageRequest
 import kotlinx.coroutines.flow.distinctUntilChanged
+
+/** A route-provided photo renderer; preview renderers never read the network. */
+internal typealias PhotoContent = @Composable (
+    Media,
+    Boolean,
+    Boolean,
+    (GraphicsLayerScope.() -> Unit)?,
+    Modifier,
+) -> Unit
 
 /** The largest pinch zoom of a photo. */
 private const val MAX_ZOOM = 4f
@@ -58,16 +58,16 @@ private const val ZOOM_SNAP_BACK_BELOW = 1.1f
 // the pager stands still while it is enlarged, and one-finger drags pan the
 // photo instead.
 @Composable
-fun PhotoScreen(
+internal fun PhotoScreen(
     state: PlayerUiState,
-    connection: Connection,
-    loader: ImageLoader,
+    photoContent: PhotoContent,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onSelected: (String) -> Unit,
     onPage: (PageEdge) -> Unit,
-    leaving: Boolean = false
+    modifier: Modifier = Modifier,
 ) {
+    val leaving = state.leaving
     // The page count is read when the pager measures, so it must come from the
     // latest queue: a count captured with an earlier queue outlives a shrunken or
     // emptied one and indexes past it.
@@ -75,10 +75,13 @@ fun PhotoScreen(
     // Sized from the loaded queue so the first frame is already the tapped photo.
     val pager = key(
         state.initialId,
-        state.items.isEmpty()
+        state.items.isEmpty(),
     ) {
-        rememberPagerState(initialPage = state.items.indexOfFirst { it.id == state.initialId }
-            .coerceAtLeast(0), pageCount = { latest.items.size })
+        rememberPagerState(
+            initialPage = state.items.indexOfFirst { it.id == state.initialId }
+                .coerceAtLeast(0),
+            pageCount = { latest.items.size },
+        )
     }
     // The laid-out key names the page in front even in the one composition where
     // pages arrived ahead of it and its index has not been matched again yet.
@@ -117,7 +120,7 @@ fun PhotoScreen(
         }
     }
     if (details && item != null) MediaDetailsSheet(item, state.pathLabel) { details = false }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier.fillMaxSize().background(Color.Black)) {
         // Neighbours are composed ahead with their thumbnail only, so a swipe never
         // drags in an empty page. The original is fetched once a page comes in front
         // and kept until the pager rests on another page: one original at rest, two
@@ -130,19 +133,24 @@ fun PhotoScreen(
             beyondViewportPageCount = 1,
             pageSpacing = 16.dp,
             userScrollEnabled = !zoomed,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
         ) { index ->
             val photo = latest.items[index]
             val front = photo.id == item?.id
-            PhotoPage(
-                photo, connection, loader, front, resting, if (front) {
+            photoContent(
+                photo,
+                front,
+                resting,
+                if (front) {
                     {
                         scaleX = scale
                         scaleY = scale
                         translationX = offset.x
                         translationY = offset.y
                     }
-                } else null,
+                } else {
+                    null
+                },
                 Modifier.pointerInput(photo.id, front) {
                     detectTapsIgnoringDrags(onTap = { controls = !controls }, onDoubleTap = { point ->
                         if (front) {
@@ -153,89 +161,53 @@ fun PhotoScreen(
                                 scale = DOUBLE_TAP_ZOOM
                                 offset = Offset(
                                     (size.width / 2f - point.x) * (DOUBLE_TAP_ZOOM - 1),
-                                    (size.height / 2f - point.y) * (DOUBLE_TAP_ZOOM - 1)
+                                    (size.height / 2f - point.y) * (DOUBLE_TAP_ZOOM - 1),
                                 )
                             }
                         }
                     })
                 }.then(
-                    if (front) Modifier.transformable(
-                        transform,
-                        canPan = { scale > 1f }) else Modifier
-                )
+                    if (front) {
+                        Modifier.transformable(
+                            transform,
+                            canPan = { scale > 1f },
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
             )
         }
-        if (state.error && state.items.isEmpty()) Column(
-            Modifier.align(Alignment.Center).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(stringResource(R.string.photo_failed), color = Color.White)
-            Button(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+        if (state.error && state.items.isEmpty()) {
+            Column(
+                Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(stringResource(R.string.photo_failed), color = Color.White)
+                Button(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+            }
         }
         FadingChrome(
             controls && !pager.isScrollInProgress,
             item,
             onBack,
             { details = true },
-            Modifier.align(Alignment.TopCenter)
+            Modifier.align(Alignment.TopCenter),
         )
     }
 }
 
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, fontScale = 1.5f)
 @Composable
-private fun PhotoPage(
-    item: Media,
-    connection: Connection,
-    loader: ImageLoader,
-    front: Boolean,
-    resting: Boolean,
-    zoom: (GraphicsLayerScope.() -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    val image =
-        if (zoom != null) Modifier.fillMaxSize().graphicsLayer(zoom) else Modifier.fillMaxSize()
-    // A page being swiped away keeps its original until the pager rests, so it
-    // does not fall back to its thumbnail while still on screen.
-    var original by remember { mutableStateOf(front) }
-    var attempt by remember(item.version) { mutableIntStateOf(0) }
-    var failed by remember(item.version, attempt) { mutableStateOf(false) }
-    var loaded by remember(item.version, attempt) { mutableStateOf(false) }
-    LaunchedEffect(front, resting) {
-        if (front) original = true else if (resting) {
-            original = false
-            loaded = false
-        }
-    }
-    val context = LocalContext.current
-    val request = remember(item.id, item.version, connection.token, attempt) {
-        item.imageRequest(context, connection, MediaResource.Bytes)
-    }
-    val thumb = remember(item.id, item.version, connection.token) {
-        item.imageRequest(context, connection, MediaResource.Thumbnail)
-    }
-    Box(modifier.fillMaxSize()) {
-        if (!loaded || !original) AsyncImage(
-            thumb,
-            null,
-            imageLoader = loader,
-            contentScale = ContentScale.Fit,
-            modifier = image
+private fun PhotoScreenPreview() {
+    dev.vvideo.ui.theme.VVideoTheme {
+        PhotoScreen(
+            state = PlayerUiState(error = true),
+            photoContent = { _, _, _, _, _ -> },
+            onBack = {},
+            onRetry = {},
+            onSelected = {},
+            onPage = {},
         )
-        if (original) AsyncImage(
-            request,
-            item.name,
-            imageLoader = loader,
-            contentScale = ContentScale.Fit,
-            onSuccess = { loaded = true },
-            onError = { failed = true },
-            modifier = image
-        )
-        if (failed) Column(
-            Modifier.align(Alignment.Center).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(stringResource(R.string.photo_failed), color = Color.White)
-            Button(onClick = { attempt++ }) { Text(stringResource(R.string.retry)) }
-        }
     }
 }

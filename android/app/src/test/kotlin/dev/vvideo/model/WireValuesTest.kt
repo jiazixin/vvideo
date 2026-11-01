@@ -13,7 +13,7 @@ class WireValuesTest {
         assertEquals(CaptureSource.ExifOriginal, CaptureSource.fromWire("exif_datetime_original"))
         assertEquals(
             CaptureSource.ContainerCreation,
-            CaptureSource.fromWire("container_creation_time")
+            CaptureSource.fromWire("container_creation_time"),
         )
         assertEquals(CaptureSource.Modified, CaptureSource.fromWire("mtime"))
         assertEquals(SortField.Modified, SortField.fromWire("mtime"))

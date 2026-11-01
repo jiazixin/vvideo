@@ -26,7 +26,9 @@ def center(node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("apk", type=Path)
-    parser.add_argument("--package", required=True, choices=["dev.vvideo", "dev.vvideo.test", "dev.vvideo.benchmark"])
+    parser.add_argument("--package", required=True, choices=[
+        "dev.vvideo", "dev.vvideo.test", "dev.vvideo.core.media.test", "dev.vvideo.benchmark",
+    ])
     args = parser.parse_args()
     apk = args.apk.resolve()
     root = Path(__file__).resolve().parents[1]
@@ -54,8 +56,10 @@ def main():
                 button = next((n for n in installer if n.get("content-desc") == "继续安装"), None)
                 if button is not None:
                     adb("shell", "input", "tap", *center(button))
-            except (subprocess.TimeoutExpired, ET.ParseError):
-                pass
+            except (subprocess.TimeoutExpired, ET.ParseError) as error:
+                # Installer transitions can invalidate a snapshot; retry within
+                # the existing deadline and retain a diagnostic without UI data.
+                print(f"installer_snapshot_retry error={type(error).__name__}", flush=True)
             time.sleep(.3)
         if process.poll() is None:
             process.terminate()

@@ -1,6 +1,6 @@
 package dev.vvideo.feature.library.album
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AlbumReadabilityTest {

@@ -1,0 +1,906 @@
+{
+  "mode": "workspace (staged changes)",
+  "basis": "OCR delegate preview/rule, HEAD diffs and full new source with affected call sites; same host agent implements and reviews",
+  "total_files": 149,
+  "reviewed_files": 149,
+  "skipped_files": 0,
+  "coverage_rate": 1.0,
+  "excluded_by_ocr": 72,
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "9f62a7c79a43f3613c49d420376f5efb074e2d21b122befb9f6712a75a0e6a06"
+    },
+    {
+      "path": "android/.editorconfig",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "e392e5c6274edc8dd3e66af6facc0a2cd3f46dd4e79572591bc0392dce562446"
+    },
+    {
+      "path": "android/app/build.gradle.kts",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "58f63933abae450c9d5e689cc42a6d4963e8fd4344399e894d4323344cc4d86f"
+    },
+    {
+      "path": "android/app/lint-baseline.xml",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "3ebaa38f95c093903aebdc7fc391c50f1594323cd40144aff89ce4b4d4ff081f"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/BookmarkDaoDeviceTest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "9a53790623f73f9a63716ca35cdfcd1645958e665ffb65d6df7a485c421d541e"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/DevicePlaybackTest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "0e1cdff144d7487ba23fc073caa7a7b2fba5c6cba58173a46c11f3e291d26db3"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/DeviceTest.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "eee6178b5b7b3d92877a21c4764a610546c9b891f922a129a9a046775282d472"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/PhotoDeviceTest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "31e613197439136a02f93d729a1bb46f88ab1b2c602ba2d73bc4392015f30516"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/TelegramUiDeviceTest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "ba889a0126b431aabb3339d53e4ee785c91fb7e4e38bf0baf032514dd6448530"
+    },
+    {
+      "path": "android/app/src/androidTest/kotlin/dev/vvideo/UiRedesignDeviceTest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "51cfbd7ed74897b09439005870ebdff030920ed53f233d77a0cc1954013160ea"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/AppGraph.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "34ec0668434967e574149e05eadac78f03ef3e7ddae2f7470e56602b28f00183"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/MainActivity.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "62d829226e7547f6d1d0455da09d36c1a380b28c2556b5d00d68921f66ffa3fd"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/VVideoApplication.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5b98c0779a07a56e9fc95626de30afd1e2a732c1d0724dae3f288d4c8138e807"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/navigation/NavigationUiState.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "3866e27f4e01e997de0dba216b799214ea8e3965c8e0ef565db5ea801de66122"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/navigation/NavigationViewModel.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "36c140a27d7ef62deb17c0d0c9a09e6548f29cc164d2ae495e5ee95b75a88131"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/app/navigation/VVideoRoot.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "e180ae8d912cc385ee2a5b18c230e6fba37e90a31d49a87066a4104259a3ac30"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/cache/CacheCoordinator.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "bddf14e139b6755427337505a908d2326e175b068db9c91699bb13a24ad36f15"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/cache/CacheSettings.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "4f90c1ee0a476cfad99ceaa1c14c23ba6970c2f45ed63f5e349c293b1f0b41f9"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/AnchorFallback.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8ef344bb29897992fd78a64123ce52ff0becfb7aee6470174382deaf5e9e7686"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/ChildrenWindow.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "f50cf72c226cab341319bf5638b99e50d8f95e8518de7f9de54dd83f260a9187"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/LibraryData.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "cda4d516fb0ef51af5ca2c18d9bab830bb56792964fcc67848bd077b67a1055b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/LibraryError.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "727d774fc307c8d9a46ea4f2b597e3a1ea85c660c2ad468aacdab8fe5103d058"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/LibraryRepository.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "42e08a49483615343d264124c18e8e37b9805bbb16a7678f9d7a04f67f667a76"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/PageEdge.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "d294f2b3e625dafc3a2916196d8373540561370551562f4a7c5d5334688dd4e6"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/PageWindow.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "036a70e5bf4ded1052918ddf2fe4c93ee4156baa04141765487a44a6a5f1a867"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/PagingGate.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "622bab6ee4080efbcb822f8b6b08f31a2151f16d9b1f83a56ed4b4e4c301d690"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/local/BookmarkDao.kt",
+      "status": "renamed",
+      "review_status": "reviewed",
+      "sha256": "6acbf451350f293f042bfa06a519abb3e919b1e66d4be567fee880ba8b021341"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/local/BookmarkEntity.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "b452e3a5c69cdbdfccb76031d02ff4d2f930ce5346a62355575333d936621990"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/local/BrowseDatabase.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "2644c1fef07ce18ccd661b1cd462283f15d2f25f82d2610e510cb7d4bb999769"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/remote/Authorization.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "07105364f45c17f8abe0770c4ccf297a823131aff9b4cdc6a8f1b688a795da07"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/remote/LibraryApi.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5bcff4b005249c74a4c4e92ca625c5d4d51790a8c0b4067a9f5969e4c62b274e"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/remote/MediaUrls.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "7484ae21cc51aaefbcd53039f7494d4667a21deadd5237d7af0fca33d704b1f8"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/library/remote/RetryPolicy.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "de2f1fa0c1828753b4c814334aafb4c2716afa501fd7efdfe687bf5ab34d5445"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/network/HttpClient.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "d9fafdbbe32fd891c16390da4595eac874034e9eeeaa82fea312a0a9b347ae59"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/Connection.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "04fa136c99c7632c2102ec18591359796399221bd4405e390448923e48dc8e19"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/ConnectionPolicy.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "acfb21d92c48674fd439b9bc5ab7588cb306ee20b014d34977978ffee692fb5e"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/SettingsData.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "27c444d99551ed4f829b0b4a24a29ed839c7c8846e090cae3e4f37551edf77e8"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/SettingsRepository.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "6beaf81b35473838eb4771c525fcc3c13435bc703a376e4d2706757bf86d2491"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/TokenCipher.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "25b55692f8f8aac145a2d76762db1d3c58237a3b416a5e88a67f0639dd9db9ba"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/data/settings/TokenPolicy.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "119ce740e4f94dafc911d580a86a76ec509ffd72149ee9d8ff8c83ef56d52ce1"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/AlbumBubble.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "db68dbbb05be5bc7b41e0ba1049b68007495fdce26a2e22b85c8e0ce230aa7de"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/DatedAlbums.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5852a5009e42cee0e754967c166b5f24e968d00d7f7bf89acba66549f8a6d531"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/FolderContent.kt",
+      "status": "renamed",
+      "review_status": "reviewed",
+      "sha256": "f7c7588e64e6c5f2ecff4866a1116dec50d65d259bfaee5b626a98f88ecd26ae"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/FolderPositions.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "79f6ffdedb8f5c6c2961fc014393b15cd5ed37260861bb40414ac1f06676581e"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/FolderSearch.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "aeb60c77f87e0b1308f6091bad8897f1752d1a80ff16354a07bda397a4c79c34"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/FolderSheets.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "e697586ddd92a638eaeea37316c5988ebfd580a915f8049f2b83aa148d19d112"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/HomeScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "cec3b3b80feab130f4bdee91070dc3e9ab740aa7df787fd067d529a1e834940b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/LibraryKeys.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "1208ffef48a90e0ccb21e157310963e22907637b1d62df0754ad0f252c03226a"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/LibraryRoute.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "bac5fab455808fc604c900991c45ce832ab68023ca1afcc5739420d4a7f16a4b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/LibraryScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "9ec7cff59a0cff844363e0ec7a5a3375c55e9c87b9a1caba66c5a07f96191e4f"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/LibraryUiState.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8f1ff23be9d43f8f5ff3acf04575bfa8340157f10dd6a15f4c064aedc80e9115"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/LibraryViewModel.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "b6da7a5d11fc301cd7ba1bc113683242017f3b57c2f4355b7e022a4504227766"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/MediaTabs.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "6ac8e4246e4fdca7c61df038e074794850b497c7994d55140d1c8138a4a3fef1"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/PendingDirectory.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "a7c307a6f609b422db0a90147a4da01fd6c155927c47a88571eac29c8eef917d"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/Thumbnail.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "3a8b51b89f5c6bbee144462f0a2d14ea7e6fd73f0fcfd00b9b2875170a85d802"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/ThumbnailContent.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "d70693c367536e4a477bb1eeb9e02556401d6fa97e074a3e69b0201d5170c552"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/album/AlbumGeometry.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8ee1bb16d592f381f5483bad0e2075539ee4d5a103a0797f5791bba1200eb90b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/library/album/TelegramGroupedLayout.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "2f58581227cd796178dc673c9ad28f7166110144c5824ec63624388e1cd7ccdd"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/EdgeAdjust.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "db04880310ca7a6ca60da11c9d0a04fdd34902c3112e8dcb827963cecfd6fe91"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/ExitSnapshot.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8ba6c8447294c227945a80d9acb87b8ae720609c35de9b30a4c5ada420879260"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/GestureLayer.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "d053803277f06bb84b93e10a443135b907eb797fe008a0fd3697e3af83f7c2d9"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/MediaDetails.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "d065ba5471e9624c3dea109899fed7386b890bd8490de233139766a6cc24957d"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PhotoPage.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "db7495a2921605f8ded280ed030fb182389164129c5862ac1b71a9b63cb4adfb"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PhotoRoute.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "4a04f9abb8c0a50a0ee13567778e44294109d84dd8c19340b864bbcb35775e53"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PhotoScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "3400d7d5b3ad1046aa8f90b2165819fc332b04739bcd246045e7f597ac7c1a10"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlaybackMapping.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5d3f375525d8bc20e381c0723d36d1090f01611dffb53c0c46dc348cdf6144f6"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerChrome.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "fffedaf109f4efb2434d521b075e1aaa62a47ff350fad8d6b804f512b5310741"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerEffects.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "1530b565f0f4fc9737ce35257b6c6f8a9f0e005b8b41e35bad69f3bedc7c81ab"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerRoute.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "7d595718b71799437cf12b904740fbe330d635469de93016ecda7adae109ab82"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "96054474464da08086092dd8a94fbde6acde7022f6d441e172694e7f143f5a90"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerUiState.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "6508435c40f9c12e97737b9ec1aa5567707ee5c29d6c4a0d94ed205c896ee5f2"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/PlayerViewModel.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5e5f1d025aafff2c4a8ecd988877d8dbe3878e9be8335a82bbc3c8e41e1d4d2e"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/SeekBar.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "0fd57e73967436b849975cdfaf2f86fa2613d8db4ea80603784ae2c789f935e0"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/SeekChain.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "a735780b30875b5ecfe5d35008571936f75f38482b01399795dd70be3f99f18b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/player/VideoViewerParts.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c963c276f7aa68800e4325d343f9716f09ce2c1f9d8be83b17f27b633a0bc1c6"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/ConnectionRoute.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "0a119c96486a2076e71515fad5d9dd3cd465cbada99f53099a1a9f70b8853573"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/ConnectionScreen.kt",
+      "status": "renamed",
+      "review_status": "reviewed",
+      "sha256": "374ccfdf715c33e3432eede4265db516840ca49492c1da894425896368b0b682"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/SettingsRoute.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "677d6b300bb8e5bdd3c4aed9b25c86a6537e8c518aff2b0e7a5d902681c5b760"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/SettingsScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "f87b0bf47454d017898d07f531b4b129fae57828fc8b479b7b5af1bf8924d0eb"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/SettingsUiState.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "326cd50148e76fe57de8fcdcd44f9932e7899f407a45b4e261b79ba6b23c8a46"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/SettingsViewModel.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "97e3d3a374e6a45febb2faf936e0b0fb46f79d819508477fe6beab839660609f"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/StorageRoute.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "5d20776b364a5b064acf573b19aeb6bb2a777543f48ef34d8498bb534a3598de"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/feature/settings/StorageScreen.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "6e33efc5fb654b2abd1c96cd9fbd93e202690f4d1d5a9742616008b3b083eb97"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/model/Bookmark.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "eb050d366bbf6dbce31673d71360ba2a8fd9b3bd44cd1ea145add5745926a889"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/model/Media.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "17ef348f8864f52f13dff0e393164dd3a106a4f32d8f2a43562dddea0b745ae1"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/model/MediaAttributes.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "809daf3e611ee4b941255a99e6cc71b4689542128949eae0e4286f897389d693"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/model/Sort.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "e43f9400704ba668a3f6168ef1c7c826cedb62b7612120194ab94833179bff6f"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/model/ThemeMode.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "eb5531f00f0f6a13121e7ad76133383109729b1ff0d66e9fc821d6c5b769f7ca"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/ActionIcon.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "787f9ada3ddc8aa918c5fbb8cdda44ad720960926401a8a863c33ad78b514933"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/LetterAvatar.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "aa0e4631d9b4cf9e6c030e99cba4154fbdf1eecf61687217d771fa1121bc687a"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/MediaDuration.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "450d2d10589fab4ca4f214f3e856fc604c9ec888f8314708f0b78665f370c6d9"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/MediaImageRequest.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "78bad0fe8c2967aa7bc03b4367400039e804182aa90e035ff393490ffff844d3"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/PathText.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "ebbae7dfd81847fa0a18a22185c7ecb9d05c2c14bc61d371dfae77b1f3c1d885"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/TimeLabels.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "0c3603acf00081e2627c6b2f9f9c4de1bda061924dc6cfbd96b6c8f334253b86"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/component/VVComponents.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "10a22a924f9064e1179910d81ba3dc402b1082df157f676777704f73fefc479b"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/theme/AnimationSettings.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "1290f62eae43b3c1da73bae59c9b308dc54aee481f448e6b6fcc2cf75eb9390a"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/theme/AppDispatchers.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "f5e0d43919bae68a774c65cb0d0b837741e6b1b888fe7427f576391c9f5ca049"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/theme/FixedColors.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c742cc462c09c1713133c14c9d72e4fdc4806f083972b9681ee68f602fe280d8"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/theme/PageTransitions.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "203870dab11321667989c099e3ca79dd97aa92b604baa8778e7900a0229d8d7f"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/vvideo/ui/theme/VVideoTheme.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "3ccc505d3fefbd123614d40ba76ecf004d2ee5ee318869077749420bdc8ce137"
+    },
+    {
+      "path": "android/app/src/main/res/values/strings.xml",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "32ada2027d03b4af9c8d66c57d47c1b4a6173497a3b2b9e0cc6199edabcb2401"
+    },
+    {
+      "path": "android/app/src/main/res/xml/network_security_config.xml",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "4d7b2ee9c85daaf8c7a1de38781f9c92684bd97286aadf2fba00f7ba9377e656"
+    },
+    {
+      "path": "android/benchmark/build.gradle.kts",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "ced04f30e0f6043362b130c69a4da9366efe77332d0b62796bbfad4dd6380c40"
+    },
+    {
+      "path": "android/benchmark/src/main/kotlin/dev/vvideo/benchmark/BaselineProfileGenerator.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "323aba7ffadf5cdc751fcbd108cca5fd2dc4e53765f052ef0dd96157969b2373"
+    },
+    {
+      "path": "android/benchmark/src/main/kotlin/dev/vvideo/benchmark/BenchmarkKeepAliveService.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "694c3027e2552fb34f88a8c5594a60f4d0abae5780abe3b3fb6446206a929e8f"
+    },
+    {
+      "path": "android/benchmark/src/main/kotlin/dev/vvideo/benchmark/LibraryScrollBenchmark.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8476b7f70dbb850bef4bcd12af8d028231aaf68066abe3f922c6a099644e1694"
+    },
+    {
+      "path": "android/build.gradle.kts",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "f4e4439fda0c469a11d78682a0ed3f585088cc14e55932b50dcfdd94085762ca"
+    },
+    {
+      "path": "android/core/media/build.gradle.kts",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "3db9eee87993f1ba67ba18e87cef24ee9b426b93be2c8220a74b8bac1648f3db"
+    },
+    {
+      "path": "android/core/media/lint-baseline.xml",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "3ebaa38f95c093903aebdc7fc391c50f1594323cd40144aff89ce4b4d4ff081f"
+    },
+    {
+      "path": "android/core/media/src/androidTest/kotlin/dev/vvideo/core/media/cache/VideoCacheDeviceTest.kt",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "fdb38b0282362f975f2e0ba502bcb2e98e6b3fc7d3f37df000c9e4ae4efab699"
+    },
+    {
+      "path": "android/core/media/src/main/kotlin/dev/vvideo/core/media/cache/VideoCache.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "dfd817cc3ceb43f903db88b0f8123a22e1b1651882040aa9990b6bf682dec359"
+    },
+    {
+      "path": "android/core/media/src/main/kotlin/dev/vvideo/core/media/model/PlaybackItem.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "b1329982c3101808dd87685e59d51e4e8a5d5104fea0f6f662c3ec0c4f1e222f"
+    },
+    {
+      "path": "android/core/media/src/main/kotlin/dev/vvideo/core/media/playback/PlaybackSession.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "4ea9198888e1a43e353a993928bcfac859a62819777b435bfce60362b588501e"
+    },
+    {
+      "path": "android/core/media/src/main/kotlin/dev/vvideo/core/media/playback/SeekRenderersFactory.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c08f77ea213303d16fbe8bf32888c546e6100bee7d21220e66a160b9666d3111"
+    },
+    {
+      "path": "android/core/media/src/main/kotlin/dev/vvideo/core/media/preload/NeighborPreloader.kt",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "4508e4d9acecbef6f1fa7e782a5c5328cd2233353e970688aa3547f3bb3dd4a2"
+    },
+    {
+      "path": "android/gradle/libs.versions.toml",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c257d82ac868b4fee27abfa1bc8f7dc0ac213ae27e012c877e8ba278ae5a7f1f"
+    },
+    {
+      "path": "cmd/vvideo/cli.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "a5f8aab623d2efa617c82af74d2e02a8a7475267ec9bdcabb14c6c6ca8567fb7"
+    },
+    {
+      "path": "cmd/vvideo/log.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "0768bed849f3ca0a0d3a73e5974cb80c451267abc6131b481b949b883269175c"
+    },
+    {
+      "path": "cmd/vvideo/main.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "e9b8e2bbc154dd999db5b5381c9a6597361bbbb56ec318238d56386e6cb535d4"
+    },
+    {
+      "path": "docs/reviews/2026-11-01-compliance-files.json",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": null,
+      "hash_note": "Self-referential review ledger: schema, coverage identities and all other file hashes verified; self hash omitted."
+    },
+    {
+      "path": "internal/app/app.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "eb91f3643e5d374ebfbbb434755432a02f4a17fe669ff32fc175b84e2ed66553"
+    },
+    {
+      "path": "internal/app/errors.go",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "c4feb434bfdfecd07adba3dfd83adf60c3e301a2bfbb8466443ddd88e609fad9"
+    },
+    {
+      "path": "internal/app/http.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "1445d92e04007b27c3e17a757a19bb40b9f1baac3e46f1068c36c439a590c76d"
+    },
+    {
+      "path": "internal/app/query.go",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "50fb1b845e5aca7ff89c4241a2ec1360c4cf229d8414637a5369d3bfca54e0c5"
+    },
+    {
+      "path": "internal/app/stream.go",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "85c6a82bfe34985687306909b6a36cc6f28cee79e34ed18d5a792cad9d0d81e0"
+    },
+    {
+      "path": "internal/app/wire.go",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "3937fdb7e4d56480bfa9bc220360d04efd84dacb42c9d97e820991b2713ecabd"
+    },
+    {
+      "path": "internal/config/config.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "2993aaf04f80b275f2a2ec7801712df7a53299cb281ac265e4198a2f04c472f8"
+    },
+    {
+      "path": "internal/jobs/priority.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5ab2a6c45485aa79631dc93c58c39f761bc2bfdbc74d3a9263e1a07e8c98c6e5"
+    },
+    {
+      "path": "internal/jobs/queue.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5d5febf7cc77be8e667f8634ec2034faff1cc57975c6ae8c25aef45d6eabb757"
+    },
+    {
+      "path": "internal/library/cleanup.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "23ff4149f0419693bdf7039f1c9dde895d5553dc3c2dabbec40c8f244701fc2a"
+    },
+    {
+      "path": "internal/library/files.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c46554d7f3528c68033561cc2ef3902f59a43381963f5bab721eb5dfc90a3bf2"
+    },
+    {
+      "path": "internal/library/groups.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "8bd03821fd647344629ac3f2aead14e2fbf5324650c07eaf8d63483008c91e18"
+    },
+    {
+      "path": "internal/library/library.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "286fb8211a1e98d8b3c5aeb1dd3f1a4f1adf54956daca697a0814a20e8796bb9"
+    },
+    {
+      "path": "internal/library/list.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "cff7e1556517c7541075b104e792a64e9adac39991b385236500cac0be9d2f1c"
+    },
+    {
+      "path": "internal/library/search.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "65dd076b25bb2b75297fefbf56485a378eab69837f75f1274e0570ea603c3267"
+    },
+    {
+      "path": "internal/probe/exif.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "13a654bbfc6020c3bd7b7222e3515f813e239739969f9941f4cf73f3905b8d85"
+    },
+    {
+      "path": "internal/probe/heif.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "949a58ebd8c59b4f09edf54aeb3fb9b10220bb47fed692204f567fd0cbeeef91"
+    },
+    {
+      "path": "internal/probe/probe.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "5bc40ab552e27171dea82bb9388ab3dac61864d7c4eb9d4f633c4a42854afad5"
+    },
+    {
+      "path": "internal/scanner/metadata.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "880329d5fe501504afd3e70f94c0c42ba593688ac2af22b27224dea75835e1ae"
+    },
+    {
+      "path": "internal/scanner/scan.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "2c050f7954e4bbb759bc4d164b6c19adefd5e7cb7290c433dca9392d78c559ab"
+    },
+    {
+      "path": "internal/scanner/stage.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "9f8b039147031327d03bc8d008677dcb92a8ce3302e600f36d147c6291138941"
+    },
+    {
+      "path": "internal/storage/store.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "0805238b1df229d21875b5c10ea1c61590d711beddf4b3a2845a2c7571592d82"
+    },
+    {
+      "path": "internal/streaming/matroska.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "d3626fe0a4da0b98c67d7e44885b5054ca13b03e4835c68f8798fdb4542761da"
+    },
+    {
+      "path": "internal/streaming/stream.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "abacdce807010d05184c55dab3406834abb282ceec504cdfa561b3595555e39e"
+    },
+    {
+      "path": "internal/thumbnail/engine.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "fbf6bc6300aae001a58741caafcd97e2273c4e860b28b97b90a30e0759033a69"
+    },
+    {
+      "path": "internal/thumbnail/progress.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "ddc97e4ff24af8256fbc5b8372050942551e2c64b9c16cebb4a7e6b77de9f1bf"
+    },
+    {
+      "path": "internal/thumbnail/reconcile.go",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "b0ecd0ae6537c8667bfa383068ccdb6c131619e1f3752a9091826bc68b63daab"
+    },
+    {
+      "path": "internal/timefmt/timefmt.go",
+      "status": "added",
+      "review_status": "reviewed",
+      "sha256": "97f65fe6a5b65ab411433b58a13c528592f5d2f9eda312c698d033eddb6827c3"
+    },
+    {
+      "path": "scripts/install-test-apk.py",
+      "status": "modified",
+      "review_status": "reviewed",
+      "sha256": "c4fcb34c50b74eb1baaf3567b8198c2c9fee57891c8d19e9ab8d49683dbec182"
+    }
+  ]
+}
