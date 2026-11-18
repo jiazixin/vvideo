@@ -85,6 +85,9 @@ kotlin {
 
 room { schemaDirectory("$projectDir/schemas") }
 dependencies {
+    constraints {
+        add("ksp", libs.guava.jre)
+    }
     implementation(project(":core:media"))
     implementation(libs.media3.common)
     implementation(libs.media3.ui)

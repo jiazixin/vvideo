@@ -39,6 +39,9 @@ kotlin {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.wire.runtime)
+    }
     implementation(libs.benchmark.macro)
     implementation(libs.android.test.junit)
     implementation(libs.android.test.runner)

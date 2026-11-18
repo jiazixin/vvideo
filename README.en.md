@@ -101,7 +101,7 @@ Directory rules are in [目录规范.md](目录规范.md) (Go), [安卓目录规
 
 | Component | Version |
 | --- | --- |
-| Go | **1.27.3** or newer, as declared in [go.mod](go.mod) |
+| Go | **1.27.4** or newer, as declared in [go.mod](go.mod) |
 | FFmpeg | `ffmpeg` and `ffprobe` on `PATH`; `ffmpeg` must include the `libwebp` encoder |
 | JDK (Android) | 21 |
 | Android SDK | Platform 36 and Build-Tools 35.0.0; devices running Android 9 (API 28) or later |
@@ -156,7 +156,7 @@ The exit status is 0 on success, `--help` or `--version` (both print to stdout w
 
 ### Build and install the Android app
 
-The Gradle Wrapper pins Gradle 8.14.3; AGP 8.13.2, Kotlin 2.2.21, Media3 1.8.1 and the other dependencies are pinned in [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml). Set `ANDROID_HOME` or an ignored `android/local.properties`.
+The Gradle Wrapper pins Gradle 8.14.7. The [version catalog](android/gradle/libs.versions.toml) pins AGP 8.13.2, Kotlin 2.4.21, D8/R8 9.1.57 for Kotlin 2.4 support, Media3 1.8.1, and the other dependencies. Set `ANDROID_HOME` or an ignored `android/local.properties`.
 
 ```sh
 android/gradlew -p android :app:assembleDebug
@@ -231,7 +231,7 @@ See [CONTRIBUTING](docs/CONTRIBUTING.md) for the workflow, code style and checks
 | --- | --- | --- | --- | --- |
 | [Go代码规范.md](Go代码规范.md) §7: `config.Source` has only `Path`, `Explicit`, `WorkDir` and `LookupEnv` | An extra `Environ []string` (`os.Environ()` in production) is used only for its names, to reject `VVIDEO_*` variables that match no field; values still come only from `LookupEnv` | `LookupEnv` cannot list variables, and rejecting misspelt or retired variables is part of the existing configuration contract (see Configuration) | `internal/config`, `cmd/vvideo` | Unknown `VVIDEO_*` variables are no longer rejected, or the convention gains a way to list them |
 | [Go代码规范.md](Go代码规范.md) §2: singular package names | Keep `internal/jobs` and the cross-package `tests` directory | The existing [project layout decision](docs/decisions/2026-10-08-project-layout.md) assigns these directories; package names match their directories | Go queue and cross-package tests | The project layout changes |
-| [Go代码规范.md](Go代码规范.md) §6: `os.OpenRoot` | Pinned directory descriptors, component-by-component `openat` / `O_NOFOLLOW`, and `filepath.IsLocal` | The [design](docs/DESIGN.md) forbids following even in-root media symlinks; local Go 1.27.3 `go doc os.Root` confirms that Root follows in-root links | `internal/mediafs`, Linux target and Darwin test adapter | The standard library provides equivalent no-follow and directory identity guarantees |
+| [Go代码规范.md](Go代码规范.md) §6: `os.OpenRoot` | Pinned directory descriptors, component-by-component `openat` / `O_NOFOLLOW`, and `filepath.IsLocal` | The [design](docs/DESIGN.md) forbids following even in-root media symlinks; local Go 1.27.4 `go doc os.Root` confirms that Root follows in-root links | `internal/mediafs`, Linux target and Darwin test adapter | The standard library provides equivalent no-follow and directory identity guarantees |
 | [Go代码规范.md](Go代码规范.md) §8: business-only Store API and two-argument Write | Controlled Query/QueryRow/BeginRead and `Write(ctx, rows, fn)`, with private connection fields; domain packages own business SQL | The [implementation rules](docs/IMPLEMENTATION.md) explicitly exclude media business SQL from storage and require row/transaction metrics; all primary writes still use one writer | `internal/storage` and domain callers | Database boundaries or performance metrics change |
 | [Go代码规范.md](Go代码规范.md) §7: stored time format | SQLite uses UTC Unix nanoseconds and integer sort keys; HTTP times use UTC millisecond RFC 3339 | [Version guards](docs/IMPLEMENTATION.md) retain filesystem precision, and pagination uses indexed ranges; wire precision must not reduce fingerprint precision | Internal index, job times and version guards; API format unchanged | Filesystem precision, storage or cursor design changes |
 | [Go代码规范.md](Go代码规范.md) §6: no-store throughout `/api/` | JSON and errors use no-store; successful versioned media/covers use private, immutable caching | The [design](docs/DESIGN.md) requires cache reuse; [API](docs/API.md) version keys and ETags prevent mixing bytes | Successful bytes/thumbnail binary responses only | Immutable version keys are removed or unversioned media is introduced |

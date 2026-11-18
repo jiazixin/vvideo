@@ -29,6 +29,9 @@ kotlin {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.guava.android)
+    }
     // The module exposes only Player; callers declare the Media3 parts they use.
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.cache)

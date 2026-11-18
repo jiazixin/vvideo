@@ -101,7 +101,7 @@ VVideo 在媒体库原有位置建立索引。Go 服务扫描文件夹、提取�
 
 | 组件 | 版本 |
 | --- | --- |
-| Go | **1.27.3** 或更高，以 [go.mod](go.mod) 为准 |
+| Go | **1.27.4** 或更高，以 [go.mod](go.mod) 为准 |
 | FFmpeg | `PATH` 中有 `ffmpeg` 和 `ffprobe`；`ffmpeg` 必须带 `libwebp` 编码器 |
 | JDK（安卓） | 21 |
 | Android SDK | Platform 36、Build-Tools 35.0.0；设备需 Android 9（API 28）及以上 |
@@ -156,7 +156,7 @@ ffmpeg (with libwebp) and ffprobe must be on PATH.
 
 ### 构建并安装安卓应用
 
-Gradle Wrapper 固定 Gradle 8.14.3；AGP 8.13.2、Kotlin 2.2.21、Media3 1.8.1 等依赖固定在 [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml)。请设置 `ANDROID_HOME` 或被 Git 忽略的 `android/local.properties`。
+Gradle Wrapper 固定 Gradle 8.14.7。AGP 8.13.2、Kotlin 2.4.21、用于支持 Kotlin 2.4 的 D8/R8 9.1.57 及 Media3 1.8.1 等依赖固定在 [android/gradle/libs.versions.toml](android/gradle/libs.versions.toml)。请设置 `ANDROID_HOME` 或被 Git 忽略的 `android/local.properties`。
 
 ```sh
 android/gradlew -p android :app:assembleDebug
@@ -231,7 +231,7 @@ android/gradlew -p android :app:testDebugUnitTest :core:media:testDebugUnitTest 
 | --- | --- | --- | --- | --- |
 | [Go代码规范.md](Go代码规范.md) 第 7 节 `config.Source` 只有 `Path`、`Explicit`、`WorkDir`、`LookupEnv` | 另有 `Environ []string`（生产中为 `os.Environ()`），只用其中的变量名拒绝不对应任何字段的 `VVIDEO_*` 变量；取值仍只经 `LookupEnv` | `LookupEnv` 无法枚举变量，而拒绝拼错或已废弃的变量是既有配置协议（见“配置”） | `internal/config`、`cmd/vvideo` | 不再拒绝未知 `VVIDEO_*` 变量，或规范提供枚举方式时 |
 | [Go代码规范.md](Go代码规范.md) 第 2 节包名不用复数 | 保留 `internal/jobs` 与跨包测试 `tests` | [项目目录决策](docs/decisions/2026-10-08-project-layout.md) 已指定这两个职责目录；包名与目录一致 | Go 队列与跨包测试 | 项目目录决策调整时 |
-| [Go代码规范.md](Go代码规范.md) 第 6 节 `os.OpenRoot` | 使用固定目录描述符、逐段 `openat` / `O_NOFOLLOW` 与 `filepath.IsLocal` | [设计](docs/DESIGN.md) 禁止跟随根内媒体符号链接；本地 Go 1.27.3 `go doc os.Root` 确认其允许跟随根内链接，不能直接替代更严格的现有行为 | `internal/mediafs`；Linux 目标及 Darwin 测试适配 | 标准库提供等价的不跟随链接与目录身份守卫时 |
+| [Go代码规范.md](Go代码规范.md) 第 6 节 `os.OpenRoot` | 使用固定目录描述符、逐段 `openat` / `O_NOFOLLOW` 与 `filepath.IsLocal` | [设计](docs/DESIGN.md) 禁止跟随根内媒体符号链接；本地 Go 1.27.4 `go doc os.Root` 确认其允许跟随根内链接，不能直接替代更严格的现有行为 | `internal/mediafs`；Linux 目标及 Darwin 测试适配 | 标准库提供等价的不跟随链接与目录身份守卫时 |
 | [Go代码规范.md](Go代码规范.md) 第 8 节 Store 只暴露业务方法、两参数 Write | Store 提供受控 Query/QueryRow/BeginRead 与 `Write(ctx, rows, fn)`，连接字段私有；业务 SQL 在各领域包 | [实施说明](docs/IMPLEMENTATION.md) 明确 storage 不放媒体业务 SQL，且要求写入行数与事务计量；所有正式写入仍经单一写者 | `internal/storage` 及其领域调用方 | 改变数据库边界或性能计量模型时 |
 | [Go代码规范.md](Go代码规范.md) 第 7 节存储时间格式 | SQLite 内部使用 UTC Unix 纳秒及整数排序键；HTTP 时间统一转 UTC 毫秒 RFC 3339 | [实施说明](docs/IMPLEMENTATION.md) 的文件版本守卫须保留文件系统纳秒精度，分页需索引范围比较；不可把毫秒传输格式当原始指纹精度 | 内部索引、任务时间与版本守卫；不改变 API 格式 | 文件系统精度、存储或游标设计改变时 |
 | [Go代码规范.md](Go代码规范.md) 第 6 节 `/api/` 全部 no-store | JSON 与错误 no-store；成功的版本化媒体/封面为 private、immutable | [设计](docs/DESIGN.md) 要求同版本缓存复用；[API](docs/API.md) 的版本键和 ETag 防止混用字节 | 仅成功的 bytes/thumbnail 二进制响应 | 不再使用不可变版本键或新增非版本化媒体时 |
